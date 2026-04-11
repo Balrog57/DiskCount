@@ -46,7 +46,7 @@ Environment variables:
 - `LEDENICHEUR_FEED_URLS`: comma-separated feed or alert URLs for leDenicheur-compatible entries.
 - `LEBONCOIN_FEED_URLS`: comma-separated feed or alert URLs for leboncoin-compatible entries.
 - `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`: official eBay developer credentials.
-- `EBAY_SEARCH_QUERIES`: comma-separated eBay Browse API searches, for example `disque dur 16 To HDD,disque dur 18 To HDD`.
+- `EBAY_SEARCH_QUERIES`: comma-separated eBay Browse API searches, for example `"disque dur 16 To HDD,disque dur 18 To HDD"` in env files because the value contains spaces.
 - `EBAY_MARKETPLACE_ID`: default `EBAY_FR`.
 - `EBAY_CATEGORY_IDS`: optional comma-separated eBay category IDs.
 - `KEEPA_API_KEY`: optional Keepa API key.
