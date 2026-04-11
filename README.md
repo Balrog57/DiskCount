@@ -159,6 +159,20 @@ sudo chroot /mnt/diskcount-root
 
 After entering the installed system through `chroot`, run the unban/firewall commands below, then exit and reboot normally.
 
+Server specifics from the server audit:
+
+- working user: `debian`
+- working key: `~/.ssh/deployment_key`
+- SSH port: `<SSH_PORT>`
+- `PasswordAuthentication no`
+- `KbdInteractiveAuthentication no`
+- `PermitRootLogin no`
+- `MaxAuthTries 3`
+- fail2ban jail: `sshd`
+- fail2ban `bantime = 3600`, `findtime = 600`, `maxretry = 3`
+
+After three bad key/user attempts, wait up to one hour or unban the IP from rescue mode.
+
 To explicitly allow this workstation on the custom SSH port:
 
 ```bash

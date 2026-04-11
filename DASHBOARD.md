@@ -25,7 +25,7 @@ Derniere mise a jour : 2026-04-12
 | Tests | Termine | 21 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
-| Acces VPS SSH | Bloque | Port `<SSH_PORT>` en timeout depuis `<REDACTED_IP>`; console VPS demande un mot de passe indisponible car acces configure par cle seule. |
+| Acces VPS SSH | Bloque | Server audit confirme `fail2ban` sur `<SSH_PORT>`, `MaxAuthTries=3`, `bantime=3600`; attendre ou unban `<REDACTED_IP>`. |
 
 ## Verification executee
 
