@@ -25,7 +25,7 @@ Derniere mise a jour : 2026-04-12
 | Tests | Termine | 21 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
-| Acces VPS SSH | Bloque | Server audit confirme `fail2ban` sur `<SSH_PORT>`, `MaxAuthTries=3`, `bantime=3600`; attendre ou unban `<REDACTED_IP>`. |
+| Acces VPS SSH | Debloque | `<REDACTED_IP>` retiree de fail2ban le 2026-04-12; regle UFW explicite ajoutee pour `<SSH_PORT>/tcp`. |
 
 ## Verification executee
 
@@ -55,7 +55,6 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 | --- | --- | --- |
 | P0 | Creer le bot Telegram | Recuperer `TELEGRAM_BOT_TOKEN` depuis BotFather. |
 | P0 | Recuperer l'ID utilisateur | Definir `TELEGRAM_ADMIN_USER_IDS` avec ton ID Telegram. |
-| P0 | Debloquer SSH | Unban `<REDACTED_IP>` via console VPS, fail2ban, ufw, nftables ou iptables. |
 | P0 | Configurer Debian | Installer dans `/opt/diskcount` et activer `diskcount.service`. |
 | P1 | Configurer Dealabs | Ajouter les flux RSS d'alertes dans `DEALABS_RSS_URLS`. |
 | P1 | Configurer eBay | Creer des credentials eBay Developer puis definir `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`. |
