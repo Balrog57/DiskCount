@@ -98,3 +98,8 @@ python -m diskcount run
 - Meilleure extraction Dealabs sur les titres complexes.
 - Support de sources additionnelles uniquement via API/RSS ou pages publiques explicitement compatibles.
 - Dashboard Web local optionnel si l'usage depasse Telegram.
+
+## Regle de maintenance
+
+- Toute evolution fonctionnelle, configurationnelle ou de deploiement doit mettre a jour les `.md` concernes.
+- Chaque lot termine doit etre commit puis pousse sur le repo prive GitHub `DiskCount/DiskCount`.

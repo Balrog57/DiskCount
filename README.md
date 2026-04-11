@@ -7,6 +7,8 @@ Project tracking files:
 - `PLAN.md`: implementation plan.
 - `DASHBOARD.md`: current realization dashboard.
 
+Maintenance rule: every functional, deployment, or configuration change must update the relevant Markdown tracking files and be pushed to the private GitHub repository.
+
 The first version is intentionally conservative:
 
 - DiskPrices France is parsed from its public table.
