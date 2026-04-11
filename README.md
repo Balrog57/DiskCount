@@ -179,16 +179,14 @@ Current fail2ban SSH whitelist on server:
 127.0.0.1/8
 ::1
 <REDACTED_IP>
-<REDACTED_IP>
-<REDACTED_IP>
 ```
 
-The same public IPs are also explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+Only the local trusted client IP is explicitly allowed in UFW for `<SSH_PORT>/tcp`; fail2ban remains active for all other remote IPs.
 
 Server and Server SSH whitelist:
 
-- `<REDACTED_IP>` / `server`: `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
-- `<REDACTED_IP>` / `server`: `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+- `<REDACTED_IP>` / `server`: only `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+- `<REDACTED_IP>` / `server`: only `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
 
 To explicitly allow this workstation on the custom SSH port:
 
