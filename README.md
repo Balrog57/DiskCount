@@ -115,6 +115,39 @@ Initialize the database before first start if desired:
 sudo -u diskcount /opt/diskcount/.venv/bin/python -m diskcount init-db
 ```
 
+## SSH troubleshooting
+
+If the VPS SSH port times out after failed login attempts, unblock the client IP from the provider console, rescue shell, or another already-authorized machine.
+
+Current local public IP observed during setup:
+
+```text
+<REDACTED_IP>
+```
+
+Useful Debian commands:
+
+```bash
+sudo fail2ban-client status
+sudo fail2ban-client status sshd
+sudo fail2ban-client set sshd unbanip <REDACTED_IP>
+sudo systemctl restart ssh
+```
+
+If fail2ban is not installed or does not show the ban, check the firewall:
+
+```bash
+sudo ufw status numbered
+sudo nft list ruleset | grep -n "<REDACTED_IP>\|<SSH_PORT>\|ssh"
+sudo iptables -S | grep "<REDACTED_IP>\|<SSH_PORT>\|ssh"
+```
+
+Expected working SSH command from this workstation:
+
+```powershell
+ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<REDACTED_IP>
+```
+
 ## CLI
 
 - `diskcount check`: dry-run scan, equivalent to checking current sources without persisting observations.
