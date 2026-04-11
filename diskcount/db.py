@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, create_engine, func, select
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -44,6 +44,7 @@ class Alert(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    owner_user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     min_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -134,6 +135,20 @@ def create_db_engine(database_url: str) -> Engine:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+    migrate_schema(engine)
+
+
+def migrate_schema(engine: Engine) -> None:
+    inspector = inspect(engine)
+    if "alerts" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("alerts")}
+    if "owner_user_id" in columns:
+        return
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE alerts ADD COLUMN owner_user_id BIGINT"))
+        connection.execute(text("UPDATE alerts SET owner_user_id = chat_id WHERE owner_user_id IS NULL"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_owner_user_id ON alerts (owner_user_id)"))
 
 
 class Repository:
@@ -204,6 +219,7 @@ class Repository:
     def create_alert(
         self,
         chat_id: int,
+        owner_user_id: int | None,
         name: str,
         min_capacity_tb: float | None,
         max_capacity_tb: float | None,
@@ -217,6 +233,7 @@ class Repository:
         with self.session() as session:
             alert = Alert(
                 chat_id=chat_id,
+                owner_user_id=owner_user_id if owner_user_id is not None else chat_id,
                 name=name,
                 min_capacity_tb=min_capacity_tb,
                 max_capacity_tb=max_capacity_tb,
@@ -232,39 +249,46 @@ class Repository:
             session.refresh(alert)
             return alert
 
-    def list_alerts(self, chat_id: int | None = None, only_enabled: bool = False) -> list[Alert]:
+    def list_alerts(
+        self,
+        chat_id: int | None = None,
+        owner_user_id: int | None = None,
+        only_enabled: bool = False,
+    ) -> list[Alert]:
         with self.session() as session:
             statement = select(Alert).order_by(Alert.id)
             if chat_id is not None:
                 statement = statement.where(Alert.chat_id == chat_id)
+            if owner_user_id is not None:
+                statement = statement.where(Alert.owner_user_id == owner_user_id)
             if only_enabled:
                 statement = statement.where(Alert.enabled.is_(True))
             return list(session.scalars(statement))
 
-    def set_alert_enabled(self, chat_id: int, alert_id: int, enabled: bool) -> bool:
+    def set_alert_enabled(self, owner_user_id: int, alert_id: int, enabled: bool) -> bool:
         with self.session() as session:
             alert = session.get(Alert, alert_id)
-            if alert is None or alert.chat_id != chat_id:
+            if alert is None or alert.owner_user_id != owner_user_id:
                 return False
             alert.enabled = enabled
             alert.updated_at = utc_now()
             session.commit()
             return True
 
-    def set_alert_max_price_per_tb(self, chat_id: int, alert_id: int, max_price_per_tb: Decimal | None) -> bool:
+    def set_alert_max_price_per_tb(self, owner_user_id: int, alert_id: int, max_price_per_tb: Decimal | None) -> bool:
         with self.session() as session:
             alert = session.get(Alert, alert_id)
-            if alert is None or alert.chat_id != chat_id:
+            if alert is None or alert.owner_user_id != owner_user_id:
                 return False
             alert.max_price_per_tb = max_price_per_tb
             alert.updated_at = utc_now()
             session.commit()
             return True
 
-    def delete_alert(self, chat_id: int, alert_id: int) -> bool:
+    def delete_alert(self, owner_user_id: int, alert_id: int) -> bool:
         with self.session() as session:
             alert = session.get(Alert, alert_id)
-            if alert is None or alert.chat_id != chat_id:
+            if alert is None or alert.owner_user_id != owner_user_id:
                 return False
             session.delete(alert)
             session.commit()

@@ -49,6 +49,7 @@ def test_repository_set_alert_max_price() -> None:
     repository.init()
     alert = repository.create_alert(
         chat_id=42,
+        owner_user_id=1001,
         name="NAS",
         min_capacity_tb=16,
         max_capacity_tb=None,
@@ -60,9 +61,46 @@ def test_repository_set_alert_max_price() -> None:
         cooldown_hours=24,
     )
 
-    assert repository.set_alert_max_price_per_tb(42, alert.id, Decimal("18.50"))
-    updated = repository.list_alerts(chat_id=42)[0]
+    assert not repository.set_alert_max_price_per_tb(2002, alert.id, Decimal("18.50"))
+    assert repository.set_alert_max_price_per_tb(1001, alert.id, Decimal("18.50"))
+    updated = repository.list_alerts(owner_user_id=1001)[0]
     assert updated.max_price_per_tb == Decimal("18.50")
+
+
+def test_repository_alerts_are_owned_per_user() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+    first = repository.create_alert(
+        chat_id=42,
+        owner_user_id=1001,
+        name="NAS User",
+        min_capacity_tb=16,
+        max_capacity_tb=None,
+        conditions=["new"],
+        media_types=["rotational"],
+        sources=["diskprices"],
+        max_price_per_tb=Decimal("20.00"),
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+    second = repository.create_alert(
+        chat_id=42,
+        owner_user_id=2002,
+        name="NAS Invite",
+        min_capacity_tb=18,
+        max_capacity_tb=None,
+        conditions=["used"],
+        media_types=["rotational"],
+        sources=["diskprices"],
+        max_price_per_tb=Decimal("18.00"),
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+
+    assert [alert.id for alert in repository.list_alerts(owner_user_id=1001)] == [first.id]
+    assert [alert.id for alert in repository.list_alerts(owner_user_id=2002)] == [second.id]
+    assert not repository.delete_alert(1001, second.id)
+    assert repository.delete_alert(2002, second.id)
 
 
 def test_repository_authorized_users() -> None:

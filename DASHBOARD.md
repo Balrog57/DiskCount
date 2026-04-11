@@ -21,6 +21,7 @@ Derniere mise a jour : 2026-04-12
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start` et `/help` affichent un clavier persistant; tuiles admin visibles pour le super-admin. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
+| Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
@@ -41,7 +42,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 23 passed in 1.86s
+Resultat: 24 passed in 1.79s
 ```
 
 ```text

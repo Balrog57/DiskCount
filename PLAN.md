@@ -20,6 +20,7 @@ au prix habituel observe sur 30 jours.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
 - Panel admin Telegram via commandes `/users`, `/allow <id> <nom>`, `/revoke <id>`.
 - Acces utilisateur persistant dans SQLite, avec super-admin defini par `TELEGRAM_ADMIN_USER_IDS`.
+- Alertes proprietaires par utilisateur Telegram : chaque utilisateur autorise gere ses propres alertes uniquement.
 - CLI de pilotage inspiree de kimsufi-notifier : `check`, `list`, `scan`, `run`, `init-db`.
 - Stockage local SQLite des alertes, produits, observations de prix et notifications envoyees.
 - Baseline de prix rolling 30 jours basee sur la mediane des observations precedentes.
@@ -82,6 +83,7 @@ python -m diskcount run
 - Bot : clavier en tuiles pour les commandes principales et les commandes admin.
 - Bot : modification de seuil avec `/set_max_price`.
 - Bot : gestion admin des utilisateurs avec `/users`, `/allow`, `/revoke`.
+- Repository : isolation des alertes par `owner_user_id`, avec migration SQLite automatique pour les bases existantes.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.
 - Scanner : `dry_run=True` simule les notifications sans persister les produits.
 

@@ -160,6 +160,11 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         await message.answer("Commande reservee a l'administrateur.")
         return False
 
+    def current_user_id(message: Message) -> int:
+        if message.from_user is None:
+            raise ValueError("Telegram user is required")
+        return message.from_user.id
+
     @router.message(CommandStart())
     async def start(message: Message) -> None:
         if not await guard(message):
@@ -236,6 +241,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             return
         alert = repository.create_alert(
             chat_id=message.chat.id,
+            owner_user_id=current_user_id(message),
             name=args.name,
             min_capacity_tb=args.min_capacity_tb,
             max_capacity_tb=args.max_capacity_tb,
@@ -252,7 +258,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
     async def alerts(message: Message) -> None:
         if not await guard(message):
             return
-        rows = repository.list_alerts(chat_id=message.chat.id)
+        rows = repository.list_alerts(owner_user_id=current_user_id(message))
         if not rows:
             await message.answer("Aucune alerte.")
             return
@@ -263,7 +269,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         if not await guard(message):
             return
         alert_id = _alert_id(command.args)
-        if alert_id is None or not repository.set_alert_enabled(message.chat.id, alert_id, False):
+        if alert_id is None or not repository.set_alert_enabled(current_user_id(message), alert_id, False):
             await message.answer("Alerte introuvable. Usage: /pause 1")
             return
         await message.answer(f"Alerte #{alert_id} en pause.")
@@ -273,7 +279,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         if not await guard(message):
             return
         alert_id = _alert_id(command.args)
-        if alert_id is None or not repository.set_alert_enabled(message.chat.id, alert_id, True):
+        if alert_id is None or not repository.set_alert_enabled(current_user_id(message), alert_id, True):
             await message.answer("Alerte introuvable. Usage: /resume 1")
             return
         await message.answer(f"Alerte #{alert_id} activee.")
@@ -283,7 +289,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         if not await guard(message):
             return
         alert_id = _alert_id(command.args)
-        if alert_id is None or not repository.delete_alert(message.chat.id, alert_id):
+        if alert_id is None or not repository.delete_alert(current_user_id(message), alert_id):
             await message.answer("Alerte introuvable. Usage: /delete 1")
             return
         await message.answer(f"Alerte #{alert_id} supprimee.")
@@ -297,7 +303,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             await message.answer("Usage: /set_max_price 1 20 ou /set_max_price 1 none")
             return
         alert_id, price = parsed
-        if not repository.set_alert_max_price_per_tb(message.chat.id, alert_id, price):
+        if not repository.set_alert_max_price_per_tb(current_user_id(message), alert_id, price):
             await message.answer("Alerte introuvable.")
             return
         value = "desactive" if price is None else f"{price:g} EUR/To"
@@ -307,7 +313,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
     async def test_scan(message: Message) -> None:
         if not await guard(message):
             return
-        report = await scanner.run_once(dry_run=True, target_chat_id=message.chat.id)
+        report = await scanner.run_once(dry_run=True, target_owner_user_id=current_user_id(message))
         await message.answer(
             f"Dry-run termine: {report.fetched} offres, {report.matched} matchs, "
             f"{report.dry_run_notifications} notifications potentielles, {len(report.errors)} erreurs."

@@ -56,11 +56,20 @@ class Scanner:
                 deals.extend(source_deals)
         return deals, errors
 
-    async def run_once(self, dry_run: bool = False, target_chat_id: int | None = None) -> ScanReport:
+    async def run_once(
+        self,
+        dry_run: bool = False,
+        target_chat_id: int | None = None,
+        target_owner_user_id: int | None = None,
+    ) -> ScanReport:
         now = utc_now()
         deals, errors = await self.fetch_deals()
         report = ScanReport(fetched=len(deals), errors=errors)
-        alerts = self.repository.list_alerts(chat_id=target_chat_id, only_enabled=True)
+        alerts = self.repository.list_alerts(
+            chat_id=target_chat_id,
+            owner_user_id=target_owner_user_id,
+            only_enabled=True,
+        )
 
         for deal in deals:
             baseline = self.repository.baseline_price_per_tb(deal.product_id, before=now)

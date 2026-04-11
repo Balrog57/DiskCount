@@ -30,6 +30,7 @@ async def test_dry_run_reports_without_persistence() -> None:
     repository.init()
     repository.create_alert(
         chat_id=42,
+        owner_user_id=1001,
         name="NAS",
         min_capacity_tb=16,
         max_capacity_tb=None,
@@ -42,7 +43,7 @@ async def test_dry_run_reports_without_persistence() -> None:
     )
 
     scanner = Scanner(Settings(), repository, [FakeSource()])
-    report = await scanner.run_once(dry_run=True, target_chat_id=42)
+    report = await scanner.run_once(dry_run=True, target_owner_user_id=1001)
 
     assert report.fetched == 1
     assert report.matched == 1

@@ -74,6 +74,8 @@ Useful commands:
 - `/test` runs a dry scan and reports what would match.
 - `/status` shows source and database status.
 
+Alerts are owned per Telegram user. Every authorized user can create, list, pause, resume, update, and delete their own alerts, but cannot manage alerts owned by another authorized user.
+
 Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
 
 - `/users` lists allowed and disabled users.
