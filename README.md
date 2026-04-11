@@ -65,7 +65,10 @@ Create an alert:
 Useful commands:
 
 - Type `/` in Telegram to open the command menu with descriptions.
-- `/start` and `/help` also show a persistent tile keyboard for the main commands.
+- `/menu` opens the inline tile navigation.
+- `/start`, `/menu`, and `/help` remove the old persistent keyboard and show inline tiles under the message.
+- Tile categories: `Alertes`, `Scan`, `Sources`, `Aide`, and `Admin` for admin users.
+- Submenus always include `Precedent` and `Accueil` at the bottom.
 - `/alerts` lists alerts.
 - `/pause 1` disables an alert.
 - `/resume 1` enables it again.
@@ -83,7 +86,7 @@ Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
 - `/revoke 123456789` disables a user.
 
 Admin users get an expanded Telegram command menu for these admin commands.
-They also get admin tiles in the persistent Telegram keyboard.
+They also get admin tiles in the inline navigation.
 
 Accepted alert keys:
 

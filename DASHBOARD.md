@@ -19,14 +19,14 @@ Derniere mise a jour : 2026-04-12
 | Regles de notification | Termine | Seuil EUR/To, remise rolling 30 jours, cooldown, baisse significative. |
 | Bot Telegram | Termine | Commandes demandees implementees. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
-| Tuiles commandes Telegram | Termine | `/start` et `/help` affichent un clavier persistant; tuiles admin visibles pour le super-admin. |
+| Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 24 tests passent. |
+| Tests | Termine | 25 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
@@ -42,7 +42,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 24 passed in 1.79s
+Resultat: 25 passed in 1.85s
 ```
 
 ```text
@@ -63,9 +63,9 @@ Migration SQLite: colonne alerts.owner_user_id presente
 
 ```text
 Telegram command menu
-Default: start, help, add, alerts, pause, resume, delete, set_max_price, test, status
-Admin 123456789: start, help, add, alerts, pause, resume, delete, set_max_price, test, status, users, allow, revoke
-Tiles: /start et /help affichent le clavier persistant
+Default: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status
+Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status, users, allow, revoke
+Tiles: /start, /menu et /help affichent des tuiles inline; categories Alertes, Scan, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.

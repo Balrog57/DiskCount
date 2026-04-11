@@ -5,6 +5,7 @@ from diskcount.bot import (
     _user_id_and_label,
     build_bot_commands,
     build_main_keyboard,
+    build_menu_keyboard,
     is_authorized,
     is_env_admin,
     parse_alert_args,
@@ -57,6 +58,7 @@ def test_parse_user_id_and_label() -> None:
 def test_build_bot_commands() -> None:
     user_commands = [command.command for command in build_bot_commands()]
     admin_commands = [command.command for command in build_bot_commands(include_admin=True)]
+    assert "menu" in user_commands
     assert "add" in user_commands
     assert "status" in user_commands
     assert "allow" not in user_commands
@@ -67,8 +69,21 @@ def test_build_bot_commands() -> None:
 def test_build_main_keyboard() -> None:
     user_buttons = [button.text for row in build_main_keyboard().keyboard for button in row]
     admin_buttons = [button.text for row in build_main_keyboard(include_admin=True).keyboard for button in row]
+    assert "/menu" in user_buttons
     assert "/alerts" in user_buttons
-    assert "/help" in user_buttons
     assert "/allow" not in user_buttons
     assert "/allow" in admin_buttons
     assert "/revoke" in admin_buttons
+
+
+def test_build_menu_keyboard_navigation() -> None:
+    home_buttons = [button.text for row in build_menu_keyboard().inline_keyboard for button in row]
+    alert_buttons = [button.text for row in build_menu_keyboard("alerts").inline_keyboard for button in row]
+    admin_home_buttons = [button.text for row in build_menu_keyboard(include_admin=True).inline_keyboard for button in row]
+
+    assert "Alertes" in home_buttons
+    assert "Admin" not in home_buttons
+    assert "Admin" in admin_home_buttons
+    assert "Mes alertes" in alert_buttons
+    assert "Precedent" in alert_buttons
+    assert "Accueil" in alert_buttons
