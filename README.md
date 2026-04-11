@@ -148,6 +148,17 @@ If the VPS provider console shows `[UFW BLOCK]` messages over the login prompt, 
 sudo dmesg -n 1
 ```
 
+If the server was configured for SSH key-only access and the `debian` account has no password, the normal provider TTY console cannot log in as `debian`. Use the provider rescue mode, a root console offered by the provider, or a firewall panel rule instead. In rescue mode, mount the installed system disk, then inspect and edit the installed system files from the mounted path:
+
+```bash
+lsblk
+sudo mkdir -p /mnt/diskcount-root
+sudo mount /dev/sdX1 /mnt/diskcount-root
+sudo chroot /mnt/diskcount-root
+```
+
+After entering the installed system through `chroot`, run the unban/firewall commands below, then exit and reboot normally.
+
 To explicitly allow this workstation on the custom SSH port:
 
 ```bash
