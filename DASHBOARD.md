@@ -22,6 +22,7 @@ Derniere mise a jour : 2026-04-12
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
+| Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
 | Tests | Termine | 21 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
@@ -49,6 +50,13 @@ Resultat: fetched=431 matched=0 notified=0 dry_run_notifications=0 errors=0
 Top live liste: 24 To a 19.36 EUR/To, 18 To a 19.88 EUR/To, 28 To a 19.95 EUR/To
 ```
 
+```text
+server systemd
+Resultat: diskcount.service active
+Bot: @DiskCount_bot
+Dernier scan: fetched=431 matched=0 notified=0 errors=0
+```
+
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
 
 ## Reste a faire avant VPS
@@ -57,7 +65,6 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 | --- | --- | --- |
 | P0 | Creer le bot Telegram | Recuperer `TELEGRAM_BOT_TOKEN` depuis BotFather. |
 | P0 | Recuperer l'ID utilisateur | Definir `TELEGRAM_ADMIN_USER_IDS` avec ton ID Telegram. |
-| P0 | Configurer Debian | Installer dans `/opt/diskcount` et activer `diskcount.service`. |
 | P1 | Configurer Dealabs | Ajouter les flux RSS d'alertes dans `DEALABS_RSS_URLS`. |
 | P1 | Configurer eBay | Creer des credentials eBay Developer puis definir `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`. |
 | P1 | Configurer Idealo | Ajouter des flux/alertes compatibles dans `IDEALO_FEED_URLS`. |
