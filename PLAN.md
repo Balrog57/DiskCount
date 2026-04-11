@@ -15,6 +15,8 @@ au prix habituel observe sur 30 jours.
 ## Perimetre v1
 
 - Bot Telegram interactif avec commandes `/start`, `/help`, `/add`, `/alerts`, `/pause`, `/resume`, `/delete`, `/test`, `/status`.
+- Menu de commandes Telegram via `setMyCommands`, avec descriptions visibles quand l'utilisateur tape `/`.
+- Clavier Telegram persistant en tuiles via `/start` et `/help`, avec tuiles admin pour `TELEGRAM_ADMIN_USER_IDS`.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
 - Panel admin Telegram via commandes `/users`, `/allow <id> <nom>`, `/revoke <id>`.
 - Acces utilisateur persistant dans SQLite, avec super-admin defini par `TELEGRAM_ADMIN_USER_IDS`.
@@ -76,6 +78,8 @@ python -m diskcount run
 - Regles : seuil EUR/To sans historique, remise rolling 30 jours, cooldown anti-spam.
 - Repository : deduplication produit et mediane rolling 30 jours.
 - Bot : parsing `/add` et filtrage des utilisateurs autorises.
+- Bot : menu Telegram `/` pour commandes utilisateur et scope admin.
+- Bot : clavier en tuiles pour les commandes principales et les commandes admin.
 - Bot : modification de seuil avec `/set_max_price`.
 - Bot : gestion admin des utilisateurs avec `/users`, `/allow`, `/revoke`.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.

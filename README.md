@@ -64,6 +64,8 @@ Create an alert:
 
 Useful commands:
 
+- Type `/` in Telegram to open the command menu with descriptions.
+- `/start` and `/help` also show a persistent tile keyboard for the main commands.
 - `/alerts` lists alerts.
 - `/pause 1` disables an alert.
 - `/resume 1` enables it again.
@@ -77,6 +79,9 @@ Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
 - `/users` lists allowed and disabled users.
 - `/allow 123456789 User` adds or re-enables a user with a custom label.
 - `/revoke 123456789` disables a user.
+
+Admin users get an expanded Telegram command menu for these admin commands.
+They also get admin tiles in the persistent Telegram keyboard.
 
 Accepted alert keys:
 

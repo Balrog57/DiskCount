@@ -5,7 +5,7 @@ import logging
 
 from aiogram import Bot
 
-from .bot import build_dispatcher
+from .bot import build_dispatcher, configure_bot_commands
 from .config import Settings
 from .db import Repository, create_db_engine
 from .notifier import TelegramNotifier
@@ -23,6 +23,7 @@ async def run_bot(settings: Settings) -> None:
     repository.init()
 
     bot = Bot(settings.telegram_bot_token)
+    await configure_bot_commands(bot, settings)
     sources = build_sources(settings)
     scanner = Scanner(settings, repository, sources, notifier=TelegramNotifier(bot))
     dispatcher = build_dispatcher(settings, repository, scanner)

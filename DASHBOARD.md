@@ -18,6 +18,8 @@ Derniere mise a jour : 2026-04-12
 | Connecteur Keepa API | Termine v1 | Optionnel, actif seulement avec `KEEPA_API_KEY` + `KEEPA_ASINS`. |
 | Regles de notification | Termine | Seuil EUR/To, remise rolling 30 jours, cooldown, baisse significative. |
 | Bot Telegram | Termine | Commandes demandees implementees. |
+| Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
+| Tuiles commandes Telegram | Termine | `/start` et `/help` affichent un clavier persistant; tuiles admin visibles pour le super-admin. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
@@ -39,7 +41,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 21 passed in 1.92s
+Resultat: 23 passed in 1.86s
 ```
 
 ```text

@@ -1,6 +1,14 @@
 from decimal import Decimal
 
-from diskcount.bot import _alert_id_and_price, _user_id_and_label, is_authorized, is_env_admin, parse_alert_args
+from diskcount.bot import (
+    _alert_id_and_price,
+    _user_id_and_label,
+    build_bot_commands,
+    build_main_keyboard,
+    is_authorized,
+    is_env_admin,
+    parse_alert_args,
+)
 from diskcount.config import Settings
 from diskcount.db import Repository, create_db_engine
 
@@ -44,3 +52,23 @@ def test_parse_alert_id_and_price() -> None:
 def test_parse_user_id_and_label() -> None:
     assert _user_id_and_label("123 Jean Dupont") == (123, "Jean Dupont")
     assert _user_id_and_label("bad Jean") is None
+
+
+def test_build_bot_commands() -> None:
+    user_commands = [command.command for command in build_bot_commands()]
+    admin_commands = [command.command for command in build_bot_commands(include_admin=True)]
+    assert "add" in user_commands
+    assert "status" in user_commands
+    assert "allow" not in user_commands
+    assert "allow" in admin_commands
+    assert "revoke" in admin_commands
+
+
+def test_build_main_keyboard() -> None:
+    user_buttons = [button.text for row in build_main_keyboard().keyboard for button in row]
+    admin_buttons = [button.text for row in build_main_keyboard(include_admin=True).keyboard for button in row]
+    assert "/alerts" in user_buttons
+    assert "/help" in user_buttons
+    assert "/allow" not in user_buttons
+    assert "/allow" in admin_buttons
+    assert "/revoke" in admin_buttons

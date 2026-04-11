@@ -4,9 +4,10 @@ import shlex
 from dataclasses import dataclass
 from decimal import Decimal
 
+from aiogram import Bot
 from aiogram import Dispatcher, Router
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import Message
+from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from .config import Settings
 from .db import Alert, Repository
@@ -15,6 +16,25 @@ from .scanner import Scanner
 VALID_CONDITIONS = {"new", "used"}
 VALID_MEDIA_TYPES = {"rotational", "solid_state"}
 VALID_SOURCES = {"diskprices", "dealabs", "idealo", "ledenicheur", "leboncoin", "ebay", "keepa"}
+
+USER_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("start", "Demarrer le bot et enregistrer le chat"),
+    ("help", "Afficher les exemples et les filtres disponibles"),
+    ("add", "Ajouter une alerte de prix disque"),
+    ("alerts", "Lister tes alertes"),
+    ("pause", "Mettre une alerte en pause"),
+    ("resume", "Reactiver une alerte"),
+    ("delete", "Supprimer une alerte"),
+    ("set_max_price", "Modifier le seuil EUR/To d'une alerte"),
+    ("test", "Lancer un scan de test sans notifier"),
+    ("status", "Afficher l'etat du bot et des sources"),
+)
+
+ADMIN_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("users", "Lister les utilisateurs autorises"),
+    ("allow", "Autoriser un utilisateur par ID Telegram"),
+    ("revoke", "Retirer l'acces d'un utilisateur"),
+)
 
 
 @dataclass(frozen=True)
@@ -44,6 +64,35 @@ def is_authorized(settings: Settings, repository: Repository | None, user_id: in
     if user_id in settings.telegram_allowed_user_ids:
         return True
     return bool(repository and repository.is_user_allowed(user_id))
+
+
+def build_bot_commands(include_admin: bool = False) -> list[BotCommand]:
+    commands = list(USER_COMMANDS)
+    if include_admin:
+        commands.extend(ADMIN_COMMANDS)
+    return [BotCommand(command=command, description=description) for command, description in commands]
+
+
+def build_main_keyboard(include_admin: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="/alerts"), KeyboardButton(text="/add")],
+        [KeyboardButton(text="/test"), KeyboardButton(text="/status")],
+        [KeyboardButton(text="/pause"), KeyboardButton(text="/resume")],
+        [KeyboardButton(text="/delete"), KeyboardButton(text="/set_max_price")],
+        [KeyboardButton(text="/help")],
+    ]
+    if include_admin:
+        rows.append([KeyboardButton(text="/users"), KeyboardButton(text="/allow"), KeyboardButton(text="/revoke")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+
+
+async def configure_bot_commands(bot: Bot, settings: Settings) -> None:
+    await bot.set_my_commands(build_bot_commands(), scope=BotCommandScopeDefault())
+    for admin_id in settings.telegram_admin_user_ids:
+        await bot.set_my_commands(
+            build_bot_commands(include_admin=True),
+            scope=BotCommandScopeChat(chat_id=admin_id),
+        )
 
 
 def parse_alert_args(text: str | None) -> AlertArgs:
@@ -116,16 +165,19 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         if not await guard(message):
             return
         repository.upsert_subscriber(message.chat.id, message.from_user.username if message.from_user else None)
+        include_admin = is_env_admin(settings, message.from_user.id if message.from_user else None)
         await message.answer(
             "DiskCount est pret.\n"
             "Exemple: /add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used\n"
-            "Commandes: /alerts, /pause, /resume, /delete, /set_max_price, /test, /status"
+            "Tape / pour afficher le menu des commandes Telegram, ou utilise les tuiles ci-dessous.",
+            reply_markup=build_main_keyboard(include_admin=include_admin),
         )
 
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
         if not await guard(message):
             return
+        include_admin = is_env_admin(settings, message.from_user.id if message.from_user else None)
         await message.answer(
             "Exemple:\n"
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used "
@@ -133,7 +185,8 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             "Modifier le prix max: /set_max_price 1 18.5 ou /set_max_price 1 none\n\n"
             "Admin: /users, /allow 123456 Nom custom, /revoke 123456\n\n"
             "Filtres: min_tb, max_tb, max_eur_tb, condition=new|used, media=rotational|solid_state, "
-            "sources=diskprices|dealabs|idealo|ledenicheur|leboncoin|ebay|keepa, discount, cooldown."
+            "sources=diskprices|dealabs|idealo|ledenicheur|leboncoin|ebay|keepa, discount, cooldown.",
+            reply_markup=build_main_keyboard(include_admin=include_admin),
         )
 
     @router.message(Command("users"))
