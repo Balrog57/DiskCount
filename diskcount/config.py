@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 def _split_csv(value: Any) -> list[str]:
@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     telegram_bot_token: str = ""
-    telegram_allowed_user_ids: list[int] = Field(default_factory=list)
-    telegram_admin_user_ids: list[int] = Field(default_factory=list)
+    telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    telegram_admin_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     database_url: str = "sqlite:///./diskcount.sqlite3"
     poll_interval_seconds: int = 900
@@ -32,22 +32,22 @@ class Settings(BaseSettings):
     user_agent: str = "DiskCountBot/0.1"
 
     diskprices_url: str = "https://diskprices.com/?locale=fr"
-    dealabs_rss_urls: list[str] = Field(default_factory=list)
-    idealo_feed_urls: list[str] = Field(default_factory=list)
-    ledenicheur_feed_urls: list[str] = Field(default_factory=list)
-    leboncoin_feed_urls: list[str] = Field(default_factory=list)
+    dealabs_rss_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    idealo_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    ledenicheur_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    leboncoin_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     keepa_api_key: str = ""
-    keepa_asins: list[str] = Field(default_factory=list)
+    keepa_asins: Annotated[list[str], NoDecode] = Field(default_factory=list)
     keepa_domain: int = 4
 
     ebay_client_id: str = ""
     ebay_client_secret: str = ""
-    ebay_search_queries: list[str] = Field(default_factory=list)
+    ebay_search_queries: Annotated[list[str], NoDecode] = Field(default_factory=list)
     ebay_marketplace_id: str = "EBAY_FR"
     ebay_scope: str = "https://api.ebay.com/oauth/api_scope"
     ebay_search_limit: int = 50
-    ebay_category_ids: list[str] = Field(default_factory=list)
+    ebay_category_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     notification_price_drop_pct: float = 2.0
     telegram_message_delay_seconds: float = 0.5

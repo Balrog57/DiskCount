@@ -7,7 +7,7 @@ Derniere mise a jour : 2026-04-12
 | Lot | Statut | Notes |
 | --- | --- | --- |
 | Squelette Python | Termine | `pyproject.toml`, package `diskcount`, CLI `python -m diskcount`. |
-| Configuration | Termine | Variables d'environnement via `pydantic-settings`, `.env` supporte en local; valeurs avec espaces quotees dans l'env. |
+| Configuration | Termine | Variables d'environnement via `pydantic-settings`, `.env` supporte en local; listes CSV supportees. |
 | Stockage SQLite | Termine | Alertes, produits, observations, notifications, subscribers. |
 | Collecteur DiskPrices | Termine | Dry-run live verifie : 429 offres parsees, 0 erreur. |
 | Collecteur Dealabs RSS | Termine | Parsing RSS configure par `DEALABS_RSS_URLS`. |
@@ -38,7 +38,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 21 passed in 1.95s
+Resultat: 21 passed in 1.92s
 ```
 
 ```text
