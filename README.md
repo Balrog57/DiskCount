@@ -1,0 +1,115 @@
+# DiskCount
+
+DiskCount is a Telegram bot that watches HDD/SSD deals and notifies you when an alert matches your filters.
+
+Project tracking files:
+
+- `PLAN.md`: implementation plan.
+- `DASHBOARD.md`: current realization dashboard.
+
+The first version is intentionally conservative:
+
+- DiskPrices France is parsed from its public table.
+- Dealabs is consumed through RSS alert feeds that you configure.
+- Keepa is optional and only queried through its API when a key and ASIN list are configured.
+- eBay is queried through the official Browse API when credentials are configured.
+- Idealo, leDenicheur, and leboncoin are consumed through configured alert/feed URLs. They are not page-scraped by default.
+
+## Quick start
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[dev]"
+copy deploy\diskcount.env.example .env
+notepad .env
+.\.venv\Scripts\python -m diskcount init-db
+.\.venv\Scripts\python -m diskcount check
+.\.venv\Scripts\python -m diskcount list --min-tb 16 --max-eur-tb 20 --media rotational
+.\.venv\Scripts\python -m diskcount run
+```
+
+On Debian the same app is intended to run under `systemd`; see `deploy/diskcount.service`.
+
+## Configuration
+
+Environment variables:
+
+- `TELEGRAM_BOT_TOKEN`: token created with BotFather.
+- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated Telegram user IDs allowed to control the bot. Empty means open access for local testing, so set it on a VPS.
+- `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; Debian example uses `/var/lib/diskcount/diskcount.sqlite3`.
+- `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
+- `DEALABS_RSS_URLS`: comma-separated RSS alert URLs from Dealabs.
+- `IDEALO_FEED_URLS`: comma-separated feed or alert URLs for Idealo-compatible entries.
+- `LEDENICHEUR_FEED_URLS`: comma-separated feed or alert URLs for leDenicheur-compatible entries.
+- `LEBONCOIN_FEED_URLS`: comma-separated feed or alert URLs for leboncoin-compatible entries.
+- `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`: official eBay developer credentials.
+- `EBAY_SEARCH_QUERIES`: comma-separated eBay Browse API searches, for example `disque dur 16 To HDD,disque dur 18 To HDD`.
+- `EBAY_MARKETPLACE_ID`: default `EBAY_FR`.
+- `EBAY_CATEGORY_IDS`: optional comma-separated eBay category IDs.
+- `KEEPA_API_KEY`: optional Keepa API key.
+- `KEEPA_ASINS`: optional comma-separated ASINs to query through Keepa.
+- `POLL_INTERVAL_SECONDS`: default `900`.
+- `TELEGRAM_MESSAGE_DELAY_SECONDS`: default `0.5`, used to pace Telegram notifications.
+
+## Telegram commands
+
+Create an alert:
+
+```text
+/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
+```
+
+Useful commands:
+
+- `/alerts` lists alerts.
+- `/pause 1` disables an alert.
+- `/resume 1` enables it again.
+- `/delete 1` removes it.
+- `/set_max_price 1 18.5` updates the maximum EUR/TB threshold for alert `1`; use `none` to disable it.
+- `/test` runs a dry scan and reports what would match.
+- `/status` shows source and database status.
+
+Accepted alert keys:
+
+- `name`: alert name.
+- `min_tb`, `max_tb`: capacity range in TB.
+- `max_eur_tb`: maximum EUR/TB; this can notify immediately, before 30 days of history exist.
+- `condition`: `new`, `used`, or comma-separated values.
+- `media`: `rotational`, `solid_state`, or comma-separated values.
+- `sources`: `diskprices`, `dealabs`, `idealo`, `ledenicheur`, `leboncoin`, `ebay`, `keepa`, or comma-separated values.
+- `discount`: minimum discount percentage compared with the rolling 30 day median; default `5`.
+- `cooldown`: hours before repeating a notification for the same product unless price drops further; default `24`.
+
+## Debian deployment
+
+Example:
+
+```bash
+sudo useradd --system --home /opt/diskcount --shell /usr/sbin/nologin diskcount
+sudo mkdir -p /opt/diskcount /var/lib/diskcount
+sudo chown -R diskcount:diskcount /opt/diskcount /var/lib/diskcount
+sudo cp -r . /opt/diskcount
+cd /opt/diskcount
+sudo -u diskcount python3.11 -m venv .venv
+sudo -u diskcount .venv/bin/python -m pip install -e .
+sudo cp deploy/diskcount.env.example /etc/diskcount.env
+sudo nano /etc/diskcount.env
+sudo cp deploy/diskcount.service /etc/systemd/system/diskcount.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now diskcount
+sudo journalctl -u diskcount -f
+```
+
+Initialize the database before first start if desired:
+
+```bash
+sudo -u diskcount /opt/diskcount/.venv/bin/python -m diskcount init-db
+```
+
+## CLI
+
+- `diskcount check`: dry-run scan, equivalent to checking current sources without persisting observations.
+- `diskcount check --persist`: check and persist observations.
+- `diskcount scan --dry-run`: explicit dry-run scan.
+- `diskcount list --min-tb 16 --max-eur-tb 20 --media rotational`: print the best current offers sorted by EUR/TB.
+- `diskcount run`: start Telegram polling and the background scheduler.

@@ -1,0 +1,65 @@
+from datetime import timedelta
+from decimal import Decimal
+
+from diskcount.db import Repository, create_db_engine
+from diskcount.domain import Deal, utc_now
+
+
+def test_repository_baseline_and_product_deduplication() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+    now = utc_now()
+    deal = Deal(
+        source="diskprices",
+        external_id="B0ABCDEFGH",
+        title="WD 16 To",
+        url="https://www.amazon.fr/dp/B0ABCDEFGH",
+        price_eur=Decimal("320.00"),
+        price_per_tb=Decimal("20.00"),
+        capacity_tb=Decimal("16"),
+        condition="new",
+        media_type="rotational",
+    )
+
+    for days, price_per_tb in ((3, "30.00"), (2, "40.00"), (1, "20.00")):
+        observed = now - timedelta(days=days)
+        repository.record_observation(
+            Deal(
+                source=deal.source,
+                external_id=deal.external_id,
+                title=deal.title,
+                url=deal.url,
+                price_eur=Decimal(price_per_tb) * deal.capacity_tb,
+                price_per_tb=Decimal(price_per_tb),
+                capacity_tb=deal.capacity_tb,
+                condition=deal.condition,
+                media_type=deal.media_type,
+            ),
+            observed_at=observed,
+        )
+
+    assert repository.baseline_price_per_tb(deal.product_id, before=now) == Decimal("30.00")
+    counts = repository.counts()
+    assert counts["products"] == 1
+    assert counts["observations"] == 3
+
+
+def test_repository_set_alert_max_price() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+    alert = repository.create_alert(
+        chat_id=42,
+        name="NAS",
+        min_capacity_tb=16,
+        max_capacity_tb=None,
+        conditions=["new"],
+        media_types=["rotational"],
+        sources=["diskprices"],
+        max_price_per_tb=Decimal("20.00"),
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+
+    assert repository.set_alert_max_price_per_tb(42, alert.id, Decimal("18.50"))
+    updated = repository.list_alerts(chat_id=42)[0]
+    assert updated.max_price_per_tb == Decimal("18.50")
