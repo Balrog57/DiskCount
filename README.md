@@ -185,6 +185,11 @@ Current fail2ban SSH whitelist on server:
 
 The same public IPs are also explicitly allowed in UFW for `<SSH_PORT>/tcp`.
 
+Server and Server SSH whitelist:
+
+- `<REDACTED_IP>` / `server`: `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+- `<REDACTED_IP>` / `server`: `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+
 To explicitly allow this workstation on the custom SSH port:
 
 ```bash
