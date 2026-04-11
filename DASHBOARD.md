@@ -25,7 +25,7 @@ Derniere mise a jour : 2026-04-12
 | Tests | Termine | 21 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
-| Acces VPS SSH | Bloque | Port `<SSH_PORT>` en timeout depuis `<REDACTED_IP>`; probablement ban temporaire ou regle firewall. |
+| Acces VPS SSH | Bloque | Port `<SSH_PORT>` en timeout depuis `<REDACTED_IP>`; console VPS affiche aussi des logs `[UFW BLOCK]` sur le TTY. |
 
 ## Verification executee
 

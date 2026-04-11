@@ -142,6 +142,19 @@ sudo nft list ruleset | grep -n "<REDACTED_IP>\|<SSH_PORT>\|ssh"
 sudo iptables -S | grep "<REDACTED_IP>\|<SSH_PORT>\|ssh"
 ```
 
+If the VPS provider console shows `[UFW BLOCK]` messages over the login prompt, they are kernel firewall logs printed on the TTY. Press `Enter`, type the Linux username and password normally, then silence console kernel logs for the current session:
+
+```bash
+sudo dmesg -n 1
+```
+
+To explicitly allow this workstation on the custom SSH port:
+
+```bash
+sudo ufw allow from <REDACTED_IP> to any port <SSH_PORT> proto tcp
+sudo ufw reload
+```
+
 Expected working SSH command from this workstation:
 
 ```powershell
