@@ -59,6 +59,7 @@ Resultat: diskcount.service active
 Bot: @DiskCount_bot
 Dernier scan: fetched=435 matched=0 notified=0 errors=0
 Migration SQLite: colonne alerts.owner_user_id presente
+Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
 ```
 
 ```text
@@ -66,6 +67,7 @@ Telegram command menu
 Default: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status
 Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status, users, allow, revoke
 Tiles: /start, /menu et /help affichent des tuiles inline; categories Alertes, Scan, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
+Verification Bot API server: OK
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
