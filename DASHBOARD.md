@@ -26,7 +26,7 @@ Derniere mise a jour : 2026-04-12
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 21 tests passent. |
+| Tests | Termine | 24 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
@@ -57,7 +57,8 @@ Top live liste: 24 To a 19.36 EUR/To, 18 To a 19.88 EUR/To, 28 To a 19.95 EUR/To
 server systemd
 Resultat: diskcount.service active
 Bot: @DiskCount_bot
-Dernier scan: fetched=431 matched=0 notified=0 errors=0
+Dernier scan: fetched=435 matched=0 notified=0 errors=0
+Migration SQLite: colonne alerts.owner_user_id presente
 ```
 
 ```text
