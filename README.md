@@ -173,6 +173,18 @@ Server specifics from the server audit:
 
 After three bad key/user attempts, wait up to one hour or unban the IP from rescue mode.
 
+Current fail2ban SSH whitelist on server:
+
+```text
+127.0.0.1/8
+::1
+<REDACTED_IP>
+<REDACTED_IP>
+<REDACTED_IP>
+```
+
+The same public IPs are also explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+
 To explicitly allow this workstation on the custom SSH port:
 
 ```bash

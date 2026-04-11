@@ -25,7 +25,7 @@ Derniere mise a jour : 2026-04-12
 | Tests | Termine | 21 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
-| Acces VPS SSH | Debloque | `<REDACTED_IP>` retiree de fail2ban le 2026-04-12; regle UFW explicite ajoutee pour `<SSH_PORT>/tcp`. |
+| Acces VPS SSH | Debloque | `<REDACTED_IP>`, `<REDACTED_IP>`, `<REDACTED_IP>` sont en ignoreip fail2ban et autorisees UFW sur `<SSH_PORT>/tcp`. |
 
 ## Verification executee
 
