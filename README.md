@@ -35,7 +35,8 @@ On Debian the same app is intended to run under `systemd`; see `deploy/diskcount
 Environment variables:
 
 - `TELEGRAM_BOT_TOKEN`: token created with BotFather.
-- `TELEGRAM_ALLOWED_USER_IDS`: comma-separated Telegram user IDs allowed to control the bot. Empty means open access for local testing, so set it on a VPS.
+- `TELEGRAM_ADMIN_USER_IDS`: comma-separated Telegram user IDs with admin rights. Set your own ID here on the VPS.
+- `TELEGRAM_ALLOWED_USER_IDS`: optional static comma-separated Telegram user IDs allowed to control the bot. Dynamic users are managed from Telegram and stored in SQLite.
 - `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; Debian example uses `/var/lib/diskcount/diskcount.sqlite3`.
 - `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
 - `DEALABS_RSS_URLS`: comma-separated RSS alert URLs from Dealabs.
@@ -68,6 +69,12 @@ Useful commands:
 - `/set_max_price 1 18.5` updates the maximum EUR/TB threshold for alert `1`; use `none` to disable it.
 - `/test` runs a dry scan and reports what would match.
 - `/status` shows source and database status.
+
+Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
+
+- `/users` lists allowed and disabled users.
+- `/allow 123456789 User` adds or re-enables a user with a custom label.
+- `/revoke 123456789` disables a user.
 
 Accepted alert keys:
 

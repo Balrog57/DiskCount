@@ -18,6 +18,7 @@ Derniere mise a jour : 2026-04-12
 | Connecteur Keepa API | Termine v1 | Optionnel, actif seulement avec `KEEPA_API_KEY` + `KEEPA_ASINS`. |
 | Regles de notification | Termine | Seuil EUR/To, remise rolling 30 jours, cooldown, baisse significative. |
 | Bot Telegram | Termine | Commandes demandees implementees. |
+| Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
@@ -33,7 +34,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 18 passed in 1.87s
+Resultat: 21 passed in 1.95s
 ```
 
 ```text
@@ -51,7 +52,7 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 | Priorite | Tache | Detail |
 | --- | --- | --- |
 | P0 | Creer le bot Telegram | Recuperer `TELEGRAM_BOT_TOKEN` depuis BotFather. |
-| P0 | Recuperer l'ID utilisateur | Definir `TELEGRAM_ALLOWED_USER_IDS` pour eviter un bot public. |
+| P0 | Recuperer l'ID utilisateur | Definir `TELEGRAM_ADMIN_USER_IDS` avec ton ID Telegram. |
 | P0 | Configurer Debian | Installer dans `/opt/diskcount` et activer `diskcount.service`. |
 | P1 | Configurer Dealabs | Ajouter les flux RSS d'alertes dans `DEALABS_RSS_URLS`. |
 | P1 | Configurer eBay | Creer des credentials eBay Developer puis definir `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`. |

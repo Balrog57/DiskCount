@@ -30,10 +30,20 @@ class AlertArgs:
     cooldown_hours: int
 
 
-def is_authorized(settings: Settings, user_id: int | None) -> bool:
+def is_env_admin(settings: Settings, user_id: int | None) -> bool:
     if user_id is None:
         return False
-    return not settings.telegram_allowed_user_ids or user_id in settings.telegram_allowed_user_ids
+    return user_id in settings.telegram_admin_user_ids
+
+
+def is_authorized(settings: Settings, repository: Repository | None, user_id: int | None) -> bool:
+    if user_id is None:
+        return False
+    if is_env_admin(settings, user_id):
+        return True
+    if user_id in settings.telegram_allowed_user_ids:
+        return True
+    return bool(repository and repository.is_user_allowed(user_id))
 
 
 def parse_alert_args(text: str | None) -> AlertArgs:
@@ -90,9 +100,15 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
     router = Router(name="diskcount")
 
     async def guard(message: Message) -> bool:
-        if is_authorized(settings, message.from_user.id if message.from_user else None):
+        if is_authorized(settings, repository, message.from_user.id if message.from_user else None):
             return True
         await message.answer("Acces refuse.")
+        return False
+
+    async def admin_guard(message: Message) -> bool:
+        if is_env_admin(settings, message.from_user.id if message.from_user else None):
+            return True
+        await message.answer("Commande reservee a l'administrateur.")
         return False
 
     @router.message(CommandStart())
@@ -115,9 +131,45 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used "
             "discount=5 sources=diskprices,dealabs,ebay,leboncoin\n\n"
             "Modifier le prix max: /set_max_price 1 18.5 ou /set_max_price 1 none\n\n"
+            "Admin: /users, /allow 123456 Nom custom, /revoke 123456\n\n"
             "Filtres: min_tb, max_tb, max_eur_tb, condition=new|used, media=rotational|solid_state, "
             "sources=diskprices|dealabs|idealo|ledenicheur|leboncoin|ebay|keepa, discount, cooldown."
         )
+
+    @router.message(Command("users"))
+    async def users(message: Message) -> None:
+        if not await admin_guard(message):
+            return
+        rows = repository.list_authorized_users(include_disabled=True)
+        if not rows:
+            await message.answer("Aucun utilisateur autorise en base.")
+            return
+        await message.answer("\n".join(format_authorized_user(user) for user in rows))
+
+    @router.message(Command("allow"))
+    async def allow(message: Message, command: CommandObject) -> None:
+        if not await admin_guard(message):
+            return
+        parsed = _user_id_and_label(command.args)
+        if parsed is None:
+            await message.answer("Usage: /allow 123456789 Nom custom")
+            return
+        user_id, label = parsed
+        user = repository.upsert_authorized_user(user_id, label)
+        await message.answer(f"Utilisateur autorise: {format_authorized_user(user)}")
+
+    @router.message(Command("revoke"))
+    async def revoke(message: Message, command: CommandObject) -> None:
+        if not await admin_guard(message):
+            return
+        user_id = _user_id(command.args)
+        if user_id is None:
+            await message.answer("Usage: /revoke 123456789")
+            return
+        if not repository.revoke_authorized_user(user_id):
+            await message.answer("Utilisateur introuvable.")
+            return
+        await message.answer(f"Utilisateur {user_id} desactive.")
 
     @router.message(Command("add"))
     async def add_alert(message: Message, command: CommandObject) -> None:
@@ -217,7 +269,8 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             "DiskCount status\n"
             f"Sources: {', '.join(source.name for source in scanner.sources)}\n"
             f"Alertes: {counts['alerts']} | Produits: {counts['products']} | "
-            f"Observations: {counts['observations']} | Notifications: {counts['notifications']}\n"
+            f"Observations: {counts['observations']} | Notifications: {counts['notifications']} | "
+            f"Utilisateurs: {counts['authorized_users']}\n"
             f"Intervalle: {settings.poll_interval_seconds}s"
         )
 
@@ -239,6 +292,12 @@ def format_alert(alert: Alert) -> str:
         f"sources={','.join(alert.sources)}" if alert.sources else None,
     ]
     return " | ".join(part for part in parts if part)
+
+
+def format_authorized_user(user) -> str:
+    state = "on" if user.enabled else "off"
+    role = "admin" if user.is_admin else "user"
+    return f"{user.label} | {user.telegram_user_id} | {role} | {state}"
 
 
 def _normalize_key(key: str) -> str:
@@ -293,6 +352,31 @@ def _alert_id(value: str | None) -> int | None:
         return int(value.strip().split()[0])
     except ValueError:
         return None
+
+
+def _user_id(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value.strip().split()[0])
+    except ValueError:
+        return None
+
+
+def _user_id_and_label(value: str | None) -> tuple[int, str] | None:
+    if not value:
+        return None
+    parts = value.strip().split(maxsplit=1)
+    if len(parts) != 2:
+        return None
+    try:
+        user_id = int(parts[0])
+    except ValueError:
+        return None
+    label = parts[1].strip()
+    if not label:
+        return None
+    return user_id, label[:120]
 
 
 def _alert_id_and_price(value: str | None) -> tuple[int, Decimal | None] | None:

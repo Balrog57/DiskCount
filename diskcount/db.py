@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, create_engine, func, select
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, create_engine, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
@@ -21,18 +21,29 @@ class Base(DeclarativeBase):
 class Subscriber(Base):
     __tablename__ = "subscribers"
 
-    chat_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AuthorizedUser(Base):
+    __tablename__ = "authorized_users"
+
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Alert(Base):
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    chat_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    chat_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     min_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -147,6 +158,48 @@ class Repository:
                 subscriber.last_seen_at = utc_now()
                 subscriber.enabled = True
             session.commit()
+
+    def is_user_allowed(self, telegram_user_id: int) -> bool:
+        with self.session() as session:
+            user = session.get(AuthorizedUser, telegram_user_id)
+            return bool(user and user.enabled)
+
+    def upsert_authorized_user(self, telegram_user_id: int, label: str, is_admin: bool = False) -> AuthorizedUser:
+        with self.session() as session:
+            user = session.get(AuthorizedUser, telegram_user_id)
+            if user is None:
+                user = AuthorizedUser(
+                    telegram_user_id=telegram_user_id,
+                    label=label,
+                    is_admin=is_admin,
+                    enabled=True,
+                )
+                session.add(user)
+            else:
+                user.label = label
+                user.is_admin = is_admin
+                user.enabled = True
+                user.updated_at = utc_now()
+            session.commit()
+            session.refresh(user)
+            return user
+
+    def revoke_authorized_user(self, telegram_user_id: int) -> bool:
+        with self.session() as session:
+            user = session.get(AuthorizedUser, telegram_user_id)
+            if user is None:
+                return False
+            user.enabled = False
+            user.updated_at = utc_now()
+            session.commit()
+            return True
+
+    def list_authorized_users(self, include_disabled: bool = False) -> list[AuthorizedUser]:
+        with self.session() as session:
+            statement = select(AuthorizedUser).order_by(AuthorizedUser.label)
+            if not include_disabled:
+                statement = statement.where(AuthorizedUser.enabled.is_(True))
+            return list(session.scalars(statement))
 
     def create_alert(
         self,
@@ -323,4 +376,8 @@ class Repository:
                 "products": session.scalar(select(func.count(Product.id))) or 0,
                 "observations": session.scalar(select(func.count(PriceObservation.id))) or 0,
                 "notifications": session.scalar(select(func.count(Notification.id))) or 0,
+                "authorized_users": session.scalar(
+                    select(func.count(AuthorizedUser.telegram_user_id)).where(AuthorizedUser.enabled.is_(True))
+                )
+                or 0,
             }

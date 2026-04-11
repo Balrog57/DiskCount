@@ -63,3 +63,19 @@ def test_repository_set_alert_max_price() -> None:
     assert repository.set_alert_max_price_per_tb(42, alert.id, Decimal("18.50"))
     updated = repository.list_alerts(chat_id=42)[0]
     assert updated.max_price_per_tb == Decimal("18.50")
+
+
+def test_repository_authorized_users() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+
+    user = repository.upsert_authorized_user(123, "User")
+    assert user.telegram_user_id == 123
+    assert user.label == "User"
+    assert repository.is_user_allowed(123)
+    assert len(repository.list_authorized_users()) == 1
+
+    assert repository.revoke_authorized_user(123)
+    assert not repository.is_user_allowed(123)
+    assert repository.list_authorized_users() == []
+    assert len(repository.list_authorized_users(include_disabled=True)) == 1

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: list[int] = Field(default_factory=list)
+    telegram_admin_user_ids: list[int] = Field(default_factory=list)
 
     database_url: str = "sqlite:///./diskcount.sqlite3"
     poll_interval_seconds: int = 900
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
     notification_price_drop_pct: float = 2.0
     telegram_message_delay_seconds: float = 0.5
 
-    @field_validator("telegram_allowed_user_ids", mode="before")
+    @field_validator("telegram_allowed_user_ids", "telegram_admin_user_ids", mode="before")
     @classmethod
     def parse_allowed_user_ids(cls, value: Any) -> list[int]:
         return _split_int_csv(value)

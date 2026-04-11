@@ -16,6 +16,8 @@ au prix habituel observe sur 30 jours.
 
 - Bot Telegram interactif avec commandes `/start`, `/help`, `/add`, `/alerts`, `/pause`, `/resume`, `/delete`, `/test`, `/status`.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
+- Panel admin Telegram via commandes `/users`, `/allow <id> <nom>`, `/revoke <id>`.
+- Acces utilisateur persistant dans SQLite, avec super-admin defini par `TELEGRAM_ADMIN_USER_IDS`.
 - CLI de pilotage inspiree de kimsufi-notifier : `check`, `list`, `scan`, `run`, `init-db`.
 - Stockage local SQLite des alertes, produits, observations de prix et notifications envoyees.
 - Baseline de prix rolling 30 jours basee sur la mediane des observations precedentes.
@@ -42,7 +44,7 @@ au prix habituel observe sur 30 jours.
 - `diskcount/db.py` : modeles SQLAlchemy et repository SQLite.
 - `diskcount/rules.py` : matching d'alertes, baseline, seuils et cooldown.
 - `diskcount/scanner.py` : orchestration collecte/evaluation/notification.
-- `diskcount/bot.py` : commandes Telegram et parsing des alertes.
+- `diskcount/bot.py` : commandes Telegram, parsing des alertes et panel admin.
 - `diskcount/cli.py` : commandes `init-db`, `scan --dry-run`, `run`.
 - `deploy/` : fichiers d'environnement et unit `systemd`.
 - `tests/` : tests unitaires et dry-run scanner.
@@ -75,6 +77,7 @@ python -m diskcount run
 - Repository : deduplication produit et mediane rolling 30 jours.
 - Bot : parsing `/add` et filtrage des utilisateurs autorises.
 - Bot : modification de seuil avec `/set_max_price`.
+- Bot : gestion admin des utilisateurs avec `/users`, `/allow`, `/revoke`.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.
 - Scanner : `dry_run=True` simule les notifications sans persister les produits.
 
@@ -84,7 +87,7 @@ python -m diskcount run
 2. Installer le projet dans `/opt/diskcount`.
 3. Creer un venv Python 3.11+.
 4. Copier `deploy/diskcount.env.example` vers `/etc/diskcount.env`.
-5. Definir `TELEGRAM_BOT_TOKEN` et `TELEGRAM_ALLOWED_USER_IDS`.
+5. Definir `TELEGRAM_BOT_TOKEN` et `TELEGRAM_ADMIN_USER_IDS`.
 6. Copier `deploy/diskcount.service` vers `/etc/systemd/system/diskcount.service`.
 7. Executer `systemctl daemon-reload`, `enable --now diskcount`, puis surveiller avec `journalctl -u diskcount -f`.
 
