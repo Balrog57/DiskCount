@@ -59,6 +59,13 @@ Bot: @DiskCount_bot
 Dernier scan: fetched=431 matched=0 notified=0 errors=0
 ```
 
+```text
+Telegram command menu
+Default: start, help, add, alerts, pause, resume, delete, set_max_price, test, status
+Admin 123456789: start, help, add, alerts, pause, resume, delete, set_max_price, test, status, users, allow, revoke
+Tiles: /start et /help affichent le clavier persistant
+```
+
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
 
 ## Reste a faire avant VPS
