@@ -62,6 +62,8 @@ Bot: @DiskCount_bot
 Dernier scan: fetched=435 matched=0 notified=0 errors=0
 Migration SQLite: colonne alerts.owner_user_id presente
 Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
+Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
+Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, products.drive_category, products.interfaces_json presentes
 ```
 
 ```text
@@ -71,6 +73,7 @@ Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_
 Tiles: /start, /menu et /help affichent des tuiles inline; categories Alertes, Scan, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
 Verification Bot API server: OK
 Edition alertes: boutons Modifier/Supprimer depuis Mes alertes; cases HDD/SSD, New/Used, categories DiskPrices, connexions
+Verification Bot API server apres edition avancee: set_capacity present pour default et admin
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
