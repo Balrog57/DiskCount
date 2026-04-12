@@ -103,6 +103,34 @@ def test_repository_alerts_are_owned_per_user() -> None:
     assert repository.delete_alert(2002, second.id)
 
 
+def test_repository_updates_alert_filters() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+    alert = repository.create_alert(
+        chat_id=42,
+        owner_user_id=1001,
+        name="SSD",
+        min_capacity_tb=2,
+        max_capacity_tb=None,
+        conditions=["new"],
+        media_types=["solid_state"],
+        drive_categories=[],
+        interfaces=[],
+        sources=["diskprices"],
+        max_price_per_tb=Decimal("80.00"),
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+
+    assert repository.set_alert_capacity(1001, alert.id, 4, 8)
+    updated = repository.toggle_alert_filter_value(1001, alert.id, "interface", "nvme")
+    assert updated is not None
+    assert updated.interfaces == ["nvme"]
+    updated = repository.toggle_alert_filter_value(1001, alert.id, "category", "m2_nvme")
+    assert updated is not None
+    assert updated.drive_categories == ["m2_nvme"]
+
+
 def test_repository_authorized_users() -> None:
     repository = Repository(create_db_engine("sqlite:///:memory:"))
     repository.init()

@@ -14,6 +14,10 @@ def alert_matches(alert: Alert, deal: Deal) -> bool:
         return False
     if alert.media_types and deal.media_type not in alert.media_types:
         return False
+    if alert.drive_categories and deal.drive_category not in alert.drive_categories:
+        return False
+    if alert.interfaces and not (set(alert.interfaces) & set(deal.interfaces)):
+        return False
     if alert.min_capacity_tb is not None and deal.capacity_tb < Decimal(str(alert.min_capacity_tb)):
         return False
     if alert.max_capacity_tb is not None and deal.capacity_tb > Decimal(str(alert.max_capacity_tb)):

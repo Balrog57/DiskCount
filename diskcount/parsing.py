@@ -5,7 +5,7 @@ import unicodedata
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlsplit
 
-from .domain import Condition, MediaType
+from .domain import Condition, DriveCategory, DriveInterface, MediaType
 
 CAPACITY_RE = re.compile(r"(?P<value>\d+(?:[,.]\d+)?)\s*(?P<unit>t[bo]|g[bo]|tb|gb)\b", re.IGNORECASE)
 EURO_RE = re.compile(
@@ -82,6 +82,54 @@ def normalize_media_type(text: str | None) -> MediaType | None:
     if any(word in folded for word in ("hdd", "disque dur", "hard drive", "7200rpm", "5400rpm", "3.5", "2.5")):
         return "rotational"
     return None
+
+
+def normalize_drive_category(text: str | None, media_type: MediaType | None = None) -> DriveCategory | None:
+    folded = ascii_fold(text).replace('"', "")
+    compact = folded.replace(".", "").replace("-", " ")
+    is_external = any(word in compact for word in ("external", "externe", "usb"))
+    is_internal = any(word in compact for word in ("internal", "interne", "m2", "m 2", "u2", "u 2", "u3", "u 3"))
+
+    if media_type == "solid_state":
+        if any(word in compact for word in ("m2 nvme", "m 2 nvme", "nvme")):
+            return "m2_nvme"
+        if any(word in compact for word in ("m2 sata", "m 2 sata")):
+            return "m2_sata"
+        if any(word in compact for word in ("u2", "u 2", "u3", "u 3")):
+            return "u2_u3"
+        if is_external:
+            return "external_ssd"
+        if is_internal:
+            return "internal_ssd"
+        return None
+
+    if "hybrid" in compact or "sshd" in compact:
+        return "internal_hybrid"
+    if "sas" in compact:
+        return "internal_sas"
+    if is_external and "25" in compact:
+        return "external_2_5"
+    if is_external:
+        return "external_3_5"
+    if is_internal and "25" in compact:
+        return "internal_2_5"
+    if is_internal:
+        return "internal_3_5"
+    return None
+
+
+def normalize_interfaces(text: str | None) -> tuple[DriveInterface, ...]:
+    folded = ascii_fold(text)
+    interfaces: list[DriveInterface] = []
+    for value, patterns in (
+        ("nvme", ("nvme",)),
+        ("sata", ("sata",)),
+        ("sas", ("sas",)),
+        ("usb", ("usb",)),
+    ):
+        if any(pattern in folded for pattern in patterns):
+            interfaces.append(value)  # type: ignore[arg-type]
+    return tuple(interfaces)
 
 
 def extract_asin(url: str | None) -> str | None:

@@ -9,6 +9,20 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 Condition = Literal["new", "used"]
 MediaType = Literal["rotational", "solid_state"]
+DriveCategory = Literal[
+    "external_3_5",
+    "external_2_5",
+    "internal_3_5",
+    "internal_2_5",
+    "internal_hybrid",
+    "internal_sas",
+    "external_ssd",
+    "internal_ssd",
+    "m2_sata",
+    "m2_nvme",
+    "u2_u3",
+]
+DriveInterface = Literal["sata", "sas", "nvme", "usb"]
 
 
 def utc_now() -> datetime:
@@ -40,6 +54,8 @@ class Deal:
     external_id: str | None = None
     form_factor: str | None = None
     technology: str | None = None
+    drive_category: DriveCategory | None = None
+    interfaces: tuple[DriveInterface, ...] = ()
     observed_at: datetime = field(default_factory=utc_now)
     raw: dict[str, Any] = field(default_factory=dict)
 

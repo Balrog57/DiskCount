@@ -3,6 +3,8 @@ from decimal import Decimal
 from diskcount.bot import (
     _alert_id_and_price,
     _user_id_and_label,
+    build_alert_category_keyboard,
+    build_alert_edit_keyboard,
     build_bot_commands,
     build_main_keyboard,
     build_menu_keyboard,
@@ -25,6 +27,17 @@ def test_parse_alert_args() -> None:
     assert args.media_types == ["rotational"]
     assert args.conditions == ["new", "used"]
     assert args.sources == ["diskprices", "ebay", "leboncoin"]
+
+
+def test_parse_alert_args_ssd_price_per_gb_and_diskprice_filters() -> None:
+    args = parse_alert_args(
+        "name=SSD min_tb=2 max_eur_gb=0.08 media=solid_state condition=new "
+        "category=m2_nvme,external_ssd interface=nvme,usb"
+    )
+    assert args.max_price_per_tb == Decimal("80.00")
+    assert args.media_types == ["solid_state"]
+    assert args.drive_categories == ["m2_nvme", "external_ssd"]
+    assert args.interfaces == ["nvme", "usb"]
 
 
 def test_auth_accepts_admin_and_static_allow_list() -> None:
@@ -87,3 +100,30 @@ def test_build_menu_keyboard_navigation() -> None:
     assert "Mes alertes" in alert_buttons
     assert "Precedent" in alert_buttons
     assert "Accueil" in alert_buttons
+
+
+def test_build_alert_edit_keyboards() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+    alert = repository.create_alert(
+        chat_id=42,
+        owner_user_id=1001,
+        name="NAS",
+        min_capacity_tb=16,
+        max_capacity_tb=None,
+        conditions=["new"],
+        media_types=["rotational"],
+        drive_categories=["internal_3_5"],
+        interfaces=["sata"],
+        sources=["diskprices"],
+        max_price_per_tb=Decimal("20.00"),
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+    edit_buttons = [button.text for row in build_alert_edit_keyboard(alert).inline_keyboard for button in row]
+    category_buttons = [button.text for row in build_alert_category_keyboard(alert).inline_keyboard for button in row]
+    assert "[x] HDD" in edit_buttons
+    assert "[x] New" in edit_buttons
+    assert "Stockage/Prix" in edit_buttons
+    assert "[x] Internal 3.5" in category_buttons
+    assert "Accueil" in category_buttons

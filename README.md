@@ -62,6 +62,12 @@ Create an alert:
 /add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
 ```
 
+SSD example with price per GB:
+
+```text
+/add name=SSD min_tb=2 max_eur_gb=0.08 media=solid_state condition=new category=m2_nvme interface=nvme sources=diskprices
+```
+
 Useful commands:
 
 - Type `/` in Telegram to open the command menu with descriptions.
@@ -70,10 +76,13 @@ Useful commands:
 - Tile categories: `Alertes`, `Scan`, `Sources`, `Aide`, and `Admin` for admin users.
 - Submenus always include `Precedent` and `Accueil` at the bottom.
 - `/alerts` lists alerts.
+- From `/alerts`, each alert has inline buttons to reopen, modify, pause/resume, or delete it.
 - `/pause 1` disables an alert.
 - `/resume 1` enables it again.
 - `/delete 1` removes it.
 - `/set_max_price 1 18.5` updates the maximum EUR/TB threshold for alert `1`; use `none` to disable it.
+- `/set_max_price 1 0.08 gb` sets an SSD-style maximum EUR/GB threshold; it is converted to EUR/TB internally.
+- `/set_capacity 1 16 24` updates the minimum and maximum TB range; use `none` for an open bound.
 - `/test` runs a dry scan and reports what would match.
 - `/status` shows source and database status.
 
@@ -93,8 +102,11 @@ Accepted alert keys:
 - `name`: alert name.
 - `min_tb`, `max_tb`: capacity range in TB.
 - `max_eur_tb`: maximum EUR/TB; this can notify immediately, before 30 days of history exist.
+- `max_eur_gb`: maximum EUR/GB for SSD alerts; converted to EUR/TB internally.
 - `condition`: `new`, `used`, or comma-separated values.
 - `media`: `rotational`, `solid_state`, or comma-separated values.
+- `category`: DiskPrices-style category filter. Supported values: `external_3_5`, `external_2_5`, `internal_3_5`, `internal_2_5`, `internal_hybrid`, `internal_sas`, `external_ssd`, `internal_ssd`, `m2_sata`, `m2_nvme`, `u2_u3`.
+- `interface`: connection filter. Supported values: `sata`, `sas`, `nvme`, `usb`.
 - `sources`: `diskprices`, `dealabs`, `idealo`, `ledenicheur`, `leboncoin`, `ebay`, `keepa`, or comma-separated values.
 - `discount`: minimum discount percentage compared with the rolling 30 day median; default `5`.
 - `cooldown`: hours before repeating a notification for the same product unless price drops further; default `24`.

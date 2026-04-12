@@ -11,7 +11,7 @@ def test_parse_diskprices_table() -> None:
       <tr>
         <td>EUR0,020</td><td>EUR20,00</td><td>EUR320</td><td>16 TB</td><td>2 years</td>
         <td>External 3.5&quot;</td><td>HDD</td><td>New</td>
-        <td><a href="https://www.amazon.fr/dp/B0ABCDEFGH">WD 16 To Elements</a></td>
+        <td><a href="https://www.amazon.fr/dp/B0ABCDEFGH">WD 16 To Elements USB 3.0</a></td>
       </tr>
     </table>
     """
@@ -21,4 +21,6 @@ def test_parse_diskprices_table() -> None:
     assert deals[0].capacity_tb == 16
     assert deals[0].condition == "new"
     assert deals[0].media_type == "rotational"
+    assert deals[0].drive_category == "external_3_5"
+    assert deals[0].interfaces == ("usb",)
     assert deals[0].external_id == "B0ABCDEFGH"

@@ -27,6 +27,20 @@ from .scanner import Scanner
 VALID_CONDITIONS = {"new", "used"}
 VALID_MEDIA_TYPES = {"rotational", "solid_state"}
 VALID_SOURCES = {"diskprices", "dealabs", "idealo", "ledenicheur", "leboncoin", "ebay", "keepa"}
+VALID_DRIVE_CATEGORIES = {
+    "external_3_5",
+    "external_2_5",
+    "internal_3_5",
+    "internal_2_5",
+    "internal_hybrid",
+    "internal_sas",
+    "external_ssd",
+    "internal_ssd",
+    "m2_sata",
+    "m2_nvme",
+    "u2_u3",
+}
+VALID_INTERFACES = {"sata", "sas", "nvme", "usb"}
 
 USER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "Demarrer le bot et enregistrer le chat"),
@@ -38,6 +52,7 @@ USER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("resume", "Reactiver une alerte"),
     ("delete", "Supprimer une alerte"),
     ("set_max_price", "Modifier le seuil EUR/To d'une alerte"),
+    ("set_capacity", "Modifier la plage de capacite d'une alerte"),
     ("test", "Lancer un scan de test sans notifier"),
     ("status", "Afficher l'etat du bot et des sources"),
 )
@@ -56,6 +71,8 @@ class AlertArgs:
     max_capacity_tb: float | None
     conditions: list[str]
     media_types: list[str]
+    drive_categories: list[str]
+    interfaces: list[str]
     sources: list[str]
     max_price_per_tb: Decimal | None
     min_discount_pct: float
@@ -158,6 +175,104 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_alerts_keyboard(alerts: list[Alert], include_admin: bool = False) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for alert in alerts[:12]:
+        rows.append(
+            [
+                InlineKeyboardButton(text=f"Modifier #{alert.id}", callback_data=f"alert:edit:{alert.id}"),
+                InlineKeyboardButton(text=f"Supprimer #{alert.id}", callback_data=f"alert:delete:{alert.id}"),
+            ]
+        )
+    rows.extend(build_menu_keyboard("alerts:list", include_admin=include_admin).inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_alert_edit_keyboard(alert: Alert, include_admin: bool = False) -> InlineKeyboardMarkup:
+    state_label = "Pauser" if alert.enabled else "Reprendre"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=state_label, callback_data=f"alert:enabled:{alert.id}"),
+                InlineKeyboardButton(text="Supprimer", callback_data=f"alert:delete:{alert.id}"),
+            ],
+            [
+                InlineKeyboardButton(text=_toggle_label("HDD", "rotational", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:rotational"),
+                InlineKeyboardButton(text=_toggle_label("SSD", "solid_state", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:solid_state"),
+            ],
+            [
+                InlineKeyboardButton(text=_toggle_label("New", "new", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:new"),
+                InlineKeyboardButton(text=_toggle_label("Used", "used", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:used"),
+            ],
+            [
+                InlineKeyboardButton(text="Stockage/Prix", callback_data=f"alert:help:{alert.id}:numbers"),
+                InlineKeyboardButton(text="Categories", callback_data=f"alert:categories:{alert.id}"),
+            ],
+            [InlineKeyboardButton(text="Connexions", callback_data=f"alert:interfaces:{alert.id}")],
+            [
+                InlineKeyboardButton(text="Precedent", callback_data="menu:alerts:list"),
+                InlineKeyboardButton(text="Accueil", callback_data="menu:home"),
+            ],
+        ]
+    )
+
+
+def build_alert_category_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    rows = [
+        [("External 3.5", "external_3_5"), ("External 2.5", "external_2_5")],
+        [("Internal 3.5", "internal_3_5"), ("Internal 2.5", "internal_2_5")],
+        [("Hybrid", "internal_hybrid"), ("Internal SAS", "internal_sas")],
+        [("External SSD", "external_ssd"), ("Internal SSD", "internal_ssd")],
+        [("M.2 SATA", "m2_sata"), ("M.2 NVMe", "m2_nvme"), ("U.2/U.3", "u2_u3")],
+    ]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=_toggle_label(label, value, alert.drive_categories),
+                callback_data=f"alert:toggle:{alert.id}:category:{value}",
+            )
+            for label, value in row
+        ]
+        for row in rows
+    ]
+    keyboard.append(
+        [
+            InlineKeyboardButton(text="Precedent", callback_data=f"alert:edit:{alert.id}"),
+            InlineKeyboardButton(text="Accueil", callback_data="menu:home"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def build_alert_interface_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    rows = [
+        [("SATA", "sata"), ("SAS", "sas")],
+        [("NVMe", "nvme"), ("USB", "usb")],
+    ]
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text=_toggle_label(label, value, alert.interfaces),
+                callback_data=f"alert:toggle:{alert.id}:interface:{value}",
+            )
+            for label, value in row
+        ]
+        for row in rows
+    ]
+    keyboard.append(
+        [
+            InlineKeyboardButton(text="Precedent", callback_data=f"alert:edit:{alert.id}"),
+            InlineKeyboardButton(text="Accueil", callback_data="menu:home"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def _toggle_label(label: str, value: str, selected: list[str]) -> str:
+    prefix = "[x]" if value in selected else "[ ]"
+    return f"{prefix} {label}"
+
+
 def _menu_parent(view: str) -> str:
     if view == "home":
         return "menu:home"
@@ -172,7 +287,7 @@ def menu_home_text(include_admin: bool = False) -> str:
         "DiskCount\n\n"
         "Surveille les bons plans HDD/SSD et notifie quand une offre respecte tes filtres.\n\n"
         "Choisis une categorie:\n"
-        "- Alertes: creer, voir, pauser, supprimer, regler le prix EUR/To.\n"
+        "- Alertes: creer, modifier, supprimer et filtrer tes notifications.\n"
         "- Scan: verifier l'etat du bot ou lancer un test sans notification.\n"
         "- Sources: comprendre DiskPrices, Dealabs, eBay, leboncoin, Idealo, leDenicheur et Keepa.\n"
         "- Aide: exemples et filtres disponibles."
@@ -191,8 +306,10 @@ def menu_static_text(view: str) -> str:
             "Creer une alerte\n\n"
             "Commande:\n"
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used "
+            "category=internal_3_5,external_3_5 interface=sata,usb "
             "discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24\n\n"
-            "Minimum utile pour ton cas: min_tb=16 max_eur_tb=20 media=rotational condition=new,used."
+            "SSD en EUR/Go: max_eur_gb=0.08 media=solid_state.\n"
+            "Tu peux ensuite rouvrir l'alerte depuis Mes alertes pour la modifier avec les tuiles."
         ),
         "alerts:pause": (
             "Mettre en pause\n\n"
@@ -267,9 +384,12 @@ def menu_static_text(view: str) -> str:
             "Filtres d'alerte\n\n"
             "name: nom libre.\n"
             "min_tb, max_tb: capacite en To.\n"
-            "max_eur_tb: prix maximum par To.\n"
+            "max_eur_tb: prix maximum par To pour HDD.\n"
+            "max_eur_gb: prix maximum par Go pour SSD, converti en EUR/To en interne.\n"
             "condition: new, used ou new,used.\n"
             "media: rotational ou solid_state.\n"
+            "category: external_3_5, external_2_5, internal_3_5, internal_2_5, internal_hybrid, internal_sas, external_ssd, internal_ssd, m2_sata, m2_nvme, u2_u3.\n"
+            "interface: sata, sas, nvme, usb.\n"
             "sources: diskprices, dealabs, idealo, ledenicheur, leboncoin, ebay, keepa.\n"
             "discount: remise minimale face au prix habituel 30 jours.\n"
             "cooldown: delai en heures avant une re-notification."
@@ -281,6 +401,7 @@ def menu_static_text(view: str) -> str:
             "/add cree une alerte.\n"
             "/pause, /resume, /delete gerent une alerte par ID.\n"
             "/set_max_price modifie le seuil EUR/To.\n"
+            "/set_capacity modifie la plage min/max de stockage.\n"
             "/test lance un dry-run.\n"
             "/status affiche l'etat du bot."
         ),
@@ -328,15 +449,27 @@ def parse_alert_args(text: str | None) -> AlertArgs:
     min_capacity_tb = _float(raw.get("min_tb"))
     max_capacity_tb = _float(raw.get("max_tb"))
     max_price_per_tb = _decimal(raw.get("max_eur_tb"))
+    max_price_per_gb = _decimal(raw.get("max_eur_gb"))
+    if max_price_per_gb is not None:
+        max_price_per_tb = max_price_per_gb * Decimal("1000")
     min_discount_pct = _float(raw.get("discount")) or 5.0
     cooldown_hours = int(_float(raw.get("cooldown")) or 24)
 
     conditions = _validated_list(raw.get("condition"), VALID_CONDITIONS, "condition")
     media_types = _validated_list(raw.get("media"), VALID_MEDIA_TYPES, "media")
+    drive_categories = _validated_list(raw.get("category"), VALID_DRIVE_CATEGORIES, "category")
+    interfaces = _validated_list(raw.get("interface"), VALID_INTERFACES, "interface")
     sources = _validated_list(raw.get("sources"), VALID_SOURCES, "sources")
 
-    if min_capacity_tb is None and max_capacity_tb is None and max_price_per_tb is None and not media_types:
-        raise ValueError("Ajoute au moins un filtre: min_tb, max_tb, max_eur_tb ou media.")
+    if (
+        min_capacity_tb is None
+        and max_capacity_tb is None
+        and max_price_per_tb is None
+        and not media_types
+        and not drive_categories
+        and not interfaces
+    ):
+        raise ValueError("Ajoute au moins un filtre: min_tb, max_tb, max_eur_tb, max_eur_gb, media, category ou interface.")
 
     if not name:
         fragments: list[str] = []
@@ -354,6 +487,8 @@ def parse_alert_args(text: str | None) -> AlertArgs:
         max_capacity_tb=max_capacity_tb,
         conditions=conditions,
         media_types=media_types,
+        drive_categories=drive_categories,
+        interfaces=interfaces,
         sources=sources,
         max_price_per_tb=max_price_per_tb,
         min_discount_pct=min_discount_pct,
@@ -434,8 +569,13 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             await callback.answer("Commande reservee a l'administrateur.", show_alert=True)
             return
         if view == "alerts:list":
-            text = format_alerts_list(repository.list_alerts(owner_user_id=callback.from_user.id))
-            await edit_menu(callback, view, text)
+            alerts = repository.list_alerts(owner_user_id=callback.from_user.id)
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    format_alerts_list(alerts),
+                    reply_markup=build_alerts_keyboard(alerts, include_admin=include_admin),
+                )
+            await callback.answer()
             return
         if view == "scan:status":
             await edit_menu(callback, view, format_status(settings, repository, scanner))
@@ -456,6 +596,88 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             await edit_menu(callback, view, text)
             return
         await edit_menu(callback, view)
+
+    @router.callback_query(lambda callback: bool(callback.data and callback.data.startswith("alert:")))
+    async def alert_callback(callback: CallbackQuery) -> None:
+        if not is_authorized(settings, repository, callback.from_user.id if callback.from_user else None):
+            await callback.answer("Acces refuse.", show_alert=True)
+            return
+        parts = (callback.data or "").split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        alert_id = _int(parts[2]) if len(parts) > 2 else None
+        if alert_id is None:
+            await callback.answer("Alerte invalide.", show_alert=True)
+            return
+
+        include_admin = include_admin_for_callback(callback)
+        owner_user_id = callback.from_user.id
+        alert = repository.get_alert(owner_user_id, alert_id)
+        if alert is None:
+            await callback.answer("Alerte introuvable.", show_alert=True)
+            return
+
+        if action == "delete":
+            repository.delete_alert(owner_user_id, alert_id)
+            alerts = repository.list_alerts(owner_user_id=owner_user_id)
+            if callback.message is not None:
+                await callback.message.edit_text(
+                    f"Alerte #{alert_id} supprimee.\n\n{format_alerts_list(alerts)}",
+                    reply_markup=build_alerts_keyboard(alerts, include_admin=include_admin),
+                )
+            await callback.answer()
+            return
+
+        if action == "enabled":
+            repository.set_alert_enabled(owner_user_id, alert_id, not alert.enabled)
+            alert = repository.get_alert(owner_user_id, alert_id)
+
+        toggled_field: str | None = None
+        if action == "toggle" and len(parts) == 5:
+            field = parts[3]
+            value = parts[4]
+            if field not in {"condition", "media", "category", "interface"}:
+                await callback.answer("Filtre invalide.", show_alert=True)
+                return
+            alert = repository.toggle_alert_filter_value(owner_user_id, alert_id, field, value)
+            toggled_field = field
+
+        if alert is None:
+            await callback.answer("Alerte introuvable.", show_alert=True)
+            return
+
+        if toggled_field == "category":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_categories_help(alert), reply_markup=build_alert_category_keyboard(alert))
+            await callback.answer()
+            return
+
+        if toggled_field == "interface":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_interfaces_help(alert), reply_markup=build_alert_interface_keyboard(alert))
+            await callback.answer()
+            return
+
+        if action == "categories":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_categories_help(alert), reply_markup=build_alert_category_keyboard(alert))
+            await callback.answer()
+            return
+
+        if action == "interfaces":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_interfaces_help(alert), reply_markup=build_alert_interface_keyboard(alert))
+            await callback.answer()
+            return
+
+        if action == "help" and len(parts) == 4 and parts[3] == "numbers":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_numbers_help(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin))
+            await callback.answer()
+            return
+
+        if callback.message is not None:
+            await callback.message.edit_text(format_alert_detail(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin))
+        await callback.answer()
 
     @router.message(Command("users"))
     async def users(message: Message) -> None:
@@ -510,19 +732,21 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             max_capacity_tb=args.max_capacity_tb,
             conditions=args.conditions,
             media_types=args.media_types,
+            drive_categories=args.drive_categories,
+            interfaces=args.interfaces,
             sources=args.sources,
             max_price_per_tb=args.max_price_per_tb,
             min_discount_pct=args.min_discount_pct,
             cooldown_hours=args.cooldown_hours,
         )
-        await message.answer(f"Alerte #{alert.id} creee: {format_alert(alert)}", reply_markup=build_menu_keyboard("alerts", include_admin=include_admin_for_message(message)))
+        await message.answer(format_alert_detail(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin_for_message(message)))
 
     @router.message(Command("alerts"))
     async def alerts(message: Message) -> None:
         if not await guard(message):
             return
         rows = repository.list_alerts(owner_user_id=current_user_id(message))
-        await message.answer(format_alerts_list(rows), reply_markup=build_menu_keyboard("alerts:list", include_admin=include_admin_for_message(message)))
+        await message.answer(format_alerts_list(rows), reply_markup=build_alerts_keyboard(rows, include_admin=include_admin_for_message(message)))
 
     @router.message(Command("pause"))
     async def pause(message: Message, command: CommandObject) -> None:
@@ -569,6 +793,23 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         value = "desactive" if price is None else f"{price:g} EUR/To"
         await message.answer(f"Prix max de l'alerte #{alert_id}: {value}.", reply_markup=build_menu_keyboard("alerts", include_admin=include_admin_for_message(message)))
 
+    @router.message(Command("set_capacity"))
+    async def set_capacity(message: Message, command: CommandObject) -> None:
+        if not await guard(message):
+            return
+        parsed = _alert_id_and_capacity(command.args)
+        if parsed is None:
+            await message.answer("Usage: /set_capacity 1 16 24 ou /set_capacity 1 16 none")
+            return
+        alert_id, min_capacity, max_capacity = parsed
+        if not repository.set_alert_capacity(current_user_id(message), alert_id, min_capacity, max_capacity):
+            await message.answer("Alerte introuvable.")
+            return
+        await message.answer(
+            f"Capacite de l'alerte #{alert_id}: min={min_capacity}To max={max_capacity}To.",
+            reply_markup=build_menu_keyboard("alerts", include_admin=include_admin_for_message(message)),
+        )
+
     @router.message(Command("test"))
     async def test_scan(message: Message) -> None:
         if not await guard(message):
@@ -593,13 +834,24 @@ def format_alert(alert: Alert) -> str:
         f"#{alert.id} [{state}] {alert.name}",
         f"min={alert.min_capacity_tb:g}To" if alert.min_capacity_tb is not None else None,
         f"max={alert.max_capacity_tb:g}To" if alert.max_capacity_tb is not None else None,
-        f"prix<={alert.max_price_per_tb:g}EUR/To" if alert.max_price_per_tb is not None else None,
+        format_price_limit(alert),
         f"remise>={alert.min_discount_pct:g}%",
         f"etat={','.join(alert.conditions)}" if alert.conditions else None,
         f"type={','.join(alert.media_types)}" if alert.media_types else None,
+        f"cat={','.join(alert.drive_categories)}" if alert.drive_categories else None,
+        f"conn={','.join(alert.interfaces)}" if alert.interfaces else None,
         f"sources={','.join(alert.sources)}" if alert.sources else None,
     ]
     return " | ".join(part for part in parts if part)
+
+
+def format_price_limit(alert: Alert) -> str | None:
+    if alert.max_price_per_tb is None:
+        return None
+    price = Decimal(alert.max_price_per_tb)
+    if alert.media_types == ["solid_state"]:
+        return f"prix<={price / Decimal('1000'):g}EUR/Go"
+    return f"prix<={price:g}EUR/To"
 
 
 def format_alerts_list(alerts: list[Alert]) -> str:
@@ -611,6 +863,43 @@ def format_alerts_list(alerts: list[Alert]) -> str:
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used"
         )
     return "Mes alertes\n\n" + "\n".join(format_alert(alert) for alert in alerts)
+
+
+def format_alert_detail(alert: Alert) -> str:
+    return (
+        "Modifier une notification\n\n"
+        f"{format_alert(alert)}\n\n"
+        "Utilise les cases pour HDD/SSD, New/Used, categories DiskPrices et connexions.\n"
+        "Pour la capacite et le prix, ouvre Stockage/Prix puis envoie la commande indiquee."
+    )
+
+
+def format_alert_numbers_help(alert: Alert) -> str:
+    return (
+        "Stockage et prix\n\n"
+        f"Alerte #{alert.id}\n"
+        "Capacite: /set_capacity {id} 16 24 ou /set_capacity {id} 16 none\n"
+        "Prix HDD: /set_max_price {id} 20\n"
+        "Prix SSD: /set_max_price {id} 0.08 gb\n\n"
+        "Le bot stocke le seuil en EUR/To. Pour SSD, le prix EUR/Go est converti automatiquement."
+    ).format(id=alert.id)
+
+
+def format_alert_categories_help(alert: Alert) -> str:
+    return (
+        "Categories DiskPrices\n\n"
+        f"Alerte #{alert.id}\n"
+        "Coche les familles voulues: external/internal 3.5, 2.5, Hybrid, Internal SAS, "
+        "External/Internal SSD, M.2 SATA, M.2 NVMe, U.2/U.3."
+    )
+
+
+def format_alert_interfaces_help(alert: Alert) -> str:
+    return (
+        "Connexions\n\n"
+        f"Alerte #{alert.id}\n"
+        "Coche les connexions voulues: SATA, SAS, NVMe ou USB. Le bot les deduit du titre et des champs DiskPrices."
+    )
 
 
 def format_status(settings: Settings, repository: Repository, scanner: Scanner) -> str:
@@ -659,10 +948,21 @@ def _normalize_key(key: str) -> str:
         "prix_to": "max_eur_tb",
         "eur_tb": "max_eur_tb",
         "eur_to": "max_eur_tb",
+        "price_gb": "max_eur_gb",
+        "prix_go": "max_eur_gb",
+        "eur_gb": "max_eur_gb",
+        "eur_go": "max_eur_gb",
         "etat": "condition",
         "state": "condition",
         "type": "media",
         "media_type": "media",
+        "categories": "category",
+        "drive_category": "category",
+        "form": "category",
+        "form_factor": "category",
+        "interfaces": "interface",
+        "connection": "interface",
+        "connectique": "interface",
         "source": "sources",
         "remise": "discount",
     }
@@ -695,8 +995,14 @@ def _validated_list(value: str | None, valid: set[str], label: str) -> list[str]
 def _alert_id(value: str | None) -> int | None:
     if not value:
         return None
+    return _int(value.strip().split()[0])
+
+
+def _int(value: str | None) -> int | None:
+    if not value:
+        return None
     try:
-        return int(value.strip().split()[0])
+        return int(value)
     except ValueError:
         return None
 
@@ -730,7 +1036,7 @@ def _alert_id_and_price(value: str | None) -> tuple[int, Decimal | None] | None:
     if not value:
         return None
     parts = value.strip().split()
-    if len(parts) != 2:
+    if len(parts) not in (2, 3):
         return None
     try:
         alert_id = int(parts[0])
@@ -739,6 +1045,27 @@ def _alert_id_and_price(value: str | None) -> tuple[int, Decimal | None] | None:
     if parts[1].lower() in {"none", "off", "null", "disable", "disabled"}:
         return alert_id, None
     try:
-        return alert_id, Decimal(parts[1].replace(",", "."))
+        price = Decimal(parts[1].replace(",", "."))
+        if len(parts) == 3 and parts[2].lower() in {"gb", "go"}:
+            price = price * Decimal("1000")
+        return alert_id, price
     except Exception:
         return None
+
+
+def _alert_id_and_capacity(value: str | None) -> tuple[int, float | None, float | None] | None:
+    if not value:
+        return None
+    parts = value.strip().split()
+    if len(parts) != 3:
+        return None
+    try:
+        alert_id = int(parts[0])
+    except ValueError:
+        return None
+    try:
+        min_capacity = None if parts[1].lower() in {"none", "off", "null"} else float(parts[1].replace(",", "."))
+        max_capacity = None if parts[2].lower() in {"none", "off", "null"} else float(parts[2].replace(",", "."))
+    except ValueError:
+        return None
+    return alert_id, min_capacity, max_capacity

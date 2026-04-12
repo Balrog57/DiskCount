@@ -20,13 +20,15 @@ Derniere mise a jour : 2026-04-12
 | Bot Telegram | Termine | Commandes demandees implementees. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
+| Edition alertes Telegram | Termine | `Mes alertes` permet de rouvrir une alerte, modifier ses cases HDD/SSD, new/used, categories DiskPrices, connexions, pause/reprise et suppression. |
+| Filtres DiskPrices avances | Termine | Categories interne/externe/form factor, connectiques SATA/SAS/NVMe/USB, `max_eur_gb` SSD converti en EUR/To. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 25 tests passent. |
+| Tests | Termine | 29 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
@@ -42,7 +44,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 25 passed in 1.85s
+Resultat: 29 passed in 1.75s
 ```
 
 ```text
@@ -64,10 +66,11 @@ Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 m
 
 ```text
 Telegram command menu
-Default: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status
-Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_price, test, status, users, allow, revoke
+Default: start, menu, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
+Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
 Tiles: /start, /menu et /help affichent des tuiles inline; categories Alertes, Scan, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
 Verification Bot API server: OK
+Edition alertes: boutons Modifier/Supprimer depuis Mes alertes; cases HDD/SSD, New/Used, categories DiskPrices, connexions
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.

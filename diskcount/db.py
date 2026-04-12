@@ -50,6 +50,8 @@ class Alert(Base):
     max_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
     conditions_json: Mapped[str] = mapped_column(Text, default="[]")
     media_types_json: Mapped[str] = mapped_column(Text, default="[]")
+    drive_categories_json: Mapped[str] = mapped_column(Text, default="[]")
+    interfaces_json: Mapped[str] = mapped_column(Text, default="[]")
     sources_json: Mapped[str] = mapped_column(Text, default="[]")
     max_price_per_tb: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     min_discount_pct: Mapped[float] = mapped_column(Float, default=5.0)
@@ -65,6 +67,14 @@ class Alert(Base):
     @property
     def media_types(self) -> list[str]:
         return json.loads(self.media_types_json or "[]")
+
+    @property
+    def drive_categories(self) -> list[str]:
+        return json.loads(self.drive_categories_json or "[]")
+
+    @property
+    def interfaces(self) -> list[str]:
+        return json.loads(self.interfaces_json or "[]")
 
     @property
     def sources(self) -> list[str]:
@@ -84,6 +94,8 @@ class Product(Base):
     media_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     form_factor: Mapped[str | None] = mapped_column(String(120), nullable=True)
     technology: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    drive_category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    interfaces_json: Mapped[str] = mapped_column(Text, default="[]")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -140,15 +152,26 @@ def init_db(engine: Engine) -> None:
 
 def migrate_schema(engine: Engine) -> None:
     inspector = inspect(engine)
-    if "alerts" not in inspector.get_table_names():
+    table_names = set(inspector.get_table_names())
+    if "alerts" in table_names:
+        columns = {column["name"] for column in inspector.get_columns("alerts")}
+        with engine.begin() as connection:
+            if "owner_user_id" not in columns:
+                connection.execute(text("ALTER TABLE alerts ADD COLUMN owner_user_id BIGINT"))
+                connection.execute(text("UPDATE alerts SET owner_user_id = chat_id WHERE owner_user_id IS NULL"))
+                connection.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_owner_user_id ON alerts (owner_user_id)"))
+            if "drive_categories_json" not in columns:
+                connection.execute(text("ALTER TABLE alerts ADD COLUMN drive_categories_json TEXT DEFAULT '[]'"))
+            if "interfaces_json" not in columns:
+                connection.execute(text("ALTER TABLE alerts ADD COLUMN interfaces_json TEXT DEFAULT '[]'"))
+    if "products" not in table_names:
         return
-    columns = {column["name"] for column in inspector.get_columns("alerts")}
-    if "owner_user_id" in columns:
-        return
+    product_columns = {column["name"] for column in inspector.get_columns("products")}
     with engine.begin() as connection:
-        connection.execute(text("ALTER TABLE alerts ADD COLUMN owner_user_id BIGINT"))
-        connection.execute(text("UPDATE alerts SET owner_user_id = chat_id WHERE owner_user_id IS NULL"))
-        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_alerts_owner_user_id ON alerts (owner_user_id)"))
+        if "drive_category" not in product_columns:
+            connection.execute(text("ALTER TABLE products ADD COLUMN drive_category VARCHAR(40)"))
+        if "interfaces_json" not in product_columns:
+            connection.execute(text("ALTER TABLE products ADD COLUMN interfaces_json TEXT DEFAULT '[]'"))
 
 
 class Repository:
@@ -229,6 +252,8 @@ class Repository:
         max_price_per_tb: Decimal | None,
         min_discount_pct: float,
         cooldown_hours: int,
+        drive_categories: Iterable[str] = (),
+        interfaces: Iterable[str] = (),
     ) -> Alert:
         with self.session() as session:
             alert = Alert(
@@ -239,6 +264,8 @@ class Repository:
                 max_capacity_tb=max_capacity_tb,
                 conditions_json=json.dumps(list(conditions)),
                 media_types_json=json.dumps(list(media_types)),
+                drive_categories_json=json.dumps(list(drive_categories)),
+                interfaces_json=json.dumps(list(interfaces)),
                 sources_json=json.dumps(list(sources)),
                 max_price_per_tb=max_price_per_tb,
                 min_discount_pct=min_discount_pct,
@@ -265,6 +292,13 @@ class Repository:
                 statement = statement.where(Alert.enabled.is_(True))
             return list(session.scalars(statement))
 
+    def get_alert(self, owner_user_id: int, alert_id: int) -> Alert | None:
+        with self.session() as session:
+            alert = session.get(Alert, alert_id)
+            if alert is None or alert.owner_user_id != owner_user_id:
+                return None
+            return alert
+
     def set_alert_enabled(self, owner_user_id: int, alert_id: int, enabled: bool) -> bool:
         with self.session() as session:
             alert = session.get(Alert, alert_id)
@@ -284,6 +318,48 @@ class Repository:
             alert.updated_at = utc_now()
             session.commit()
             return True
+
+    def set_alert_capacity(
+        self,
+        owner_user_id: int,
+        alert_id: int,
+        min_capacity_tb: float | None,
+        max_capacity_tb: float | None,
+    ) -> bool:
+        with self.session() as session:
+            alert = session.get(Alert, alert_id)
+            if alert is None or alert.owner_user_id != owner_user_id:
+                return False
+            alert.min_capacity_tb = min_capacity_tb
+            alert.max_capacity_tb = max_capacity_tb
+            alert.updated_at = utc_now()
+            session.commit()
+            return True
+
+    def toggle_alert_filter_value(self, owner_user_id: int, alert_id: int, field: str, value: str) -> Alert | None:
+        fields = {
+            "condition": "conditions_json",
+            "media": "media_types_json",
+            "category": "drive_categories_json",
+            "interface": "interfaces_json",
+        }
+        column = fields.get(field)
+        if column is None:
+            return None
+        with self.session() as session:
+            alert = session.get(Alert, alert_id)
+            if alert is None or alert.owner_user_id != owner_user_id:
+                return None
+            values = json.loads(getattr(alert, column) or "[]")
+            if value in values:
+                values = [item for item in values if item != value]
+            else:
+                values.append(value)
+            setattr(alert, column, json.dumps(values))
+            alert.updated_at = utc_now()
+            session.commit()
+            session.refresh(alert)
+            return alert
 
     def delete_alert(self, owner_user_id: int, alert_id: int) -> bool:
         with self.session() as session:
@@ -314,6 +390,8 @@ class Repository:
                     media_type=deal.media_type,
                     form_factor=deal.form_factor,
                     technology=deal.technology,
+                    drive_category=deal.drive_category,
+                    interfaces_json=json.dumps(list(deal.interfaces)),
                 )
             )
             return
@@ -324,6 +402,8 @@ class Repository:
         product.media_type = deal.media_type
         product.form_factor = deal.form_factor
         product.technology = deal.technology
+        product.drive_category = deal.drive_category
+        product.interfaces_json = json.dumps(list(deal.interfaces))
         product.last_seen_at = utc_now()
 
     def record_observation(self, deal: Deal, observed_at: datetime | None = None) -> None:

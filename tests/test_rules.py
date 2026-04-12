@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import timedelta
 from decimal import Decimal
 
@@ -35,6 +36,8 @@ def make_deal(price_per_tb: Decimal = Decimal("19.00")) -> Deal:
         capacity_tb=Decimal("16"),
         condition="new",
         media_type="rotational",
+        drive_category="internal_3_5",
+        interfaces=("sata",),
     )
 
 
@@ -45,6 +48,14 @@ def test_threshold_match_without_history() -> None:
     decision = should_notify(alert, deal, None, None, utc_now(), significant_drop_pct=2)
     assert decision.should_notify
     assert decision.reason == "max_price_per_tb"
+
+
+def test_alert_matches_diskprice_category_and_interface() -> None:
+    alert = make_alert(drive_categories_json='["internal_3_5"]', interfaces_json='["sata"]')
+    assert alert_matches(alert, make_deal())
+
+    assert not alert_matches(alert, replace(make_deal(), drive_category="external_3_5"))
+    assert not alert_matches(alert, replace(make_deal(), interfaces=("usb",)))
 
 
 def test_rolling_discount_match() -> None:

@@ -19,6 +19,11 @@ au prix habituel observe sur 30 jours.
 - Navigation Telegram en tuiles inline via `/start`, `/menu` et `/help`, avec categories `Alertes`, `Scan`, `Sources`, `Aide`, `Admin`.
 - Sous-menus Telegram avec explications contextuelles et boutons `Precedent` / `Accueil` en bas.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
+- Commande Telegram `/set_capacity` pour modifier la plage min/max de stockage.
+- Edition inline des alertes depuis `Mes alertes` : modifier, pauser/reprendre, supprimer, cocher HDD/SSD, new/used, categories DiskPrices et connexions.
+- Filtres DiskPrices par categories `external_3_5`, `external_2_5`, `internal_3_5`, `internal_2_5`, `internal_hybrid`, `internal_sas`, `external_ssd`, `internal_ssd`, `m2_sata`, `m2_nvme`, `u2_u3`.
+- Filtres de connectique `sata`, `sas`, `nvme`, `usb`.
+- Seuil SSD en EUR/Go via `max_eur_gb`, converti en EUR/To pour les regles internes.
 - Panel admin Telegram via commandes `/users`, `/allow <id> <nom>`, `/revoke <id>`.
 - Acces utilisateur persistant dans SQLite, avec super-admin defini par `TELEGRAM_ADMIN_USER_IDS`.
 - Alertes proprietaires par utilisateur Telegram : chaque utilisateur autorise gere ses propres alertes uniquement.
@@ -84,6 +89,9 @@ python -m diskcount run
 - Bot : navigation inline en tuiles pour les commandes principales et les commandes admin.
 - Bot : categories de menu avec explications, `Precedent` et `Accueil`.
 - Bot : modification de seuil avec `/set_max_price`.
+- Bot : modification de plage de stockage avec `/set_capacity`.
+- Bot : edition inline d'une alerte existante depuis la liste.
+- Regles : filtres categories DiskPrices et connexions.
 - Bot : gestion admin des utilisateurs avec `/users`, `/allow`, `/revoke`.
 - Repository : isolation des alertes par `owner_user_id`, avec migration SQLite automatique pour les bases existantes.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.

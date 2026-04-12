@@ -6,7 +6,15 @@ import httpx
 from bs4 import BeautifulSoup
 
 from diskcount.domain import Deal
-from diskcount.parsing import extract_asin, normalize_condition, normalize_media_type, parse_capacity_tb, parse_price_eur
+from diskcount.parsing import (
+    extract_asin,
+    normalize_condition,
+    normalize_drive_category,
+    normalize_interfaces,
+    normalize_media_type,
+    parse_capacity_tb,
+    parse_price_eur,
+)
 
 
 class DiskPricesSource:
@@ -54,6 +62,9 @@ def parse_diskprices_html(html: str) -> list[Deal]:
             continue
         url = link["href"]
         title = link.get_text(" ", strip=True) or texts[-1]
+        category_text = " ".join([texts[5], technology or "", title])
+        drive_category = normalize_drive_category(category_text, media_type)
+        interfaces = normalize_interfaces(category_text)
 
         deals.append(
             Deal(
@@ -68,9 +79,13 @@ def parse_diskprices_html(html: str) -> list[Deal]:
                 media_type=media_type,
                 form_factor=texts[5] or None,
                 technology=technology,
+                drive_category=drive_category,
+                interfaces=interfaces,
                 raw={
                     "price_per_gb": texts[0],
                     "warranty": texts[4],
+                    "drive_category": drive_category,
+                    "interfaces": list(interfaces),
                 },
             )
         )
