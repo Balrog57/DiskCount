@@ -33,6 +33,7 @@ au prix habituel observe sur 30 jours.
 - Notification immediate possible quand `max_eur_tb` est atteint, meme sans historique de 30 jours.
 - Anti-spam par cooldown d'alerte et re-notification anticipee seulement en cas de nouvelle baisse significative.
 - Notifications Telegram avec bouton direct vers l'offre et delai configurable entre messages.
+- Assistant de creation d'alerte conversationnel (commande `/create`) avec etapes pour le nom, la capacite, le prix, le type de media, l'etat, les categories, les interfaces et les sources.
 - Deploiement Debian via `systemd`, venv Python, secrets dans `/etc/diskcount.env`, donnees dans `/var/lib/diskcount`.
 
 ## Sources v1
@@ -91,6 +92,7 @@ python -m diskcount run
 - Bot : modification de seuil avec `/set_max_price`.
 - Bot : modification de plage de stockage avec `/set_capacity`.
 - Bot : edition inline d'une alerte existante depuis la liste.
+- Bot : assistant de creation d'alerte interactif via `/create` avec validation par etapes.
 - Regles : filtres categories DiskPrices et connexions.
 - Bot : gestion admin des utilisateurs avec `/users`, `/allow`, `/revoke`.
 - Repository : isolation des alertes par `owner_user_id`, avec migration SQLite automatique pour les bases existantes.
@@ -109,7 +111,6 @@ python -m diskcount run
 
 ## Evolutions prevues
 
-- Assistant de creation d'alerte plus conversationnel avec boutons Telegram.
 - Import/export YAML des alertes pour sauvegarde manuelle.
 - Meilleure extraction Dealabs sur les titres complexes.
 - Support de sources additionnelles uniquement via API/RSS ou pages publiques explicitement compatibles.

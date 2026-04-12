@@ -73,6 +73,7 @@ Useful commands:
 - Type `/` in Telegram to open the command menu with descriptions.
 - `/menu` opens the inline tile navigation.
 - `/start`, `/menu`, and `/help` remove the old persistent keyboard and show inline tiles under the message.
+- `/create` starts an interactive alert creation assistant.
 - Tile categories: `Alertes`, `Scan`, `Sources`, `Aide`, and `Admin` for admin users.
 - Submenus always include `Precedent` and `Accueil` at the bottom.
 - `/alerts` lists alerts.

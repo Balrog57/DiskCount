@@ -25,6 +25,7 @@ Derniere mise a jour : 2026-04-12
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
+| Assistant de creation d'alerte | Termine | Commande `/create` interactive avec validation par etapes. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
@@ -63,6 +64,7 @@ Dernier scan: fetched=435 matched=0 notified=0 errors=0
 Migration SQLite: colonne alerts.owner_user_id presente
 Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
 Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
+Assistant creation alerte deployee: commande `/create` fonctionnelle sur server
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, products.drive_category, products.interfaces_json presentes
 ```
 
