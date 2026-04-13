@@ -70,6 +70,7 @@ UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite
 Deploiement UX tuiles 2026-04-13: commit 4e95fc5 extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=419 matched=0 notified=0 errors=0
 Test pytest distant: non execute, le venv de production ne contient pas pytest
 Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `capacity_presets_json`; sources retirees de la creation/edition Telegram et conservees comme backend scanner/env
+Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
