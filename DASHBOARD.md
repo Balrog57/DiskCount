@@ -20,6 +20,7 @@ Derniere mise a jour : 2026-04-13
 | Bot Telegram | Termine | Commandes demandees implementees. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
+| Guide Aide Telegram | Termine | `Aide` contient un guide complet en tuiles pour creation, alertes, capacites, prix, categories, connexions, scan/test, admin, sources backend, commandes et filtres texte. |
 | Edition alertes Telegram | Termine | `Mes alertes` ouvre chaque alerte comme tuile; modification cliquable de type, etat, capacites multi-selection, prix, categories, connexions, pause/reprise et suppression confirmee. |
 | Filtres DiskPrices avances | Termine | Categories interne/externe/form factor, connectiques SATA/SAS/NVMe/USB, `max_eur_gb` SSD converti en EUR/To. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
@@ -46,7 +47,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 33 passed in 1.56s
+Resultat: 33 passed in 1.63s
 ```
 
 ```text
@@ -71,6 +72,7 @@ Deploiement UX tuiles 2026-04-13: commit 4e95fc5 extrait dans /opt/diskcount, se
 Test pytest distant: non execute, le venv de production ne contient pas pytest
 Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `capacity_presets_json`; sources retirees de la creation/edition Telegram et conservees comme backend scanner/env
 Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
+Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 

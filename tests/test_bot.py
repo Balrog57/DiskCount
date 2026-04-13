@@ -101,11 +101,16 @@ def test_build_main_keyboard() -> None:
 def test_build_menu_keyboard_navigation() -> None:
     home_buttons = [button.text for row in build_menu_keyboard().inline_keyboard for button in row]
     alert_buttons = [button.text for row in build_menu_keyboard("alerts").inline_keyboard for button in row]
+    help_buttons = [button.text for row in build_menu_keyboard("help").inline_keyboard for button in row]
     admin_home_buttons = [button.text for row in build_menu_keyboard(include_admin=True).inline_keyboard for button in row]
 
     assert "Creer une alerte" in home_buttons
     assert "Mes alertes" in home_buttons
     assert "Sources" not in home_buttons
+    assert "Capacites" in help_buttons
+    assert "Prix" in help_buttons
+    assert "Sources backend" in help_buttons
+    assert "Fallback /add" in help_buttons
     assert "Admin" not in home_buttons
     assert "Admin" in admin_home_buttons
     assert "Mes alertes" in alert_buttons

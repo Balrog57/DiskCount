@@ -75,6 +75,11 @@ Creation presets:
 - Connections: `SATA`, `SAS`, `NVMe`, `USB`.
 - Sources are backend configuration only. They do not appear in alert creation or editing.
 
+Help guide:
+
+- `Aide` contains a complete tile guide for creation, alert management, capacity presets, prices, DiskPrices categories, connections, scanner/test, admin actions, backend sources, command shortcuts, and advanced text filters.
+- Guide screens use the same `Precedent` and `Accueil` navigation as the rest of the bot.
+
 Text commands remain as advanced fallbacks.
 
 Create an alert by text:

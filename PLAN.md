@@ -18,6 +18,7 @@ au prix habituel observe sur 30 jours.
 - Menu de commandes Telegram via `setMyCommands`, avec descriptions visibles quand l'utilisateur tape `/`.
 - Navigation Telegram en tuiles inline via `/start`, `/menu` et `/help`, avec actions directes `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, `Admin`.
 - Sous-menus Telegram actionnables avec boutons `Precedent` / `Accueil` en bas.
+- Aide Telegram complete en tuiles : creation, gestion des alertes, capacites, prix, categories, connexions, scan/test, admin, sources backend, commandes et filtres texte.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
 - Commande Telegram `/set_capacity` pour modifier la plage min/max de stockage.
 - Edition inline des alertes depuis `Mes alertes` : modifier, pauser/reprendre, supprimer avec confirmation, cocher HDD/SSD, new/used, categories DiskPrices, connexions, capacites multi-selection et prix par presets.
@@ -94,6 +95,7 @@ python -m diskcount run
 - Bot : menu Telegram `/` pour commandes utilisateur et scope admin.
 - Bot : navigation inline en tuiles pour les commandes principales et les commandes admin.
 - Bot : categories de menu actionnables avec `Precedent` et `Accueil`.
+- Bot : guide complet dans `Aide` avec une tuile par fonction majeure.
 - Bot : modification de seuil avec `/set_max_price`.
 - Bot : modification de plage de stockage avec `/set_capacity`.
 - Bot : edition inline d'une alerte existante depuis la liste, y compris capacites multi-selection, prix et suppression confirmee.

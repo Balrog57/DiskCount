@@ -220,10 +220,23 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
         "sources:ledenicheur": nav,
         "sources:keepa": nav,
         "help": [
-            [button("Exemple /add", "menu:alerts:add"), button("Filtres", "menu:help:filters")],
-            [button("Commandes", "menu:help:commands")],
+            [button("Creer une alerte", "menu:help:create"), button("Mes alertes", "menu:help:alerts")],
+            [button("Capacites", "menu:help:capacity"), button("Prix", "menu:help:price")],
+            [button("Categories", "menu:help:categories"), button("Connexions", "menu:help:interfaces")],
+            [button("Scanner/Test", "menu:help:scan"), button("Admin", "menu:help:admin")],
+            [button("Sources backend", "menu:help:sources"), button("Commandes", "menu:help:commands")],
+            [button("Fallback /add", "menu:alerts:add"), button("Filtres texte", "menu:help:filters")],
             *nav,
         ],
+        "help:create": nav,
+        "help:alerts": nav,
+        "help:capacity": nav,
+        "help:price": nav,
+        "help:categories": nav,
+        "help:interfaces": nav,
+        "help:scan": nav,
+        "help:admin": nav,
+        "help:sources": nav,
         "help:filters": nav,
         "help:commands": nav,
         "admin": [
@@ -710,7 +723,66 @@ def menu_static_text(view: str) -> str:
         ),
         "help": (
             "Aide\n\n"
-            "L'interface principale se fait par tuiles. Les commandes texte restent disponibles comme raccourcis avances."
+            "Choisis une fonction pour voir comment l'utiliser. Les tuiles executent les actions principales; "
+            "les commandes texte restent disponibles comme raccourcis avances."
+        ),
+        "help:create": (
+            "Guide - Creer une alerte\n\n"
+            "Bouton: Creer une alerte.\n\n"
+            "Le wizard te fait choisir dans l'ordre: type de disque, etat, capacites, prix, categories, connexions, "
+            "puis recapitulatif.\n\n"
+            "Tu peux cocher plusieurs capacites. Toute capacite vide la selection. Les sources ne sont pas demandees ici: "
+            "elles sont configurees cote backend."
+        ),
+        "help:alerts": (
+            "Guide - Mes alertes\n\n"
+            "Bouton: Mes alertes.\n\n"
+            "Chaque alerte apparait comme une tuile avec son nom, son etat, son type, sa capacite et son prix. "
+            "Ouvre une tuile pour modifier l'alerte, la pauser, la reprendre ou la supprimer avec confirmation.\n\n"
+            "Chaque utilisateur autorise voit uniquement ses propres alertes."
+        ),
+        "help:capacity": (
+            "Guide - Capacites\n\n"
+            "Les plages sont multi-selection.\n\n"
+            "SSD: <256 Go, ~256 Go, ~512 Go, ~1 To, ~2 To, ~4 To, >4 To.\n"
+            "HDD: <4 To, 4-8 To, 8-12 To, 12-16 To, 16-20 To, 20-24 To, 24-30 To, >30 To.\n\n"
+            "Toute capacite retire le filtre. Les anciennes alertes texte avec min/max restent compatibles."
+        ),
+        "help:price": (
+            "Guide - Prix\n\n"
+            "HDD: seuils en EUR/To: 15, 18, 20, 22, 25 ou aucune limite.\n"
+            "SSD: seuils en EUR/Go: 0.04, 0.06, 0.08, 0.10, 0.12 ou aucune limite.\n\n"
+            "Le bot stocke toujours le prix en EUR/To. Pour SSD, le prix EUR/Go est converti automatiquement."
+        ),
+        "help:categories": (
+            "Guide - Categories DiskPrices\n\n"
+            "HDD: External 3.5, External 2.5, Internal 3.5, Internal 2.5, Internal Hybrid, Internal SAS.\n"
+            "SSD: External SSD, Internal SSD, M.2 SATA, M.2 NVMe, U.2/U.3.\n\n"
+            "Laisse vide pour accepter toutes les categories detectees."
+        ),
+        "help:interfaces": (
+            "Guide - Connexions\n\n"
+            "Choix disponibles: SATA, SAS, NVMe, USB.\n\n"
+            "Laisse vide pour accepter toutes les connexions. Le bot deduit ces infos depuis les champs source "
+            "et les titres quand elles sont disponibles."
+        ),
+        "help:scan": (
+            "Guide - Scanner/Test\n\n"
+            "Statut affiche les compteurs, les sources chargees et l'intervalle de scan.\n"
+            "Test lance un dry-run limite a tes alertes: collecte, matching et calcul sans envoyer de notification "
+            "et sans persister de nouvelle observation."
+        ),
+        "help:admin": (
+            "Guide - Admin\n\n"
+            "Visible uniquement pour les IDs dans TELEGRAM_ADMIN_USER_IDS.\n\n"
+            "Utilisateurs liste les comptes connus. Ajouter demande un message au format: 123456789 Nom custom. "
+            "Revoquer et Reactiver affichent les utilisateurs en boutons quand possible."
+        ),
+        "help:sources": (
+            "Guide - Sources backend\n\n"
+            "Les sources ne sont pas un filtre utilisateur dans Telegram. Elles sont gerees par la configuration du service: "
+            "DiskPrices, Dealabs RSS, eBay API, flux Idealo/leDenicheur/leboncoin et Keepa API.\n\n"
+            "Utilise /status pour voir les sources chargees."
         ),
         "help:filters": (
             "Filtres d'alerte\n\n"
