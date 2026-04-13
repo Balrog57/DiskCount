@@ -29,14 +29,14 @@ Derniere mise a jour : 2026-04-13
 | Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD multi-selection, prix, categories, connexions et recapitulatif. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
-| Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
+| Deploiement server | Termine | Service `diskcount` actif sur `<SERVER_IP>`; bot `@DiskCount_bot` en polling. |
 | Tests | Termine | 33 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
-| Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
-| Acces VPS SSH server | Debloque | `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<REDACTED_IP>:<SSH_PORT>`. |
-| Acces VPS SSH server | Debloque | `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<REDACTED_IP>:<SSH_PORT>`. |
+| Acces VPS SSH server | Debloque | Seule l'IP client `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
+| Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
+| Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
 
 ## Verification executee
 

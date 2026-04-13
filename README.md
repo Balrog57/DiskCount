@@ -171,7 +171,7 @@ If the VPS SSH port times out after failed login attempts, unblock the client IP
 Current local public IP observed during setup:
 
 ```text
-<REDACTED_IP>
+<YOUR_CLIENT_IP>
 ```
 
 Useful Debian commands:
@@ -179,7 +179,7 @@ Useful Debian commands:
 ```bash
 sudo fail2ban-client status
 sudo fail2ban-client status sshd
-sudo fail2ban-client set sshd unbanip <REDACTED_IP>
+sudo fail2ban-client set sshd unbanip <YOUR_CLIENT_IP>
 sudo systemctl restart ssh
 ```
 
@@ -187,8 +187,8 @@ If fail2ban is not installed or does not show the ban, check the firewall:
 
 ```bash
 sudo ufw status numbered
-sudo nft list ruleset | grep -n "<REDACTED_IP>\|<SSH_PORT>\|ssh"
-sudo iptables -S | grep "<REDACTED_IP>\|<SSH_PORT>\|ssh"
+sudo nft list ruleset | grep -n "<YOUR_CLIENT_IP>\|<SSH_PORT>\|ssh"
+sudo iptables -S | grep "<YOUR_CLIENT_IP>\|<SSH_PORT>\|ssh"
 ```
 
 If the VPS provider console shows `[UFW BLOCK]` messages over the login prompt, they are kernel firewall logs printed on the TTY. Press `Enter`, type the Linux username and password normally, then silence console kernel logs for the current session:
@@ -227,27 +227,27 @@ Current fail2ban SSH whitelist on server:
 ```text
 127.0.0.1/8
 ::1
-<REDACTED_IP>
+<YOUR_CLIENT_IP>
 ```
 
 Only the local trusted client IP is explicitly allowed in UFW for `<SSH_PORT>/tcp`; fail2ban remains active for all other remote IPs.
 
 Server and Server SSH whitelist:
 
-- `<REDACTED_IP>` / `server`: only `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
-- `<REDACTED_IP>` / `server`: only `<REDACTED_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+- `<SERVER_IP>` / `server`: only `<YOUR_CLIENT_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
+- `<SERVER_IP>` / `server`: only `<YOUR_CLIENT_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
 
 To explicitly allow this workstation on the custom SSH port:
 
 ```bash
-sudo ufw allow from <REDACTED_IP> to any port <SSH_PORT> proto tcp
+sudo ufw allow from <YOUR_CLIENT_IP> to any port <SSH_PORT> proto tcp
 sudo ufw reload
 ```
 
 Expected working SSH command from this workstation:
 
 ```powershell
-ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<REDACTED_IP>
+ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<SERVER_IP>
 ```
 
 ## CLI
