@@ -132,6 +132,12 @@ def test_repository_updates_alert_filters() -> None:
     updated = repository.toggle_alert_filter_value(1001, alert.id, "source", "ebay")
     assert updated is not None
     assert updated.sources == ["diskprices", "ebay"]
+    updated = repository.toggle_alert_capacity_preset(1001, alert.id, "hdd_16_20")
+    assert updated is not None
+    assert updated.capacity_presets == ["hdd_16_20"]
+    updated = repository.toggle_alert_capacity_preset(1001, alert.id, "hdd_20_24")
+    assert updated is not None
+    assert updated.capacity_presets == ["hdd_16_20", "hdd_20_24"]
 
 
 def test_repository_authorized_users() -> None:

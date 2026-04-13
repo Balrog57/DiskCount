@@ -10,7 +10,6 @@ from diskcount.bot import (
     build_alert_category_keyboard,
     build_alert_edit_keyboard,
     build_alert_price_keyboard,
-    build_alert_source_keyboard,
     build_bot_commands,
     build_draft_keyboard,
     build_main_keyboard,
@@ -106,6 +105,7 @@ def test_build_menu_keyboard_navigation() -> None:
 
     assert "Creer une alerte" in home_buttons
     assert "Mes alertes" in home_buttons
+    assert "Sources" not in home_buttons
     assert "Admin" not in home_buttons
     assert "Admin" in admin_home_buttons
     assert "Mes alertes" in alert_buttons
@@ -135,15 +135,14 @@ def test_build_alert_edit_keyboards() -> None:
     category_buttons = [button.text for row in build_alert_category_keyboard(alert).inline_keyboard for button in row]
     capacity_buttons = [button.text for row in build_alert_capacity_keyboard(alert).inline_keyboard for button in row]
     price_buttons = [button.text for row in build_alert_price_keyboard(alert).inline_keyboard for button in row]
-    source_buttons = [button.text for row in build_alert_source_keyboard(alert).inline_keyboard for button in row]
     assert "Type" in edit_buttons
     assert "Etat" in edit_buttons
     assert "Capacite" in edit_buttons
     assert "Prix" in edit_buttons
+    assert "Sources" not in edit_buttons
     assert "[x] Internal 3.5" in category_buttons
     assert "[x] HDD 16-20 To" in capacity_buttons
     assert "[x] HDD <=20 EUR/To" in price_buttons
-    assert "[x] DiskPrices" in source_buttons
     assert "Accueil" in category_buttons
 
 
@@ -157,11 +156,12 @@ def test_alert_draft_presets_and_create() -> None:
     draft.conditions = ["new"]
     draft.drive_categories = ["m2_nvme"]
     draft.interfaces = ["nvme"]
-    draft.sources = ["diskprices", "ebay"]
+    draft.sources = []
 
     args = draft_to_alert_args(draft)
-    assert args.min_capacity_tb == 1.8
-    assert args.max_capacity_tb == 2.4
+    assert args.capacity_presets == ["hdd_16_20", "ssd_2"]
+    assert args.min_capacity_tb is None
+    assert args.max_capacity_tb is None
     assert args.media_types == ["rotational", "solid_state"]
     assert args.max_price_per_tb == Decimal("80")
 
@@ -170,7 +170,8 @@ def test_alert_draft_presets_and_create() -> None:
     assert alert.conditions == ["new"]
     assert alert.drive_categories == ["m2_nvme"]
     assert alert.interfaces == ["nvme"]
-    assert alert.sources == ["diskprices", "ebay"]
+    assert alert.sources == []
+    assert alert.capacity_presets == ["hdd_16_20", "ssd_2"]
 
 
 def test_draft_keyboard_marks_selected_values() -> None:
@@ -179,6 +180,16 @@ def test_draft_keyboard_marks_selected_values() -> None:
     assert "[x] SSD <=0.08 EUR/Go" in price_buttons
 
     draft.step = "capacity"
+    draft.capacity_presets = []
     apply_capacity_preset_to_draft(draft, "hdd_16_20")
     capacity_buttons = [button.text for row in build_draft_keyboard(draft).inline_keyboard for button in row]
     assert "[x] HDD 16-20 To" in capacity_buttons
+
+
+def test_capacity_keyboard_supports_multiple_selected_ranges() -> None:
+    draft = AlertDraft(step="capacity", capacity_presets=[])
+    apply_capacity_preset_to_draft(draft, "hdd_16_20")
+    apply_capacity_preset_to_draft(draft, "hdd_20_24")
+    capacity_buttons = [button.text for row in build_draft_keyboard(draft).inline_keyboard for button in row]
+    assert "[x] HDD 16-20 To" in capacity_buttons
+    assert "[x] HDD 20-24 To" in capacity_buttons

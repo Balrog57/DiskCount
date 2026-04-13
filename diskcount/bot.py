@@ -23,6 +23,7 @@ from aiogram.types import (
 
 from .config import Settings
 from .db import Alert, Repository
+from .presets import CAPACITY_PRESETS, HDD_CAPACITY_KEYS, SSD_CAPACITY_KEYS
 from .scanner import Scanner
 
 VALID_CONDITIONS = {"new", "used"}
@@ -69,26 +70,6 @@ SOURCE_OPTIONS: tuple[tuple[str, str], ...] = (
     ("leDenicheur", "ledenicheur"),
     ("Keepa", "keepa"),
 )
-CAPACITY_PRESETS: dict[str, tuple[str, float | None, float | None, str]] = {
-    "all": ("Toute capacite", None, None, "all"),
-    "ssd_lt_256": ("SSD <256 Go", None, 0.256, "solid_state"),
-    "ssd_256": ("SSD ~256 Go", 0.24, 0.30, "solid_state"),
-    "ssd_512": ("SSD ~512 Go", 0.48, 0.60, "solid_state"),
-    "ssd_1": ("SSD ~1 To", 0.9, 1.2, "solid_state"),
-    "ssd_2": ("SSD ~2 To", 1.8, 2.4, "solid_state"),
-    "ssd_4": ("SSD ~4 To", 3.6, 4.8, "solid_state"),
-    "ssd_gt_4": ("SSD >4 To", 4.0, None, "solid_state"),
-    "hdd_lt_4": ("HDD <4 To", None, 4.0, "rotational"),
-    "hdd_4_8": ("HDD 4-8 To", 4.0, 8.0, "rotational"),
-    "hdd_8_12": ("HDD 8-12 To", 8.0, 12.0, "rotational"),
-    "hdd_12_16": ("HDD 12-16 To", 12.0, 16.0, "rotational"),
-    "hdd_16_20": ("HDD 16-20 To", 16.0, 20.0, "rotational"),
-    "hdd_20_24": ("HDD 20-24 To", 20.0, 24.0, "rotational"),
-    "hdd_24_30": ("HDD 24-30 To", 24.0, 30.0, "rotational"),
-    "hdd_gt_30": ("HDD >30 To", 30.0, None, "rotational"),
-}
-HDD_CAPACITY_KEYS = ("hdd_lt_4", "hdd_4_8", "hdd_8_12", "hdd_12_16", "hdd_16_20", "hdd_20_24", "hdd_24_30", "hdd_gt_30")
-SSD_CAPACITY_KEYS = ("ssd_lt_256", "ssd_256", "ssd_512", "ssd_1", "ssd_2", "ssd_4", "ssd_gt_4")
 PRICE_PRESETS: dict[str, tuple[str, Decimal | None, str]] = {
     "none": ("Aucune limite", None, "all"),
     "h15": ("HDD <=15 EUR/To", Decimal("15"), "rotational"),
@@ -104,7 +85,7 @@ PRICE_PRESETS: dict[str, tuple[str, Decimal | None, str]] = {
 }
 HDD_PRICE_KEYS = ("h15", "h18", "h20", "h22", "h25")
 SSD_PRICE_KEYS = ("s004", "s006", "s008", "s010", "s012")
-WIZARD_STEPS = ("media", "condition", "capacity", "price", "categories", "interfaces", "sources", "confirm")
+WIZARD_STEPS = ("media", "condition", "capacity", "price", "categories", "interfaces", "confirm")
 
 USER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "Demarrer le bot et enregistrer le chat"),
@@ -134,6 +115,7 @@ class AlertArgs:
     name: str
     min_capacity_tb: float | None
     max_capacity_tb: float | None
+    capacity_presets: list[str]
     conditions: list[str]
     media_types: list[str]
     drive_categories: list[str]
@@ -148,14 +130,15 @@ class AlertArgs:
 class AlertDraft:
     step: str = "media"
     name: str = "Alerte DiskCount"
-    min_capacity_tb: float | None = 16.0
+    min_capacity_tb: float | None = None
     max_capacity_tb: float | None = None
+    capacity_presets: list[str] = field(default_factory=lambda: ["hdd_16_20"])
     max_price_per_tb: Decimal | None = Decimal("20")
     conditions: list[str] = field(default_factory=lambda: ["new", "used"])
     media_types: list[str] = field(default_factory=lambda: ["rotational"])
     drive_categories: list[str] = field(default_factory=list)
     interfaces: list[str] = field(default_factory=list)
-    sources: list[str] = field(default_factory=lambda: ["diskprices"])
+    sources: list[str] = field(default_factory=list)
     updated_at: float = field(default_factory=time.time)
 
     def touch(self) -> None:
@@ -203,7 +186,7 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
         "home": [
             [button("Creer une alerte", "draft:start")],
             [button("Mes alertes", "menu:alerts:list"), button("Scanner/Test", "menu:scan")],
-            [button("Sources", "menu:sources"), button("Aide", "menu:help")],
+            [button("Aide", "menu:help")],
         ],
         "alerts": [
             [button("Creer une alerte", "draft:start")],
@@ -285,7 +268,6 @@ def build_alert_edit_keyboard(alert: Alert, include_admin: bool = False) -> Inli
                 InlineKeyboardButton(text="Categories", callback_data=f"alert:categories:{alert.id}"),
                 InlineKeyboardButton(text="Connexions", callback_data=f"alert:interfaces:{alert.id}"),
             ],
-            [InlineKeyboardButton(text="Sources", callback_data=f"alert:sources:{alert.id}")],
             [InlineKeyboardButton(text="Supprimer", callback_data=f"alert:delete:{alert.id}")],
             [
                 InlineKeyboardButton(text="Precedent", callback_data="menu:alerts:list"),
@@ -370,14 +352,12 @@ def build_alert_condition_keyboard(alert: Alert) -> InlineKeyboardMarkup:
     )
 
 
-def build_alert_source_keyboard(alert: Alert) -> InlineKeyboardMarkup:
-    return build_option_keyboard(SOURCE_OPTIONS, alert.sources, f"alert:toggle:{alert.id}:source", _alert_nav(alert.id))
-
-
 def build_alert_capacity_keyboard(alert: Alert) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(text=CAPACITY_PRESETS["all"][0], callback_data=f"alert:cap:{alert.id}:all")]]
-    rows.extend(_preset_rows("alert:cap", alert.id, HDD_CAPACITY_KEYS, selected_capacity_key(alert)))
-    rows.extend(_preset_rows("alert:cap", alert.id, SSD_CAPACITY_KEYS, selected_capacity_key(alert)))
+    selected = selected_capacity_keys(alert)
+    all_label = _toggle_label(CAPACITY_PRESETS["all"][0], "all", ["all"] if not selected and alert.min_capacity_tb is None and alert.max_capacity_tb is None else [])
+    rows = [[InlineKeyboardButton(text=all_label, callback_data=f"alert:cap:{alert.id}:all")]]
+    rows.extend(_preset_rows("alert:cap", alert.id, HDD_CAPACITY_KEYS, selected))
+    rows.extend(_preset_rows("alert:cap", alert.id, SSD_CAPACITY_KEYS, selected))
     rows.append(_alert_nav(alert.id))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -412,9 +392,11 @@ def build_draft_keyboard(draft: AlertDraft) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text=_toggle_label("Used", "used", draft.conditions), callback_data="draft:toggle:condition:used"),
         ], nav]
     elif draft.step == "capacity":
-        rows = [[InlineKeyboardButton(text=CAPACITY_PRESETS["all"][0], callback_data="draft:cap:all")]]
-        rows.extend(_preset_rows("draft:cap", None, HDD_CAPACITY_KEYS, selected_capacity_key(draft)))
-        rows.extend(_preset_rows("draft:cap", None, SSD_CAPACITY_KEYS, selected_capacity_key(draft)))
+        selected = selected_capacity_keys(draft)
+        all_label = _toggle_label(CAPACITY_PRESETS["all"][0], "all", ["all"] if not selected and draft.min_capacity_tb is None and draft.max_capacity_tb is None else [])
+        rows = [[InlineKeyboardButton(text=all_label, callback_data="draft:cap:all")]]
+        rows.extend(_preset_rows("draft:cap", None, HDD_CAPACITY_KEYS, selected))
+        rows.extend(_preset_rows("draft:cap", None, SSD_CAPACITY_KEYS, selected))
         rows.append(nav)
     elif draft.step == "price":
         rows = [[InlineKeyboardButton(text=PRICE_PRESETS["none"][0], callback_data="draft:price:none")]]
@@ -426,9 +408,6 @@ def build_draft_keyboard(draft: AlertDraft) -> InlineKeyboardMarkup:
         rows.append(nav)
     elif draft.step == "interfaces":
         rows = build_option_rows(INTERFACE_OPTIONS, draft.interfaces, "draft:toggle:interface")
-        rows.append(nav)
-    elif draft.step == "sources":
-        rows = build_option_rows(SOURCE_OPTIONS, draft.sources, "draft:toggle:source")
         rows.append(nav)
     else:
         rows = [
@@ -458,12 +437,12 @@ def build_option_rows(options, selected: list[str], callback_prefix: str) -> lis
     return rows
 
 
-def _preset_rows(prefix: str, alert_id: int | None, keys: tuple[str, ...], selected: str | None) -> list[list[InlineKeyboardButton]]:
+def _preset_rows(prefix: str, alert_id: int | None, keys: tuple[str, ...], selected: list[str]) -> list[list[InlineKeyboardButton]]:
     rows: list[list[InlineKeyboardButton]] = []
     current: list[InlineKeyboardButton] = []
     for key in keys:
         label = CAPACITY_PRESETS[key][0]
-        text = f"[x] {label}" if key == selected else label
+        text = f"[x] {label}" if key in selected else f"[ ] {label}"
         callback_data = f"{prefix}:{key}" if alert_id is None else f"{prefix}:{alert_id}:{key}"
         current.append(InlineKeyboardButton(text=text, callback_data=callback_data))
         if len(current) == 2:
@@ -528,11 +507,14 @@ def _menu_parent(view: str) -> str:
     return f"menu:{view.rsplit(':', 1)[0]}"
 
 
-def selected_capacity_key(target: Alert | AlertDraft) -> str | None:
+def selected_capacity_keys(target: Alert | AlertDraft) -> list[str]:
+    preset_keys = list(target.capacity_presets)
+    if preset_keys:
+        return preset_keys
     for key, (_, min_tb, max_tb, _) in CAPACITY_PRESETS.items():
         if target.min_capacity_tb == min_tb and target.max_capacity_tb == max_tb:
-            return key
-    return None
+            return [key]
+    return []
 
 
 def selected_price_key(target: Alert | AlertDraft) -> str | None:
@@ -546,9 +528,17 @@ def selected_price_key(target: Alert | AlertDraft) -> str | None:
 
 def apply_capacity_preset_to_draft(draft: AlertDraft, key: str) -> None:
     _, min_tb, max_tb, media = CAPACITY_PRESETS[key]
-    draft.min_capacity_tb = min_tb
-    draft.max_capacity_tb = max_tb
-    if media in VALID_MEDIA_TYPES and media not in draft.media_types:
+    if key == "all":
+        draft.capacity_presets = []
+        draft.min_capacity_tb = min_tb
+        draft.max_capacity_tb = max_tb
+    elif key in draft.capacity_presets:
+        draft.capacity_presets.remove(key)
+    else:
+        draft.capacity_presets.append(key)
+        draft.min_capacity_tb = None
+        draft.max_capacity_tb = None
+    if key != "all" and media in VALID_MEDIA_TYPES and media not in draft.media_types:
         draft.media_types.append(media)
     draft.touch()
 
@@ -566,11 +556,12 @@ def draft_to_alert_args(draft: AlertDraft) -> AlertArgs:
         name=draft.name[:120] or "Alerte DiskCount",
         min_capacity_tb=draft.min_capacity_tb,
         max_capacity_tb=draft.max_capacity_tb,
+        capacity_presets=list(draft.capacity_presets),
         conditions=draft.conditions or ["new", "used"],
         media_types=draft.media_types or ["rotational"],
         drive_categories=draft.drive_categories,
         interfaces=draft.interfaces,
-        sources=draft.sources or ["diskprices"],
+        sources=draft.sources,
         max_price_per_tb=draft.max_price_per_tb,
         min_discount_pct=5.0,
         cooldown_hours=24,
@@ -585,6 +576,7 @@ def create_alert_from_draft(repository: Repository, chat_id: int, owner_user_id:
         name=args.name,
         min_capacity_tb=args.min_capacity_tb,
         max_capacity_tb=args.max_capacity_tb,
+        capacity_presets=args.capacity_presets,
         conditions=args.conditions,
         media_types=args.media_types,
         drive_categories=args.drive_categories,
@@ -647,7 +639,7 @@ def menu_static_text(view: str) -> str:
             "Fallback avance:\n"
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used "
             "category=internal_3_5,external_3_5 interface=sata,usb "
-            "discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24\n\n"
+            "discount=5 cooldown=24\n\n"
             "SSD en EUR/Go: max_eur_gb=0.08 media=solid_state.\n"
             "Tu peux ensuite rouvrir l'alerte depuis Mes alertes pour la modifier avec les tuiles."
         ),
@@ -730,7 +722,6 @@ def menu_static_text(view: str) -> str:
             "media: rotational ou solid_state.\n"
             "category: external_3_5, external_2_5, internal_3_5, internal_2_5, internal_hybrid, internal_sas, external_ssd, internal_ssd, m2_sata, m2_nvme, u2_u3.\n"
             "interface: sata, sas, nvme, usb.\n"
-            "sources: diskprices, dealabs, idealo, ledenicheur, leboncoin, ebay, keepa.\n"
             "discount: remise minimale face au prix habituel 30 jours.\n"
             "cooldown: delai en heures avant une re-notification."
         ),
@@ -826,6 +817,7 @@ def parse_alert_args(text: str | None) -> AlertArgs:
         name=name[:120],
         min_capacity_tb=min_capacity_tb,
         max_capacity_tb=max_capacity_tb,
+        capacity_presets=[],
         conditions=conditions,
         media_types=media_types,
         drive_categories=drive_categories,
@@ -984,9 +976,9 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
         if action == "cap" and len(parts) == 4:
             key = parts[3]
             if key in CAPACITY_PRESETS:
-                _, min_tb, max_tb, media = CAPACITY_PRESETS[key]
-                repository.set_alert_capacity(owner_user_id, alert_id, min_tb, max_tb)
-                if media in VALID_MEDIA_TYPES:
+                _, _, _, media = CAPACITY_PRESETS[key]
+                alert = repository.toggle_alert_capacity_preset(owner_user_id, alert_id, key)
+                if alert is not None and key in alert.capacity_presets and media in VALID_MEDIA_TYPES:
                     current = repository.get_alert(owner_user_id, alert_id)
                     if current is not None and media not in current.media_types:
                         repository.toggle_alert_filter_value(owner_user_id, alert_id, "media", media)
@@ -1019,8 +1011,6 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             await edit_alert_message(callback, format_alert_categories(alert), build_alert_category_keyboard(alert))
         elif action == "interfaces" or (action == "toggle" and len(parts) == 5 and parts[3] == "interface"):
             await edit_alert_message(callback, format_alert_interfaces(alert), build_alert_interface_keyboard(alert))
-        elif action == "sources" or (action == "toggle" and len(parts) == 5 and parts[3] == "source"):
-            await edit_alert_message(callback, format_alert_sources(alert), build_alert_source_keyboard(alert))
         else:
             await edit_alert_message(callback, format_alert_detail(alert), build_alert_edit_keyboard(alert, include_admin=include_admin))
         await callback.answer()
@@ -1079,6 +1069,7 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             name=args.name,
             min_capacity_tb=args.min_capacity_tb,
             max_capacity_tb=args.max_capacity_tb,
+            capacity_presets=[],
             conditions=args.conditions,
             media_types=args.media_types,
             drive_categories=args.drive_categories,
@@ -1329,15 +1320,13 @@ def format_alert(alert: Alert) -> str:
     state = "on" if alert.enabled else "off"
     parts = [
         f"#{alert.id} [{state}] {alert.name}",
-        f"min={alert.min_capacity_tb:g}To" if alert.min_capacity_tb is not None else None,
-        f"max={alert.max_capacity_tb:g}To" if alert.max_capacity_tb is not None else None,
+        f"capacite={format_capacity_filter(alert)}",
         format_price_limit(alert),
         f"remise>={alert.min_discount_pct:g}%",
         f"etat={','.join(alert.conditions)}" if alert.conditions else None,
         f"type={','.join(alert.media_types)}" if alert.media_types else None,
         f"cat={','.join(alert.drive_categories)}" if alert.drive_categories else None,
         f"conn={','.join(alert.interfaces)}" if alert.interfaces else None,
-        f"sources={','.join(alert.sources)}" if alert.sources else None,
     ]
     return " | ".join(part for part in parts if part)
 
@@ -1354,7 +1343,7 @@ def format_price_limit(alert: Alert) -> str | None:
 def format_alert_button(alert: Alert) -> str:
     state = "on" if alert.enabled else "off"
     media = ",".join(_display_value(value) for value in alert.media_types) or "HDD/SSD"
-    capacity = format_capacity_range(alert.min_capacity_tb, alert.max_capacity_tb)
+    capacity = format_capacity_filter(alert)
     price = format_price_limit(alert) or "prix libre"
     return f"#{alert.id} {alert.name} | {state} | {media} | {capacity} | {price}"
 
@@ -1367,6 +1356,12 @@ def format_capacity_range(min_capacity_tb: float | None, max_capacity_tb: float 
     if max_capacity_tb is None:
         return f">={min_capacity_tb:g} To"
     return f"{min_capacity_tb:g}-{max_capacity_tb:g} To"
+
+
+def format_capacity_filter(alert: Alert) -> str:
+    if alert.capacity_presets:
+        return ", ".join(CAPACITY_PRESETS[key][0] for key in alert.capacity_presets if key in CAPACITY_PRESETS) or "toute capacite"
+    return format_capacity_range(alert.min_capacity_tb, alert.max_capacity_tb)
 
 
 def format_alert_media(alert: Alert) -> str:
@@ -1398,14 +1393,6 @@ def format_alert_price(alert: Alert) -> str:
         "Prix maximum\n\n"
         f"{format_alert_button(alert)}\n\n"
         "Choisis un seuil. Les boutons SSD affichent EUR/Go et sont stockes en EUR/To en interne."
-    )
-
-
-def format_alert_sources(alert: Alert) -> str:
-    return (
-        "Sources\n\n"
-        f"{format_alert_button(alert)}\n\n"
-        "Coche les sources que cette alerte doit utiliser."
     )
 
 
@@ -1441,8 +1428,7 @@ def format_draft(draft: AlertDraft) -> str:
         "price": "4/8 Prix",
         "categories": "5/8 Categories DiskPrices",
         "interfaces": "6/8 Connexions",
-        "sources": "7/8 Sources",
-        "confirm": "8/8 Recapitulatif",
+        "confirm": "7/7 Recapitulatif",
     }
     hints = {
         "media": "Choisis HDD, SSD, ou les deux.",
@@ -1451,7 +1437,6 @@ def format_draft(draft: AlertDraft) -> str:
         "price": "Choisis un prix maximum par To ou par Go selon le type.",
         "categories": "Filtre les familles DiskPrices: interne, externe, M.2, SAS, etc.",
         "interfaces": "Filtre les connexions: SATA, SAS, NVMe ou USB.",
-        "sources": "Choisis les sources activees pour cette alerte.",
         "confirm": "Verifie le recapitulatif puis cree l'alerte.",
     }
     return f"{titles.get(draft.step, 'Creation alerte')}\n\n{format_draft_summary(draft)}\n\n{hints.get(draft.step, '')}"
@@ -1462,12 +1447,17 @@ def format_draft_summary(draft: AlertDraft) -> str:
         f"Nom: {draft.name}\n"
         f"Type: {format_values(draft.media_types)}\n"
         f"Etat: {format_values(draft.conditions)}\n"
-        f"Capacite: {format_capacity_range(draft.min_capacity_tb, draft.max_capacity_tb)}\n"
+        f"Capacite: {format_draft_capacity(draft)}\n"
         f"Prix max: {format_draft_price(draft)}\n"
         f"Categories: {format_values(draft.drive_categories)}\n"
-        f"Connexions: {format_values(draft.interfaces)}\n"
-        f"Sources: {format_values(draft.sources)}"
+        f"Connexions: {format_values(draft.interfaces)}"
     )
+
+
+def format_draft_capacity(draft: AlertDraft) -> str:
+    if draft.capacity_presets:
+        return ", ".join(CAPACITY_PRESETS[key][0] for key in draft.capacity_presets if key in CAPACITY_PRESETS) or "toute capacite"
+    return format_capacity_range(draft.min_capacity_tb, draft.max_capacity_tb)
 
 
 def format_draft_price(draft: AlertDraft) -> str:

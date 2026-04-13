@@ -59,34 +59,34 @@ Environment variables:
 The main Telegram interface is clickable:
 
 - `/start`, `/menu`, `/help` open the inline home menu.
-- Home tiles: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Sources`, `Aide`, and `Admin` for admin users.
+- Home tiles: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, and `Admin` for admin users.
 - `/create` starts a full alert wizard with inline buttons. Each step edits the same message when Telegram allows it.
 - Every wizard and edit screen keeps `Precedent` and `Accueil` at the bottom.
-- `Mes alertes` shows each alert as a tile. Opening an alert lets you edit type, condition, capacity, price, DiskPrices categories, connections, sources, pause/resume, and delete with confirmation.
+- `Mes alertes` shows each alert as a tile. Opening an alert lets you edit type, condition, capacity, price, DiskPrices categories, connections, pause/resume, and delete with confirmation.
 - Admin users get tiles for `Utilisateurs`, `Ajouter`, `Revoquer`, and `Reactiver`. `Ajouter` asks for one controlled text reply: `id nom custom`.
 
 Creation presets:
 
-- SSD capacity: `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, or `Toute capacite`.
-- HDD capacity: `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, or `Toute capacite`.
+- SSD capacity, multi-select: `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, or `Toute capacite`.
+- HDD capacity, multi-select: `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, or `Toute capacite`.
 - HDD price: `<=15`, `<=18`, `<=20`, `<=22`, `<=25` EUR/To, or `Aucune limite`.
 - SSD price: `<=0.04`, `<=0.06`, `<=0.08`, `<=0.10`, `<=0.12` EUR/Go, or `Aucune limite`. Internally, SSD thresholds are still stored in EUR/To.
 - DiskPrices categories: `External 3.5`, `External 2.5`, `Internal 3.5`, `Internal 2.5`, `Internal Hybrid`, `Internal SAS`, `External SSD`, `Internal SSD`, `M.2 SATA`, `M.2 NVMe`, `U.2/U.3`.
 - Connections: `SATA`, `SAS`, `NVMe`, `USB`.
-- Sources: `DiskPrices`, `Dealabs`, `eBay`, `leboncoin`, `Idealo`, `leDenicheur`, `Keepa`.
+- Sources are backend configuration only. They do not appear in alert creation or editing.
 
 Text commands remain as advanced fallbacks.
 
 Create an alert by text:
 
 ```text
-/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
+/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 cooldown=24
 ```
 
 SSD example with price per GB:
 
 ```text
-/add name=SSD min_tb=2 max_eur_gb=0.08 media=solid_state condition=new category=m2_nvme interface=nvme sources=diskprices
+/add name=SSD min_tb=2 max_eur_gb=0.08 media=solid_state condition=new category=m2_nvme interface=nvme
 ```
 
 Useful commands:
@@ -95,7 +95,7 @@ Useful commands:
 - `/menu` opens the inline tile navigation.
 - `/start`, `/menu`, and `/help` remove the old persistent keyboard and show inline tiles under the message.
 - `/create` starts the clickable alert creation wizard.
-- Tile categories: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Sources`, `Aide`, and `Admin` for admin users.
+- Tile categories: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, and `Admin` for admin users.
 - Submenus always include `Precedent` and `Accueil` at the bottom.
 - `/alerts` lists alerts.
 - From `/alerts`, each alert opens a clickable editor.
@@ -129,7 +129,7 @@ Accepted alert keys:
 - `media`: `rotational`, `solid_state`, or comma-separated values.
 - `category`: DiskPrices-style category filter. Supported values: `external_3_5`, `external_2_5`, `internal_3_5`, `internal_2_5`, `internal_hybrid`, `internal_sas`, `external_ssd`, `internal_ssd`, `m2_sata`, `m2_nvme`, `u2_u3`.
 - `interface`: connection filter. Supported values: `sata`, `sas`, `nvme`, `usb`.
-- `sources`: `diskprices`, `dealabs`, `idealo`, `ledenicheur`, `leboncoin`, `ebay`, `keepa`, or comma-separated values.
+- Sources are configured on the backend through environment variables and scanner connectors, not through the Telegram alert editor.
 - `discount`: minimum discount percentage compared with the rolling 30 day median; default `5`.
 - `cooldown`: hours before repeating a notification for the same product unless price drops further; default `24`.
 

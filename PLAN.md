@@ -16,11 +16,11 @@ au prix habituel observe sur 30 jours.
 
 - Bot Telegram interactif avec commandes `/start`, `/menu`, `/help`, `/add`, `/alerts`, `/pause`, `/resume`, `/delete`, `/test`, `/status`.
 - Menu de commandes Telegram via `setMyCommands`, avec descriptions visibles quand l'utilisateur tape `/`.
-- Navigation Telegram en tuiles inline via `/start`, `/menu` et `/help`, avec actions directes `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Sources`, `Aide`, `Admin`.
+- Navigation Telegram en tuiles inline via `/start`, `/menu` et `/help`, avec actions directes `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, `Admin`.
 - Sous-menus Telegram actionnables avec boutons `Precedent` / `Accueil` en bas.
 - Commande Telegram `/set_max_price` pour modifier rapidement le seuil EUR/To d'une alerte.
 - Commande Telegram `/set_capacity` pour modifier la plage min/max de stockage.
-- Edition inline des alertes depuis `Mes alertes` : modifier, pauser/reprendre, supprimer avec confirmation, cocher HDD/SSD, new/used, categories DiskPrices, connexions, sources, capacite et prix par presets.
+- Edition inline des alertes depuis `Mes alertes` : modifier, pauser/reprendre, supprimer avec confirmation, cocher HDD/SSD, new/used, categories DiskPrices, connexions, capacites multi-selection et prix par presets.
 - Filtres DiskPrices par categories `external_3_5`, `external_2_5`, `internal_3_5`, `internal_2_5`, `internal_hybrid`, `internal_sas`, `external_ssd`, `internal_ssd`, `m2_sata`, `m2_nvme`, `u2_u3`.
 - Filtres de connectique `sata`, `sas`, `nvme`, `usb`.
 - Seuil SSD en EUR/Go via `max_eur_gb`, converti en EUR/To pour les regles internes.
@@ -33,9 +33,10 @@ au prix habituel observe sur 30 jours.
 - Notification immediate possible quand `max_eur_tb` est atteint, meme sans historique de 30 jours.
 - Anti-spam par cooldown d'alerte et re-notification anticipee seulement en cas de nouvelle baisse significative.
 - Notifications Telegram avec bouton direct vers l'offre et delai configurable entre messages.
-- Assistant de creation d'alerte 100% tuiles (commande `/create` ou bouton `Creer une alerte`) avec etapes type, etat, capacite, prix, categories, interfaces, sources et recapitulatif.
-- Presets capacite SSD : `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, `Toute capacite`.
-- Presets capacite HDD : `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, `Toute capacite`.
+- Assistant de creation d'alerte 100% tuiles (commande `/create` ou bouton `Creer une alerte`) avec etapes type, etat, capacite, prix, categories, interfaces et recapitulatif.
+- Les sources sont un sujet backend : elles se configurent par variables d'environnement et connecteurs scanner, pas dans la creation/edition Telegram.
+- Presets capacite SSD multi-selection : `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, `Toute capacite`.
+- Presets capacite HDD multi-selection : `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, `Toute capacite`.
 - Presets prix HDD : `<=15`, `<=18`, `<=20`, `<=22`, `<=25` EUR/To, `Aucune limite`.
 - Presets prix SSD : `<=0.04`, `<=0.06`, `<=0.08`, `<=0.10`, `<=0.12` EUR/Go, `Aucune limite`, convertis en EUR/To.
 - Deploiement Debian via `systemd`, venv Python, secrets dans `/etc/diskcount.env`, donnees dans `/var/lib/diskcount`.
@@ -68,7 +69,7 @@ au prix habituel observe sur 30 jours.
 Exemple d'alerte :
 
 ```text
-/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
+/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 cooldown=24
 ```
 
 Commandes de verification :
@@ -95,8 +96,8 @@ python -m diskcount run
 - Bot : categories de menu actionnables avec `Precedent` et `Accueil`.
 - Bot : modification de seuil avec `/set_max_price`.
 - Bot : modification de plage de stockage avec `/set_capacity`.
-- Bot : edition inline d'une alerte existante depuis la liste, y compris capacite, prix, sources et suppression confirmee.
-- Bot : assistant de creation d'alerte cliquable via `/create` avec presets SSD/HDD, prix, categories, connexions, sources et recapitulatif.
+- Bot : edition inline d'une alerte existante depuis la liste, y compris capacites multi-selection, prix et suppression confirmee.
+- Bot : assistant de creation d'alerte cliquable via `/create` avec presets SSD/HDD multi-selection, prix, categories, connexions et recapitulatif.
 - Bot : presets SSD en EUR/Go convertis correctement en EUR/To.
 - Regles : filtres categories DiskPrices et connexions.
 - Bot : gestion admin des utilisateurs avec tuiles et fallback `/users`, `/allow`, `/revoke`.

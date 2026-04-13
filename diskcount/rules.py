@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from .db import Alert, Notification
 from .domain import Deal, NotificationDecision
+from .presets import CAPACITY_PRESETS
 
 
 def alert_matches(alert: Alert, deal: Deal) -> bool:
@@ -18,11 +19,29 @@ def alert_matches(alert: Alert, deal: Deal) -> bool:
         return False
     if alert.interfaces and not (set(alert.interfaces) & set(deal.interfaces)):
         return False
-    if alert.min_capacity_tb is not None and deal.capacity_tb < Decimal(str(alert.min_capacity_tb)):
-        return False
-    if alert.max_capacity_tb is not None and deal.capacity_tb > Decimal(str(alert.max_capacity_tb)):
+    if not capacity_matches(alert, deal.capacity_tb):
         return False
     if alert.max_price_per_tb is not None and deal.price_per_tb > Decimal(alert.max_price_per_tb):
+        return False
+    return True
+
+
+def capacity_matches(alert: Alert, capacity_tb: Decimal) -> bool:
+    if alert.capacity_presets:
+        for key in alert.capacity_presets:
+            preset = CAPACITY_PRESETS.get(key)
+            if preset is None:
+                continue
+            _, min_tb, max_tb, _ = preset
+            if min_tb is not None and capacity_tb < Decimal(str(min_tb)):
+                continue
+            if max_tb is not None and capacity_tb > Decimal(str(max_tb)):
+                continue
+            return True
+        return False
+    if alert.min_capacity_tb is not None and capacity_tb < Decimal(str(alert.min_capacity_tb)):
+        return False
+    if alert.max_capacity_tb is not None and capacity_tb > Decimal(str(alert.max_capacity_tb)):
         return False
     return True
 

@@ -58,6 +58,13 @@ def test_alert_matches_diskprice_category_and_interface() -> None:
     assert not alert_matches(alert, replace(make_deal(), interfaces=("usb",)))
 
 
+def test_alert_matches_multiple_capacity_presets() -> None:
+    alert = make_alert(min_capacity_tb=None, max_capacity_tb=None, capacity_presets_json='["hdd_16_20","hdd_20_24"]')
+    assert alert_matches(alert, replace(make_deal(), capacity_tb=Decimal("18")))
+    assert alert_matches(alert, replace(make_deal(), capacity_tb=Decimal("22")))
+    assert not alert_matches(alert, replace(make_deal(), capacity_tb=Decimal("28")))
+
+
 def test_rolling_discount_match() -> None:
     alert = make_alert(max_price_per_tb=None)
     deal = make_deal(Decimal("90.00"))

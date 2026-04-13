@@ -48,6 +48,7 @@ class Alert(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     min_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_capacity_tb: Mapped[float | None] = mapped_column(Float, nullable=True)
+    capacity_presets_json: Mapped[str] = mapped_column(Text, default="[]")
     conditions_json: Mapped[str] = mapped_column(Text, default="[]")
     media_types_json: Mapped[str] = mapped_column(Text, default="[]")
     drive_categories_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -79,6 +80,10 @@ class Alert(Base):
     @property
     def sources(self) -> list[str]:
         return json.loads(self.sources_json or "[]")
+
+    @property
+    def capacity_presets(self) -> list[str]:
+        return json.loads(self.capacity_presets_json or "[]")
 
 
 class Product(Base):
@@ -164,6 +169,8 @@ def migrate_schema(engine: Engine) -> None:
                 connection.execute(text("ALTER TABLE alerts ADD COLUMN drive_categories_json TEXT DEFAULT '[]'"))
             if "interfaces_json" not in columns:
                 connection.execute(text("ALTER TABLE alerts ADD COLUMN interfaces_json TEXT DEFAULT '[]'"))
+            if "capacity_presets_json" not in columns:
+                connection.execute(text("ALTER TABLE alerts ADD COLUMN capacity_presets_json TEXT DEFAULT '[]'"))
     if "products" not in table_names:
         return
     product_columns = {column["name"] for column in inspector.get_columns("products")}
@@ -254,6 +261,7 @@ class Repository:
         cooldown_hours: int,
         drive_categories: Iterable[str] = (),
         interfaces: Iterable[str] = (),
+        capacity_presets: Iterable[str] = (),
     ) -> Alert:
         with self.session() as session:
             alert = Alert(
@@ -262,6 +270,7 @@ class Repository:
                 name=name,
                 min_capacity_tb=min_capacity_tb,
                 max_capacity_tb=max_capacity_tb,
+                capacity_presets_json=json.dumps(list(capacity_presets)),
                 conditions_json=json.dumps(list(conditions)),
                 media_types_json=json.dumps(list(media_types)),
                 drive_categories_json=json.dumps(list(drive_categories)),
@@ -332,9 +341,34 @@ class Repository:
                 return False
             alert.min_capacity_tb = min_capacity_tb
             alert.max_capacity_tb = max_capacity_tb
+            alert.capacity_presets_json = "[]"
             alert.updated_at = utc_now()
             session.commit()
             return True
+
+    def toggle_alert_capacity_preset(self, owner_user_id: int, alert_id: int, preset_key: str) -> Alert | None:
+        with self.session() as session:
+            alert = session.get(Alert, alert_id)
+            if alert is None or alert.owner_user_id != owner_user_id:
+                return None
+            if preset_key == "all":
+                values: list[str] = []
+                alert.min_capacity_tb = None
+                alert.max_capacity_tb = None
+            else:
+                values = json.loads(alert.capacity_presets_json or "[]")
+                if preset_key in values:
+                    values = [item for item in values if item != preset_key]
+                else:
+                    values.append(preset_key)
+                if values:
+                    alert.min_capacity_tb = None
+                    alert.max_capacity_tb = None
+            alert.capacity_presets_json = json.dumps(values)
+            alert.updated_at = utc_now()
+            session.commit()
+            session.refresh(alert)
+            return alert
 
     def toggle_alert_filter_value(self, owner_user_id: int, alert_id: int, field: str, value: str) -> Alert | None:
         fields = {

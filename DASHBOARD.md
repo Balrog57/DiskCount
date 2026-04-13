@@ -20,16 +20,16 @@ Derniere mise a jour : 2026-04-13
 | Bot Telegram | Termine | Commandes demandees implementees. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
-| Edition alertes Telegram | Termine | `Mes alertes` ouvre chaque alerte comme tuile; modification cliquable de type, etat, capacite, prix, categories, connexions, sources, pause/reprise et suppression confirmee. |
+| Edition alertes Telegram | Termine | `Mes alertes` ouvre chaque alerte comme tuile; modification cliquable de type, etat, capacites multi-selection, prix, categories, connexions, pause/reprise et suppression confirmee. |
 | Filtres DiskPrices avances | Termine | Categories interne/externe/form factor, connectiques SATA/SAS/NVMe/USB, `max_eur_gb` SSD converti en EUR/To. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
-| Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD, prix, categories, connexions, sources et recapitulatif. |
+| Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD multi-selection, prix, categories, connexions et recapitulatif. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 31 tests passent. |
+| Tests | Termine | 33 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
@@ -46,7 +46,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 31 passed in 1.65s
+Resultat: 33 passed in 1.56s
 ```
 
 ```text
@@ -66,19 +66,20 @@ Migration SQLite: colonne alerts.owner_user_id presente
 Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
 Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
 Assistant creation alerte deployee: commande `/create` fonctionnelle sur server
-UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite/prix, sources, categories, connexions, suppression confirmee; admin ajouter/revoquer/reactiver en tuiles
+UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite/prix, categories, connexions, suppression confirmee; admin ajouter/revoquer/reactiver en tuiles
 Deploiement UX tuiles 2026-04-13: commit 4e95fc5 extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=419 matched=0 notified=0 errors=0
 Test pytest distant: non execute, le venv de production ne contient pas pytest
-Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, products.drive_category, products.interfaces_json presentes
+Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `capacity_presets_json`; sources retirees de la creation/edition Telegram et conservees comme backend scanner/env
+Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
 ```text
 Telegram command menu
 Default: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
 Admin 123456789: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
-Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une alerte, Mes alertes, Scanner/Test, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
+Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une alerte, Mes alertes, Scanner/Test, Aide, Admin; sous-menus avec Precedent et Accueil
 Verification Bot API server: OK
-Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacite, prix, categories DiskPrices, connexions, sources, pause/reprise, suppression confirmee
+Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacites multi-selection, prix, categories DiskPrices, connexions, pause/reprise, suppression confirmee
 Verification Bot API server apres edition avancee: set_capacity present pour default et admin
 Verification Bot API server apres UX tuiles: create present pour default et admin
 Menage depot 2026-04-13: suppression des artefacts non suivis `bot_clean.py`, `diskcount/bot.py.backup`, archives zip et dossier `diskcount-deploy`; ajout des exclusions correspondantes dans `.gitignore`
@@ -103,7 +104,7 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 ## Commande d'alerte recommandee
 
 ```text
-/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
+/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 cooldown=24
 ```
 
 ## Risques suivis
