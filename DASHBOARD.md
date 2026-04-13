@@ -32,6 +32,7 @@ Derniere mise a jour : 2026-04-13
 | Tests | Termine | 31 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
+| Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
 | Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
 | Acces VPS SSH server | Debloque | `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<REDACTED_IP>:<SSH_PORT>`. |
 | Acces VPS SSH server | Debloque | `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<REDACTED_IP>:<SSH_PORT>`. |
@@ -80,6 +81,7 @@ Verification Bot API server: OK
 Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacite, prix, categories DiskPrices, connexions, sources, pause/reprise, suppression confirmee
 Verification Bot API server apres edition avancee: set_capacity present pour default et admin
 Verification Bot API server apres UX tuiles: create present pour default et admin
+Menage depot 2026-04-13: suppression des artefacts non suivis `bot_clean.py`, `diskcount/bot.py.backup`, archives zip et dossier `diskcount-deploy`; ajout des exclusions correspondantes dans `.gitignore`
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
