@@ -66,6 +66,8 @@ Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 m
 Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
 Assistant creation alerte deployee: commande `/create` fonctionnelle sur server
 UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite/prix, sources, categories, connexions, suppression confirmee; admin ajouter/revoquer/reactiver en tuiles
+Deploiement UX tuiles 2026-04-13: commit 4e95fc5 extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=419 matched=0 notified=0 errors=0
+Test pytest distant: non execute, le venv de production ne contient pas pytest
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, products.drive_category, products.interfaces_json presentes
 ```
 
@@ -77,6 +79,7 @@ Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une ale
 Verification Bot API server: OK
 Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacite, prix, categories DiskPrices, connexions, sources, pause/reprise, suppression confirmee
 Verification Bot API server apres edition avancee: set_capacity present pour default et admin
+Verification Bot API server apres UX tuiles: create present pour default et admin
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
