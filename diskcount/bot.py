@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import shlex
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Dict, Literal, Optional
 
 from aiogram import Bot
 from aiogram import Dispatcher, Router
@@ -42,10 +42,74 @@ VALID_DRIVE_CATEGORIES = {
     "u2_u3",
 }
 VALID_INTERFACES = {"sata", "sas", "nvme", "usb"}
+DRAFT_TTL_SECONDS = 3600
+
+HDD_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("External 3.5", "external_3_5"),
+    ("External 2.5", "external_2_5"),
+    ("Internal 3.5", "internal_3_5"),
+    ("Internal 2.5", "internal_2_5"),
+    ("Internal Hybrid", "internal_hybrid"),
+    ("Internal SAS", "internal_sas"),
+)
+SSD_CATEGORIES: tuple[tuple[str, str], ...] = (
+    ("External SSD", "external_ssd"),
+    ("Internal SSD", "internal_ssd"),
+    ("M.2 SATA", "m2_sata"),
+    ("M.2 NVMe", "m2_nvme"),
+    ("U.2/U.3", "u2_u3"),
+)
+INTERFACE_OPTIONS: tuple[tuple[str, str], ...] = (("SATA", "sata"), ("SAS", "sas"), ("NVMe", "nvme"), ("USB", "usb"))
+SOURCE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("DiskPrices", "diskprices"),
+    ("Dealabs", "dealabs"),
+    ("eBay", "ebay"),
+    ("leboncoin", "leboncoin"),
+    ("Idealo", "idealo"),
+    ("leDenicheur", "ledenicheur"),
+    ("Keepa", "keepa"),
+)
+CAPACITY_PRESETS: dict[str, tuple[str, float | None, float | None, str]] = {
+    "all": ("Toute capacite", None, None, "all"),
+    "ssd_lt_256": ("SSD <256 Go", None, 0.256, "solid_state"),
+    "ssd_256": ("SSD ~256 Go", 0.24, 0.30, "solid_state"),
+    "ssd_512": ("SSD ~512 Go", 0.48, 0.60, "solid_state"),
+    "ssd_1": ("SSD ~1 To", 0.9, 1.2, "solid_state"),
+    "ssd_2": ("SSD ~2 To", 1.8, 2.4, "solid_state"),
+    "ssd_4": ("SSD ~4 To", 3.6, 4.8, "solid_state"),
+    "ssd_gt_4": ("SSD >4 To", 4.0, None, "solid_state"),
+    "hdd_lt_4": ("HDD <4 To", None, 4.0, "rotational"),
+    "hdd_4_8": ("HDD 4-8 To", 4.0, 8.0, "rotational"),
+    "hdd_8_12": ("HDD 8-12 To", 8.0, 12.0, "rotational"),
+    "hdd_12_16": ("HDD 12-16 To", 12.0, 16.0, "rotational"),
+    "hdd_16_20": ("HDD 16-20 To", 16.0, 20.0, "rotational"),
+    "hdd_20_24": ("HDD 20-24 To", 20.0, 24.0, "rotational"),
+    "hdd_24_30": ("HDD 24-30 To", 24.0, 30.0, "rotational"),
+    "hdd_gt_30": ("HDD >30 To", 30.0, None, "rotational"),
+}
+HDD_CAPACITY_KEYS = ("hdd_lt_4", "hdd_4_8", "hdd_8_12", "hdd_12_16", "hdd_16_20", "hdd_20_24", "hdd_24_30", "hdd_gt_30")
+SSD_CAPACITY_KEYS = ("ssd_lt_256", "ssd_256", "ssd_512", "ssd_1", "ssd_2", "ssd_4", "ssd_gt_4")
+PRICE_PRESETS: dict[str, tuple[str, Decimal | None, str]] = {
+    "none": ("Aucune limite", None, "all"),
+    "h15": ("HDD <=15 EUR/To", Decimal("15"), "rotational"),
+    "h18": ("HDD <=18 EUR/To", Decimal("18"), "rotational"),
+    "h20": ("HDD <=20 EUR/To", Decimal("20"), "rotational"),
+    "h22": ("HDD <=22 EUR/To", Decimal("22"), "rotational"),
+    "h25": ("HDD <=25 EUR/To", Decimal("25"), "rotational"),
+    "s004": ("SSD <=0.04 EUR/Go", Decimal("40"), "solid_state"),
+    "s006": ("SSD <=0.06 EUR/Go", Decimal("60"), "solid_state"),
+    "s008": ("SSD <=0.08 EUR/Go", Decimal("80"), "solid_state"),
+    "s010": ("SSD <=0.10 EUR/Go", Decimal("100"), "solid_state"),
+    "s012": ("SSD <=0.12 EUR/Go", Decimal("120"), "solid_state"),
+}
+HDD_PRICE_KEYS = ("h15", "h18", "h20", "h22", "h25")
+SSD_PRICE_KEYS = ("s004", "s006", "s008", "s010", "s012")
+WIZARD_STEPS = ("media", "condition", "capacity", "price", "categories", "interfaces", "sources", "confirm")
 
 USER_COMMANDS: tuple[tuple[str, str], ...] = (
     ("start", "Demarrer le bot et enregistrer le chat"),
     ("menu", "Ouvrir la navigation par tuiles"),
+    ("create", "Creer une alerte avec les tuiles"),
     ("help", "Afficher les exemples et les filtres disponibles"),
     ("add", "Ajouter une alerte de prix disque"),
     ("alerts", "Lister tes alertes"),
@@ -78,6 +142,24 @@ class AlertArgs:
     max_price_per_tb: Decimal | None
     min_discount_pct: float
     cooldown_hours: int
+
+
+@dataclass
+class AlertDraft:
+    step: str = "media"
+    name: str = "Alerte DiskCount"
+    min_capacity_tb: float | None = 16.0
+    max_capacity_tb: float | None = None
+    max_price_per_tb: Decimal | None = Decimal("20")
+    conditions: list[str] = field(default_factory=lambda: ["new", "used"])
+    media_types: list[str] = field(default_factory=lambda: ["rotational"])
+    drive_categories: list[str] = field(default_factory=list)
+    interfaces: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=lambda: ["diskprices"])
+    updated_at: float = field(default_factory=time.time)
+
+    def touch(self) -> None:
+        self.updated_at = time.time()
 
 
 def is_env_admin(settings: Settings, user_id: int | None) -> bool:
@@ -119,13 +201,13 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
     nav = [[button("Precedent", _menu_parent(view)), button("Accueil", "menu:home")]]
     keyboards: dict[str, list[list[InlineKeyboardButton]]] = {
         "home": [
-            [button("Alertes", "menu:alerts"), button("Scan", "menu:scan")],
+            [button("Creer une alerte", "draft:start")],
+            [button("Mes alertes", "menu:alerts:list"), button("Scanner/Test", "menu:scan")],
             [button("Sources", "menu:sources"), button("Aide", "menu:help")],
         ],
         "alerts": [
-            [button("Mes alertes", "menu:alerts:list"), button("Creer", "menu:alerts:add")],
-            [button("Pause", "menu:alerts:pause"), button("Reprendre", "menu:alerts:resume")],
-            [button("Supprimer", "menu:alerts:delete"), button("Prix/To", "menu:alerts:price")],
+            [button("Creer une alerte", "draft:start")],
+            [button("Mes alertes", "menu:alerts:list")],
             *nav,
         ],
         "alerts:list": nav,
@@ -162,8 +244,9 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
         "help:filters": nav,
         "help:commands": nav,
         "admin": [
-            [button("Utilisateurs", "menu:admin:users"), button("Autoriser", "menu:admin:allow")],
-            [button("Revoquer", "menu:admin:revoke")],
+            [button("Utilisateurs", "admin:list")],
+            [button("Ajouter", "admin:add"), button("Revoquer", "admin:revoke")],
+            [button("Reactiver", "admin:reactivate")],
             *nav,
         ],
         "admin:users": nav,
@@ -179,12 +262,8 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
 def build_alerts_keyboard(alerts: list[Alert], include_admin: bool = False) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for alert in alerts[:12]:
-        rows.append(
-            [
-                InlineKeyboardButton(text=f"Modifier #{alert.id}", callback_data=f"alert:edit:{alert.id}"),
-                InlineKeyboardButton(text=f"Supprimer #{alert.id}", callback_data=f"alert:delete:{alert.id}"),
-            ]
-        )
+        rows.append([InlineKeyboardButton(text=format_alert_button(alert), callback_data=f"alert:edit:{alert.id}")])
+    rows.append([InlineKeyboardButton(text="Creer une alerte", callback_data="draft:start")])
     rows.extend(build_menu_keyboard("alerts:list", include_admin=include_admin).inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -193,23 +272,21 @@ def build_alert_edit_keyboard(alert: Alert, include_admin: bool = False) -> Inli
     state_label = "Pauser" if alert.enabled else "Reprendre"
     return InlineKeyboardMarkup(
         inline_keyboard=[
+            [InlineKeyboardButton(text=state_label, callback_data=f"alert:enabled:{alert.id}")],
             [
-                InlineKeyboardButton(text=state_label, callback_data=f"alert:enabled:{alert.id}"),
-                InlineKeyboardButton(text="Supprimer", callback_data=f"alert:delete:{alert.id}"),
+                InlineKeyboardButton(text="Type", callback_data=f"alert:media:{alert.id}"),
+                InlineKeyboardButton(text="Etat", callback_data=f"alert:condition:{alert.id}"),
             ],
             [
-                InlineKeyboardButton(text=_toggle_label("HDD", "rotational", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:rotational"),
-                InlineKeyboardButton(text=_toggle_label("SSD", "solid_state", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:solid_state"),
+                InlineKeyboardButton(text="Capacite", callback_data=f"alert:capacity:{alert.id}"),
+                InlineKeyboardButton(text="Prix", callback_data=f"alert:price:{alert.id}"),
             ],
             [
-                InlineKeyboardButton(text=_toggle_label("New", "new", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:new"),
-                InlineKeyboardButton(text=_toggle_label("Used", "used", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:used"),
-            ],
-            [
-                InlineKeyboardButton(text="Stockage/Prix", callback_data=f"alert:help:{alert.id}:numbers"),
                 InlineKeyboardButton(text="Categories", callback_data=f"alert:categories:{alert.id}"),
+                InlineKeyboardButton(text="Connexions", callback_data=f"alert:interfaces:{alert.id}"),
             ],
-            [InlineKeyboardButton(text="Connexions", callback_data=f"alert:interfaces:{alert.id}")],
+            [InlineKeyboardButton(text="Sources", callback_data=f"alert:sources:{alert.id}")],
+            [InlineKeyboardButton(text="Supprimer", callback_data=f"alert:delete:{alert.id}")],
             [
                 InlineKeyboardButton(text="Precedent", callback_data="menu:alerts:list"),
                 InlineKeyboardButton(text="Accueil", callback_data="menu:home"),
@@ -269,6 +346,175 @@ def build_alert_interface_keyboard(alert: Alert) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 
+def build_alert_media_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_toggle_label("HDD", "rotational", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:rotational"),
+                InlineKeyboardButton(text=_toggle_label("SSD", "solid_state", alert.media_types), callback_data=f"alert:toggle:{alert.id}:media:solid_state"),
+            ],
+            _alert_nav(alert.id),
+        ]
+    )
+
+
+def build_alert_condition_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=_toggle_label("New", "new", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:new"),
+                InlineKeyboardButton(text=_toggle_label("Used", "used", alert.conditions), callback_data=f"alert:toggle:{alert.id}:condition:used"),
+            ],
+            _alert_nav(alert.id),
+        ]
+    )
+
+
+def build_alert_source_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    return build_option_keyboard(SOURCE_OPTIONS, alert.sources, f"alert:toggle:{alert.id}:source", _alert_nav(alert.id))
+
+
+def build_alert_capacity_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=CAPACITY_PRESETS["all"][0], callback_data=f"alert:cap:{alert.id}:all")]]
+    rows.extend(_preset_rows("alert:cap", alert.id, HDD_CAPACITY_KEYS, selected_capacity_key(alert)))
+    rows.extend(_preset_rows("alert:cap", alert.id, SSD_CAPACITY_KEYS, selected_capacity_key(alert)))
+    rows.append(_alert_nav(alert.id))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_alert_price_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=PRICE_PRESETS["none"][0], callback_data=f"alert:price_set:{alert.id}:none")]]
+    rows.extend(_price_rows("alert:price_set", alert.id, HDD_PRICE_KEYS, selected_price_key(alert)))
+    rows.extend(_price_rows("alert:price_set", alert.id, SSD_PRICE_KEYS, selected_price_key(alert)))
+    rows.append(_alert_nav(alert.id))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_alert_delete_keyboard(alert: Alert) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"Confirmer suppression #{alert.id}", callback_data=f"alert:delete_confirm:{alert.id}")],
+            _alert_nav(alert.id),
+        ]
+    )
+
+
+def build_draft_keyboard(draft: AlertDraft) -> InlineKeyboardMarkup:
+    nav = draft_nav_row()
+    if draft.step == "media":
+        rows = [[
+            InlineKeyboardButton(text=_toggle_label("HDD", "rotational", draft.media_types), callback_data="draft:toggle:media:rotational"),
+            InlineKeyboardButton(text=_toggle_label("SSD", "solid_state", draft.media_types), callback_data="draft:toggle:media:solid_state"),
+        ], nav]
+    elif draft.step == "condition":
+        rows = [[
+            InlineKeyboardButton(text=_toggle_label("New", "new", draft.conditions), callback_data="draft:toggle:condition:new"),
+            InlineKeyboardButton(text=_toggle_label("Used", "used", draft.conditions), callback_data="draft:toggle:condition:used"),
+        ], nav]
+    elif draft.step == "capacity":
+        rows = [[InlineKeyboardButton(text=CAPACITY_PRESETS["all"][0], callback_data="draft:cap:all")]]
+        rows.extend(_preset_rows("draft:cap", None, HDD_CAPACITY_KEYS, selected_capacity_key(draft)))
+        rows.extend(_preset_rows("draft:cap", None, SSD_CAPACITY_KEYS, selected_capacity_key(draft)))
+        rows.append(nav)
+    elif draft.step == "price":
+        rows = [[InlineKeyboardButton(text=PRICE_PRESETS["none"][0], callback_data="draft:price:none")]]
+        rows.extend(_price_rows("draft:price", None, HDD_PRICE_KEYS, selected_price_key(draft)))
+        rows.extend(_price_rows("draft:price", None, SSD_PRICE_KEYS, selected_price_key(draft)))
+        rows.append(nav)
+    elif draft.step == "categories":
+        rows = build_option_rows([*HDD_CATEGORIES, *SSD_CATEGORIES], draft.drive_categories, "draft:toggle:category")
+        rows.append(nav)
+    elif draft.step == "interfaces":
+        rows = build_option_rows(INTERFACE_OPTIONS, draft.interfaces, "draft:toggle:interface")
+        rows.append(nav)
+    elif draft.step == "sources":
+        rows = build_option_rows(SOURCE_OPTIONS, draft.sources, "draft:toggle:source")
+        rows.append(nav)
+    else:
+        rows = [
+            [InlineKeyboardButton(text="Creer", callback_data="draft:create")],
+            [InlineKeyboardButton(text="Precedent", callback_data="draft:prev"), InlineKeyboardButton(text="Annuler", callback_data="draft:cancel")],
+            [InlineKeyboardButton(text="Accueil", callback_data="menu:home")],
+        ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_option_keyboard(options, selected: list[str], callback_prefix: str, nav_row: list[InlineKeyboardButton]) -> InlineKeyboardMarkup:
+    rows = build_option_rows(options, selected, callback_prefix)
+    rows.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_option_rows(options, selected: list[str], callback_prefix: str) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    current: list[InlineKeyboardButton] = []
+    for label, value in options:
+        current.append(InlineKeyboardButton(text=_toggle_label(label, value, selected), callback_data=f"{callback_prefix}:{value}"))
+        if len(current) == 2:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _preset_rows(prefix: str, alert_id: int | None, keys: tuple[str, ...], selected: str | None) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    current: list[InlineKeyboardButton] = []
+    for key in keys:
+        label = CAPACITY_PRESETS[key][0]
+        text = f"[x] {label}" if key == selected else label
+        callback_data = f"{prefix}:{key}" if alert_id is None else f"{prefix}:{alert_id}:{key}"
+        current.append(InlineKeyboardButton(text=text, callback_data=callback_data))
+        if len(current) == 2:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _price_rows(prefix: str, alert_id: int | None, keys: tuple[str, ...], selected: str | None) -> list[list[InlineKeyboardButton]]:
+    rows: list[list[InlineKeyboardButton]] = []
+    current: list[InlineKeyboardButton] = []
+    for key in keys:
+        label = PRICE_PRESETS[key][0]
+        text = f"[x] {label}" if key == selected else label
+        callback_data = f"{prefix}:{key}" if alert_id is None else f"{prefix}:{alert_id}:{key}"
+        current.append(InlineKeyboardButton(text=text, callback_data=callback_data))
+        if len(current) == 2:
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _alert_nav(alert_id: int) -> list[InlineKeyboardButton]:
+    return [InlineKeyboardButton(text="Precedent", callback_data=f"alert:edit:{alert_id}"), InlineKeyboardButton(text="Accueil", callback_data="menu:home")]
+
+
+def draft_nav_row() -> list[InlineKeyboardButton]:
+    return [
+        InlineKeyboardButton(text="Precedent", callback_data="draft:prev"),
+        InlineKeyboardButton(text="Suivant", callback_data="draft:next"),
+        InlineKeyboardButton(text="Accueil", callback_data="menu:home"),
+    ]
+
+
+def build_admin_users_keyboard(users, action: str | None = None) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for user in users:
+        if action == "revoke" and user.enabled:
+            rows.append([InlineKeyboardButton(text=f"Revoquer {user.label}", callback_data=f"admin:revoke_user:{user.telegram_user_id}")])
+        elif action == "reactivate" and not user.enabled:
+            rows.append([InlineKeyboardButton(text=f"Reactiver {user.label}", callback_data=f"admin:reactivate_user:{user.telegram_user_id}")])
+        elif action is None:
+            rows.append([InlineKeyboardButton(text=format_authorized_user(user), callback_data="admin:list")])
+    rows.append([InlineKeyboardButton(text="Precedent", callback_data="menu:admin"), InlineKeyboardButton(text="Accueil", callback_data="menu:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def _toggle_label(label: str, value: str, selected: list[str]) -> str:
     prefix = "[x]" if value in selected else "[ ]"
     return f"{prefix} {label}"
@@ -282,16 +528,109 @@ def _menu_parent(view: str) -> str:
     return f"menu:{view.rsplit(':', 1)[0]}"
 
 
+def selected_capacity_key(target: Alert | AlertDraft) -> str | None:
+    for key, (_, min_tb, max_tb, _) in CAPACITY_PRESETS.items():
+        if target.min_capacity_tb == min_tb and target.max_capacity_tb == max_tb:
+            return key
+    return None
+
+
+def selected_price_key(target: Alert | AlertDraft) -> str | None:
+    if target.max_price_per_tb is None:
+        return "none"
+    for key, (_, price, _) in PRICE_PRESETS.items():
+        if price is not None and Decimal(target.max_price_per_tb) == price:
+            return key
+    return None
+
+
+def apply_capacity_preset_to_draft(draft: AlertDraft, key: str) -> None:
+    _, min_tb, max_tb, media = CAPACITY_PRESETS[key]
+    draft.min_capacity_tb = min_tb
+    draft.max_capacity_tb = max_tb
+    if media in VALID_MEDIA_TYPES and media not in draft.media_types:
+        draft.media_types.append(media)
+    draft.touch()
+
+
+def apply_price_preset_to_draft(draft: AlertDraft, key: str) -> None:
+    _, price, media = PRICE_PRESETS[key]
+    draft.max_price_per_tb = price
+    if media in VALID_MEDIA_TYPES and media not in draft.media_types:
+        draft.media_types.append(media)
+    draft.touch()
+
+
+def draft_to_alert_args(draft: AlertDraft) -> AlertArgs:
+    return AlertArgs(
+        name=draft.name[:120] or "Alerte DiskCount",
+        min_capacity_tb=draft.min_capacity_tb,
+        max_capacity_tb=draft.max_capacity_tb,
+        conditions=draft.conditions or ["new", "used"],
+        media_types=draft.media_types or ["rotational"],
+        drive_categories=draft.drive_categories,
+        interfaces=draft.interfaces,
+        sources=draft.sources or ["diskprices"],
+        max_price_per_tb=draft.max_price_per_tb,
+        min_discount_pct=5.0,
+        cooldown_hours=24,
+    )
+
+
+def create_alert_from_draft(repository: Repository, chat_id: int, owner_user_id: int, draft: AlertDraft) -> Alert:
+    args = draft_to_alert_args(draft)
+    return repository.create_alert(
+        chat_id=chat_id,
+        owner_user_id=owner_user_id,
+        name=args.name,
+        min_capacity_tb=args.min_capacity_tb,
+        max_capacity_tb=args.max_capacity_tb,
+        conditions=args.conditions,
+        media_types=args.media_types,
+        drive_categories=args.drive_categories,
+        interfaces=args.interfaces,
+        sources=args.sources,
+        max_price_per_tb=args.max_price_per_tb,
+        min_discount_pct=args.min_discount_pct,
+        cooldown_hours=args.cooldown_hours,
+    )
+
+
+def next_step(step: str) -> str:
+    index = WIZARD_STEPS.index(step)
+    return WIZARD_STEPS[min(index + 1, len(WIZARD_STEPS) - 1)]
+
+
+def previous_step(step: str) -> str:
+    index = WIZARD_STEPS.index(step)
+    return WIZARD_STEPS[max(index - 1, 0)]
+
+
+def toggle_draft_value(draft: AlertDraft, field_name: str, value: str) -> None:
+    mapping = {
+        "condition": draft.conditions,
+        "media": draft.media_types,
+        "category": draft.drive_categories,
+        "interface": draft.interfaces,
+        "source": draft.sources,
+    }
+    values = mapping.get(field_name)
+    if values is None:
+        return
+    if value in values:
+        values.remove(value)
+    else:
+        values.append(value)
+    draft.touch()
+
+
 def menu_home_text(include_admin: bool = False) -> str:
-    admin_line = "\nAdmin: gere les acces autorises." if include_admin else ""
+    admin_line = "\nAdmin: ajoute, revoque ou reactive les utilisateurs." if include_admin else ""
     return (
         "DiskCount\n\n"
-        "Surveille les bons plans HDD/SSD et notifie quand une offre respecte tes filtres.\n\n"
-        "Choisis une categorie:\n"
-        "- Alertes: creer, modifier, supprimer et filtrer tes notifications.\n"
-        "- Scan: verifier l'etat du bot ou lancer un test sans notification.\n"
-        "- Sources: comprendre DiskPrices, Dealabs, eBay, leboncoin, Idealo, leDenicheur et Keepa.\n"
-        "- Aide: exemples et filtres disponibles."
+        "Choisis une action.\n\n"
+        "Creer une alerte lance le wizard complet. Mes alertes ouvre tes alertes pour les modifier, "
+        "les pauser ou les supprimer. Scanner/Test verifie le bot sans envoyer de notification."
         f"{admin_line}"
     )
 
@@ -300,12 +639,12 @@ def menu_static_text(view: str) -> str:
     texts = {
         "alerts": (
             "Alertes\n\n"
-            "Chaque utilisateur autorise possede ses propres alertes. Tu peux les creer, les lister, les pauser, "
-            "les reprendre, modifier leur seuil EUR/To ou les supprimer."
+            "Cree une alerte ou ouvre tes alertes existantes. Chaque utilisateur autorise gere uniquement ses alertes."
         ),
         "alerts:add": (
             "Creer une alerte\n\n"
-            "Commande:\n"
+            "Utilise le bouton Creer une alerte pour le wizard par tuiles.\n\n"
+            "Fallback avance:\n"
             "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used "
             "category=internal_3_5,external_3_5 interface=sata,usb "
             "discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24\n\n"
@@ -379,7 +718,7 @@ def menu_static_text(view: str) -> str:
         ),
         "help": (
             "Aide\n\n"
-            "Utilise les tuiles pour naviguer. Les actions qui demandent un ID affichent la commande exacte a envoyer."
+            "L'interface principale se fait par tuiles. Les commandes texte restent disponibles comme raccourcis avances."
         ),
         "help:filters": (
             "Filtres d'alerte\n\n"
@@ -398,8 +737,9 @@ def menu_static_text(view: str) -> str:
         "help:commands": (
             "Commandes\n\n"
             "/menu ouvre ces tuiles.\n"
+            "/create lance le wizard d'alerte.\n"
             "/alerts liste tes alertes.\n"
-            "/add cree une alerte.\n"
+            "/add cree une alerte par texte, en fallback avance.\n"
             "/pause, /resume, /delete gerent une alerte par ID.\n"
             "/set_max_price modifie le seuil EUR/To.\n"
             "/set_capacity modifie la plage min/max de stockage.\n"
@@ -618,68 +958,76 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             return
 
         if action == "delete":
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_delete(alert), reply_markup=build_alert_delete_keyboard(alert))
+            await callback.answer()
+            return
+        if action == "delete_confirm":
             repository.delete_alert(owner_user_id, alert_id)
             alerts = repository.list_alerts(owner_user_id=owner_user_id)
             if callback.message is not None:
-                await callback.message.edit_text(
-                    f"Alerte #{alert_id} supprimee.\n\n{format_alerts_list(alerts)}",
-                    reply_markup=build_alerts_keyboard(alerts, include_admin=include_admin),
-                )
-            await callback.answer()
+                await callback.message.edit_text(format_alerts_list(alerts), reply_markup=build_alerts_keyboard(alerts, include_admin=include_admin))
+            await callback.answer("Alerte supprimee.")
             return
-
         if action == "enabled":
             repository.set_alert_enabled(owner_user_id, alert_id, not alert.enabled)
             alert = repository.get_alert(owner_user_id, alert_id)
 
-        toggled_field: str | None = None
         if action == "toggle" and len(parts) == 5:
-            field = parts[3]
+            field_name = parts[3]
             value = parts[4]
-            if field not in {"condition", "media", "category", "interface"}:
+            if field_name not in {"condition", "media", "category", "interface", "source"}:
                 await callback.answer("Filtre invalide.", show_alert=True)
                 return
-            alert = repository.toggle_alert_filter_value(owner_user_id, alert_id, field, value)
-            toggled_field = field
+            alert = repository.toggle_alert_filter_value(owner_user_id, alert_id, field_name, value)
+
+        if action == "cap" and len(parts) == 4:
+            key = parts[3]
+            if key in CAPACITY_PRESETS:
+                _, min_tb, max_tb, media = CAPACITY_PRESETS[key]
+                repository.set_alert_capacity(owner_user_id, alert_id, min_tb, max_tb)
+                if media in VALID_MEDIA_TYPES:
+                    current = repository.get_alert(owner_user_id, alert_id)
+                    if current is not None and media not in current.media_types:
+                        repository.toggle_alert_filter_value(owner_user_id, alert_id, "media", media)
+                alert = repository.get_alert(owner_user_id, alert_id)
+
+        if action == "price_set" and len(parts) == 4:
+            key = parts[3]
+            if key in PRICE_PRESETS:
+                _, price, media = PRICE_PRESETS[key]
+                repository.set_alert_max_price_per_tb(owner_user_id, alert_id, price)
+                if media in VALID_MEDIA_TYPES:
+                    current = repository.get_alert(owner_user_id, alert_id)
+                    if current is not None and media not in current.media_types:
+                        repository.toggle_alert_filter_value(owner_user_id, alert_id, "media", media)
+                alert = repository.get_alert(owner_user_id, alert_id)
 
         if alert is None:
             await callback.answer("Alerte introuvable.", show_alert=True)
             return
 
-        if toggled_field == "category":
-            if callback.message is not None:
-                await callback.message.edit_text(format_alert_categories_help(alert), reply_markup=build_alert_category_keyboard(alert))
-            await callback.answer()
-            return
-
-        if toggled_field == "interface":
-            if callback.message is not None:
-                await callback.message.edit_text(format_alert_interfaces_help(alert), reply_markup=build_alert_interface_keyboard(alert))
-            await callback.answer()
-            return
-
-        if action == "categories":
-            if callback.message is not None:
-                await callback.message.edit_text(format_alert_categories_help(alert), reply_markup=build_alert_category_keyboard(alert))
-            await callback.answer()
-            return
-
-        if action == "interfaces":
-            if callback.message is not None:
-                await callback.message.edit_text(format_alert_interfaces_help(alert), reply_markup=build_alert_interface_keyboard(alert))
-            await callback.answer()
-            return
-
-        if action == "help" and len(parts) == 4 and parts[3] == "numbers":
-            if callback.message is not None:
-                await callback.message.edit_text(format_alert_numbers_help(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin))
-            await callback.answer()
-            return
-
-        if callback.message is not None:
-            await callback.message.edit_text(format_alert_detail(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin))
+        if action == "media":
+            await edit_alert_message(callback, format_alert_media(alert), build_alert_media_keyboard(alert))
+        elif action == "condition":
+            await edit_alert_message(callback, format_alert_condition(alert), build_alert_condition_keyboard(alert))
+        elif action in {"capacity", "cap"}:
+            await edit_alert_message(callback, format_alert_capacity(alert), build_alert_capacity_keyboard(alert))
+        elif action in {"price", "price_set"}:
+            await edit_alert_message(callback, format_alert_price(alert), build_alert_price_keyboard(alert))
+        elif action == "categories" or (action == "toggle" and len(parts) == 5 and parts[3] == "category"):
+            await edit_alert_message(callback, format_alert_categories(alert), build_alert_category_keyboard(alert))
+        elif action == "interfaces" or (action == "toggle" and len(parts) == 5 and parts[3] == "interface"):
+            await edit_alert_message(callback, format_alert_interfaces(alert), build_alert_interface_keyboard(alert))
+        elif action == "sources" or (action == "toggle" and len(parts) == 5 and parts[3] == "source"):
+            await edit_alert_message(callback, format_alert_sources(alert), build_alert_source_keyboard(alert))
+        else:
+            await edit_alert_message(callback, format_alert_detail(alert), build_alert_edit_keyboard(alert, include_admin=include_admin))
         await callback.answer()
 
+    async def edit_alert_message(callback: CallbackQuery, text: str, keyboard: InlineKeyboardMarkup) -> None:
+        if callback.message is not None:
+            await callback.message.edit_text(text, reply_markup=keyboard)
     @router.message(Command("users"))
     async def users(message: Message) -> None:
         if not await admin_guard(message):
@@ -824,744 +1172,153 @@ def build_dispatcher(settings: Settings, repository: Repository, scanner: Scanne
             return
         await message.answer(format_status(settings, repository, scanner), reply_markup=build_menu_keyboard("scan:status", include_admin=include_admin_for_message(message)))
 
-    # Interactive alert creation
-    alert_creation_states: dict[int, dict[str, Any]] = {}
+    alert_drafts: dict[int, AlertDraft] = {}
+    admin_pending: dict[int, str] = {}
 
-    def _get_alert_creation_state(user_id: int) -> dict[str, Any]:
-        if user_id not in alert_creation_states:
-            alert_creation_states[user_id] = {
-                "step": "name",
-                "name": "",
-                "min_capacity_tb": None,
-                "max_capacity_tb": None,
-                "max_price_per_tb": None,
-                "media_types": [],
-                "conditions": [],
-                "drive_categories": [],
-                "interfaces": [],
-                "sources": [],
-            }
-        return alert_creation_states[user_id]
+    def get_draft(user_id: int) -> AlertDraft:
+        draft = alert_drafts.get(user_id)
+        if draft is None or (time.time() - draft.updated_at) > DRAFT_TTL_SECONDS:
+            draft = AlertDraft()
+            alert_drafts[user_id] = draft
+        draft.touch()
+        return draft
 
-    def _reset_alert_creation_state(user_id: int) -> None:
-        if user_id in alert_creation_states:
-            del alert_creation_states[user_id]
+    async def show_draft(callback: CallbackQuery, draft: AlertDraft) -> None:
+        if callback.message is not None:
+            await callback.message.edit_text(format_draft(draft), reply_markup=build_draft_keyboard(draft))
+        await callback.answer()
 
     @router.message(Command("create"))
     async def create_alert_command(message: Message) -> None:
         if not await guard(message):
             return
         user_id = current_user_id(message)
-        _reset_alert_creation_state(user_id)
-        state = _get_alert_creation_state(user_id)
-        await message.answer(
-            "Création d'alerte - Nom\n\n"
-            "Choisis un nom pour cette alerte. Tu pourras le modifier plus tard.",
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                    [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                ]
-            ),
-        )
-        await message.answer("Nom actuel: (aucun)", parse_mode=None)
+        alert_drafts[user_id] = AlertDraft()
+        await message.answer(format_draft(alert_drafts[user_id]), reply_markup=build_draft_keyboard(alert_drafts[user_id]))
 
-    @router.callback_query(lambda callback: bool(callback.data and callback.data.startswith("alert:create:")))
-    async def alert_create_callback(callback: CallbackQuery) -> None:
-        if not is_authorized(settings, repository, callback.from_user.id):
-            await callback.answer("Accès refusé.", show_alert=True)
+    @router.callback_query(lambda callback: bool(callback.data and callback.data.startswith("draft:")))
+    async def draft_callback(callback: CallbackQuery) -> None:
+        if not is_authorized(settings, repository, callback.from_user.id if callback.from_user else None):
+            await callback.answer("Acces refuse.", show_alert=True)
             return
-
         user_id = callback.from_user.id
-        state = _get_alert_creation_state(user_id)
-        data = callback.data.removeprefix("alert:create:")
+        data = callback.data or ""
+        if data == "draft:start":
+            alert_drafts[user_id] = AlertDraft()
+            await show_draft(callback, alert_drafts[user_id])
+            return
+        if data == "draft:cancel":
+            alert_drafts.pop(user_id, None)
+            await edit_menu(callback, "home", "Creation annulee.\n\nChoisis une action.")
+            return
+        draft = get_draft(user_id)
+        if data == "draft:next":
+            draft.step = next_step(draft.step)
+            draft.touch()
+            await show_draft(callback, draft)
+            return
+        if data == "draft:prev":
+            draft.step = previous_step(draft.step)
+            draft.touch()
+            await show_draft(callback, draft)
+            return
+        if data.startswith("draft:toggle:"):
+            _, _, field_name, value = data.split(":", 3)
+            toggle_draft_value(draft, field_name, value)
+            await show_draft(callback, draft)
+            return
+        if data.startswith("draft:cap:"):
+            key = data.rsplit(":", 1)[1]
+            if key in CAPACITY_PRESETS:
+                apply_capacity_preset_to_draft(draft, key)
+            await show_draft(callback, draft)
+            return
+        if data.startswith("draft:price:"):
+            key = data.rsplit(":", 1)[1]
+            if key in PRICE_PRESETS:
+                apply_price_preset_to_draft(draft, key)
+            await show_draft(callback, draft)
+            return
+        if data == "draft:create":
+            alert = create_alert_from_draft(repository, callback.message.chat.id, user_id, draft)
+            alert_drafts.pop(user_id, None)
+            if callback.message is not None:
+                await callback.message.edit_text(format_alert_detail(alert), reply_markup=build_alert_edit_keyboard(alert, include_admin=include_admin_for_callback(callback)))
+            await callback.answer("Alerte creee.")
+            return
+        await callback.answer()
 
-        if data == "cancel":
-            _reset_alert_creation_state(user_id)
-            await edit_menu(callback, "alerts:list")
+    @router.callback_query(lambda callback: bool(callback.data and callback.data.startswith("admin:")))
+    async def admin_callback(callback: CallbackQuery) -> None:
+        if not is_env_admin(settings, callback.from_user.id if callback.from_user else None):
+            await callback.answer("Commande reservee a l'administrateur.", show_alert=True)
+            return
+        data = callback.data or ""
+        if data == "admin:list":
+            users = repository.list_authorized_users(include_disabled=True)
+            if callback.message is not None:
+                await callback.message.edit_text(format_authorized_users_list(users), reply_markup=build_admin_users_keyboard(users))
             await callback.answer()
             return
-
-        if data == "next":
-            current_step = state["step"]
-            if current_step == "name":
-                state["step"] = "min_capacity"
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité minimale (To)\n\n"
-                    "Définis la capacité minimale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:min_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:min_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:min_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('min_capacity_tb', 0):g} To", callback_data="alert:create:edit:min_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:min_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:min_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:min_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:min_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "min_capacity":
-                state["step"] = "max_capacity"
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité maximale (To)\n\n"
-                    "Définis la capacité maximale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:max_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:max_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:max_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_capacity_tb', 0):g} To", callback_data="alert:create:edit:max_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:max_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:max_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:max_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_capacity":
-                state["step"] = "max_price"
-                await callback.message.edit_text(
-                    "Création d'alerte - Prix maximal (€/To)\n\n"
-                    "Définis le prix maximal par To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10 €/To", callback_data="alert:create:set:max_price:-10")],
-                            [InlineKeyboardButton(text="-5 €/To", callback_data="alert:create:set:max_price:-5")],
-                            [InlineKeyboardButton(text="-1 €/To", callback_data="alert:create:set:max_price:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_price_per_tb', 0):g} €/To", callback_data="alert:create:edit:max_price")],
-                            [InlineKeyboardButton(text="+1 €/To", callback_data="alert:create:set:max_price:+1")],
-                            [InlineKeyboardButton(text="+5 €/To", callback_data="alert:create:set:max_price:+5")],
-                            [InlineKeyboardButton(text="+10 €/To", callback_data="alert:create:set:max_price:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_price:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_price":
-                state["step"] = "media"
-                await callback.message.edit_text(
-                    "Création d'alerte - Type de média\n\n"
-                    "Sélectionne le ou les types de média.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("HDD", "rotational", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:rotational"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("SSD", "solid_state", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:solid_state"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "media":
-                state["step"] = "condition"
-                await callback.message.edit_text(
-                    "Création d'alerte - État\n\n"
-                    "Sélectionne le ou les états du produit.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Neuf", "new", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:new"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Usagé", "used", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:used"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "condition":
-                state["step"] = "categories"
-                await callback.message.edit_text(
-                    "Création d'alerte - Catégories DiskPrices\n\n"
-                    "Sélectionne les catégories DiskPrices.",
-                    reply_markup=build_alert_category_keyboard_for_creation(state),
-                )
-            elif current_step == "categories":
-                state["step"] = "interfaces"
-                await callback.message.edit_text(
-                    "Création d'alerte - Interfaces\n\n"
-                    "Sélectionne les interfaces supportées.",
-                    reply_markup=build_alert_interface_keyboard_for_creation(state),
-                )
-            elif current_step == "interfaces":
-                state["step"] = "sources"
-                await callback.message.edit_text(
-                    "Création d'alerte - Sources\n\n"
-                    "Sélectionne les sources à surveiller.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("DiskPrices", "diskprices", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:diskprices"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Dealabs", "dealabs", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:dealabs"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("eBay", "ebay", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ebay"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leboncoin", "leboncoin", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:leboncoin"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Idealo", "idealo", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:idealo"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leDenicheur", "ledenicheur", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ledenicheur"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Keepa", "keepa", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:keepa"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "sources":
-                state["step"] = "confirm"
-                await callback.message.edit_text(
-                    "Création d'alerte - Récapitulatif et confirmation\n\n"
-                    f"Nom: {state['name'] or '(aucun)'}\n"
-                    f"Capacité min: {state['min_capacity_tb'] or 'Aucune'}\n"
-                    f"Capacité max: {state['max_capacity_tb'] or 'Aucune'}\n"
-                    f"Prix max (€/To): {state['max_price_per_tb'] or 'Aucune'}\n"
-                    f"États: {', '.join(state['conditions']) if state['conditions'] else 'Aucun'}\n"
-                    f"Types: {', '.join(state['media_types']) if state['media_types'] else 'Aucun'}\n"
-                    f"Catégories: {', '.join(state['drive_categories']) if state['drive_categories'] else 'Aucune'}\n"
-                    f"Interfaces: {', '.join(state['interfaces']) if state['interfaces'] else 'Aucune'}\n"
-                    f"Sources: {', '.join(state['sources']) if state['sources'] else 'Aucune'}\n\n"
-                    "Créer cette alerte ?",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="Créer", callback_data="alert:create:confirm")],
-                            [InlineKeyboardButton(text="Précédent", callback_data="alert:create:prev")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
+        if data == "admin:add":
+            admin_pending[callback.from_user.id] = "allow"
+            if callback.message is not None:
+                await callback.message.edit_text("Ajouter un utilisateur\n\nEnvoie maintenant: 123456789 Nom custom", reply_markup=build_menu_keyboard("admin", include_admin=True))
             await callback.answer()
             return
-
-        if data == "prev":
-            state = _get_alert_creation_state(user_id)
-            current_step = state["step"]
-            if current_step == "min_capacity":
-                state["step"] = "name"
-                await callback.message.edit_text(
-                    "Création d'alerte - Nom\n\n"
-                    "Choisis un nom pour cette alerte. Tu pourras le modifier plus tard.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_capacity":
-                state["step"] = "min_capacity"
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité minimale (To)\n\n"
-                    "Définis la capacité minimale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:min_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:min_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:min_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('min_capacity_tb', 0):g} To", callback_data="alert:create:edit:min_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:min_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:min_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:min_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:min_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_price":
-                state["step"] = "max_capacity"
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité maximale (To)\n\n"
-                    "Définis la capacité maximale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:max_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:max_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:max_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_capacity_tb', 0):g} To", callback_data="alert:create:edit:max_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:max_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:max_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:max_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "media":
-                state["step"] = "max_price"
-                await callback.message.edit_text(
-                    "Création d'alerte - Prix maximal (€/To)\n\n"
-                    "Définis le prix maximal par To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10 €/To", callback_data="alert:create:set:max_price:-10")],
-                            [InlineKeyboardButton(text="-5 €/To", callback_data="alert:create:set:max_price:-5")],
-                            [InlineKeyboardButton(text="-1 €/To", callback_data="alert:create:set:max_price:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_price_per_tb', 0):g} €/To", callback_data="alert:create:edit:max_price")],
-                            [InlineKeyboardButton(text="+1 €/To", callback_data="alert:create:set:max_price:+1")],
-                            [InlineKeyboardButton(text="+5 €/To", callback_data="alert:create:set:max_price:+5")],
-                            [InlineKeyboardButton(text="+10 €/To", callback_data="alert:create:set:max_price:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_price:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "condition":
-                state["step"] = "media"
-                await callback.message.edit_text(
-                    "Création d'alerte - Type de média\n\n"
-                    "Sélectionne le ou les types de média.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("HDD", "rotational", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:rotational"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("SSD", "solid_state", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:solid_state"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "categories":
-                state["step"] = "condition"
-                await callback.message.edit_text(
-                    "Création d'alerte - État\n\n"
-                    "Sélectionne le ou les états du produit.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Neuf", "new", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:new"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Usagé", "used", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:used"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "interfaces":
-                state["step"] = "categories"
-                await callback.message.edit_text(
-                    "Création d'alerte - Catégories DiskPrices\n\n"
-                    "Sélectionne les catégories DiskPrices.",
-                    reply_markup=build_alert_category_keyboard_for_creation(state),
-                )
-            elif current_step == "sources":
-                state["step"] = "interfaces"
-                await callback.message.edit_text(
-                    "Création d'alerte - Interfaces\n\n"
-                    "Sélectionne les interfaces supportées.",
-                    reply_markup=build_alert_interface_keyboard_for_creation(state),
-                )
-            elif current_step == "confirm":
-                state["step"] = "sources"
-                await callback.message.edit_text(
-                    "Création d'alerte - Sources\n\n"
-                    "Sélectionne les sources à surveiller.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("DiskPrices", "diskprices", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:diskprices"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Dealabs", "dealabs", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:dealabs"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("eBay", "ebay", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ebay"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leboncoin", "leboncoin", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:leboncoin"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Idealo", "idealo", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:idealo"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leDenicheur", "ledenicheur", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ledenicheur"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Keepa", "keepa", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:keepa"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
+        if data == "admin:revoke":
+            users = repository.list_authorized_users(include_disabled=True)
+            if callback.message is not None:
+                await callback.message.edit_text("Revoquer un utilisateur", reply_markup=build_admin_users_keyboard(users, action="revoke"))
             await callback.answer()
             return
-
-        if data.startswith("set:"):
-            _, field, value = data.split(":", 2)
-            state = _get_alert_creation_state(user_id)
-
-            if field == "min_capacity":
-                if value == "none":
-                    state["min_capacity_tb"] = None
-                else:
-                    try:
-                        delta = float(value)
-                        current = state.get("min_capacity_tb", 0.0)
-                        state["min_capacity_tb"] = max(0.0, current + delta) if current else delta
-                    except:
-                        pass
-
-            elif field == "max_capacity":
-                if value == "none":
-                    state["max_capacity_tb"] = None
-                else:
-                    try:
-                        delta = float(value)
-                        current = state.get("max_capacity_tb", 0.0)
-                        state["max_capacity_tb"] = max(0.0, current + delta) if current else delta
-                    except:
-                        pass
-
-            elif field == "max_price":
-                if value == "none":
-                    state["max_price_per_tb"] = None
-                else:
-                    try:
-                        delta = float(value)
-                        current = state.get("max_price_per_tb", 0.0)
-                        if current:
-                            state["max_price_per_tb"] = max(0.0, current + delta)
-                        else:
-                            state["max_price_per_tb"] = delta if delta > 0 else None
-                    except:
-                        pass
-
-            current_step = state["step"]
-            if current_step == "min_capacity":
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité minimale (To)\n\n"
-                    "Définis la capacité minimale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:min_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:min_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:min_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('min_capacity_tb', 0):g} To", callback_data="alert:create:edit:min_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:min_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:min_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:min_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:min_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_capacity":
-                await callback.message.edit_text(
-                    "Création d'alerte - Capacité maximale (To)\n\n"
-                    "Définis la capacité maximale en To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10", callback_data="alert:create:set:max_capacity:-10")],
-                            [InlineKeyboardButton(text="-5", callback_data="alert:create:set:max_capacity:-5")],
-                            [InlineKeyboardButton(text="-1", callback_data="alert:create:set:max_capacity:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_capacity_tb', 0):g} To", callback_data="alert:create:edit:max_capacity")],
-                            [InlineKeyboardButton(text="+1", callback_data="alert:create:set:max_capacity:+1")],
-                            [InlineKeyboardButton(text="+5", callback_data="alert:create:set:max_capacity:+5")],
-                            [InlineKeyboardButton(text="+10", callback_data="alert:create:set:max_capacity:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_capacity:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "max_price":
-                await callback.message.edit_text(
-                    "Création d'alerte - Prix maximal (€/To)\n\n"
-                    "Définis le prix maximal par To. Tu peux utiliser les boutons pour ajuster.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [InlineKeyboardButton(text="-10 €/To", callback_data="alert:create:set:max_price:-10")],
-                            [InlineKeyboardButton(text="-5 €/To", callback_data="alert:create:set:max_price:-5")],
-                            [InlineKeyboardButton(text="-1 €/To", callback_data="alert:create:set:max_price:-1")],
-                            [InlineKeyboardButton(text=f"{state.get('max_price_per_tb', 0):g} €/To", callback_data="alert:create:edit:max_price")],
-                            [InlineKeyboardButton(text="+1 €/To", callback_data="alert:create:set:max_price:+1")],
-                            [InlineKeyboardButton(text="+5 €/To", callback_data="alert:create:set:max_price:+5")],
-                            [InlineKeyboardButton(text="+10 €/To", callback_data="alert:create:set:max_price:+10")],
-                            [InlineKeyboardButton(text="Aucune limite", callback_data="alert:create:set:max_price:none")],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
+        if data == "admin:reactivate":
+            users = repository.list_authorized_users(include_disabled=True)
+            if callback.message is not None:
+                await callback.message.edit_text("Reactiver un utilisateur", reply_markup=build_admin_users_keyboard(users, action="reactivate"))
             await callback.answer()
             return
-
-        if data.startswith("toggle:"):
-            _, field, value = data.split(":", 2)
-            state = _get_alert_creation_state(user_id)
-
-            if field == "media":
-                if value in state["media_types"]:
-                    state["media_types"].remove(value)
-                else:
-                    state["media_types"].append(value)
-
-            elif field == "condition":
-                if value in state["conditions"]:
-                    state["conditions"].remove(value)
-                else:
-                    state["conditions"].append(value)
-
-            elif field == "category":
-                if value in state["drive_categories"]:
-                    state["drive_categories"].remove(value)
-                else:
-                    state["drive_categories"].append(value)
-
-            elif field == "interface":
-                if value in state["interfaces"]:
-                    state["interfaces"].remove(value)
-                else:
-                    state["interfaces"].append(value)
-
-            elif field == "sources":
-                if value in state["sources"]:
-                    state["sources"].remove(value)
-                else:
-                    state["sources"].append(value)
-
-            current_step = state["step"]
-            if current_step == "media":
-                await callback.message.edit_text(
-                    "Création d'alerte - Type de média\n\n"
-                    "Sélectionne le ou les types de média.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("HDD", "rotational", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:rotational"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("SSD", "solid_state", state["media_types"]),
-                                    callback_data="alert:create:toggle:media:solid_state"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "condition":
-                await callback.message.edit_text(
-                    "Création d'alerte - État\n\n"
-                    "Sélectionne le ou les états du produit.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Neuf", "new", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:new"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Usagé", "used", state["conditions"]),
-                                    callback_data="alert:create:toggle:condition:used"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            elif current_step == "categories":
-                await callback.message.edit_text(
-                    "Création d'alerte - Catégories DiskPrices\n\n"
-                    "Sélectionne les catégories DiskPrices.",
-                    reply_markup=build_alert_category_keyboard_for_creation(state),
-                )
-            elif current_step == "interfaces":
-                await callback.message.edit_text(
-                    "Création d'alerte - Interfaces\n\n"
-                    "Sélectionne les interfaces supportées.",
-                    reply_markup=build_alert_interface_keyboard_for_creation(state),
-                )
-            elif current_step == "sources":
-                await callback.message.edit_text(
-                    "Création d'alerte - Sources\n\n"
-                    "Sélectionne les sources à surveiller.",
-                    reply_markup=InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("DiskPrices", "diskprices", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:diskprices"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Dealabs", "dealabs", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:dealabs"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("eBay", "ebay", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ebay"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leboncoin", "leboncoin", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:leboncoin"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Idealo", "idealo", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:idealo"
-                                ),
-                                InlineKeyboardButton(
-                                    text=_toggle_label("leDenicheur", "ledenicheur", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:ledenicheur"
-                                ),
-                            ],
-                            [
-                                InlineKeyboardButton(
-                                    text=_toggle_label("Keepa", "keepa", state["sources"]),
-                                    callback_data="alert:create:toggle:sources:keepa"
-                                ),
-                            ],
-                            [InlineKeyboardButton(text="Suivant", callback_data="alert:create:next")],
-                            [InlineKeyboardButton(text="Annuler", callback_data="alert:create:cancel")],
-                        ]
-                    ),
-                )
-            await callback.answer()
+        if data.startswith("admin:revoke_user:"):
+            user_id = _int(data.rsplit(":", 1)[1])
+            if user_id is not None:
+                repository.revoke_authorized_user(user_id)
+            users = repository.list_authorized_users(include_disabled=True)
+            if callback.message is not None:
+                await callback.message.edit_text(format_authorized_users_list(users), reply_markup=build_admin_users_keyboard(users))
+            await callback.answer("Utilisateur revoque.")
             return
-
-        if data == "confirm":
-            state = _get_alert_creation_state(user_id)
-            try:
-                alert_args = AlertArgs(
-                    name=state.get("name", "Alerte DiskCount"),
-                    min_capacity_tb=state.get("min_capacity_tb"),
-                    max_capacity_tb=state.get("max_capacity_tb"),
-                    max_price_per_tb=state.get("max_price_per_tb"),
-                    conditions=state.get("conditions", []),
-                    media_types=state.get("media_types", []),
-                    drive_categories=state.get("drive_categories", []),
-                    interfaces=state.get("interfaces", []),
-                    sources=state.get("sources", []),
-                    min_discount_pct=5.0,
-                    cooldown_hours=24,
-                )
-
-                from .parsing import parse_alert_args
-                # Note: parse_alert_args expects a string, but we have AlertArgs
-                # We need to convert AlertArgs back to string format or create alert directly
-
-                # For simplicity, we'll create the alert directly using repository
-                from .db import Alert as DBAlert
-                from decimal import Decimal
-
-                alert = DBAlert(
-                    name=alert_args.name,
-                    min_capacity_tb=alert_args.min_capacity_tb,
-                    max_capacity_tb=alert_args.max_capacity_tb,
-                    max_price_per_tb=float(alert_args.max_price_per_tb) if alert_args.max_price_per_tb else None,
-                    conditions=alert_args.conditions,
-                    media_types=alert_args.media_types,
-                    drive_categories=alert_args.drive_categories,
-                    interfaces=alert_args.interfaces,
-                    sources=alert_args.sources,
-                    min_discount_pct=alert_args.min_discount_pct,
-                    cooldown_hours=alert_args.cooldown_hours,
-                    owner_user_id=user_id,
-                )
-
-                repository.upsert_alert(alert)
-
-                _reset_alert_creation_state(user_id)
-
-                await callback.message.edit_text(
-                    f"✅ Alerte créée avec succès !\n\n"
-                    f"Nom: {alert_args.name}\n"
-                    f"ID: {alert.id}",
-                    reply_markup=build_menu_keyboard("alerts:list"),
-                )
-
-            except Exception as e:
-                await callback.message.edit_text(
-                    f"❌ Erreur lors de la création de l'alerte: {str(e)}\n\n"
-                    "Veuillez réessayer.",
-                    reply_markup=build_menu_keyboard("alerts:list"),
-                )
-                _reset_alert_creation_state(user_id)
-
-            await callback.answer()
+        if data.startswith("admin:reactivate_user:"):
+            user_id = _int(data.rsplit(":", 1)[1])
+            if user_id is not None:
+                user = next((item for item in repository.list_authorized_users(include_disabled=True) if item.telegram_user_id == user_id), None)
+                if user is not None:
+                    repository.upsert_authorized_user(user.telegram_user_id, user.label, is_admin=user.is_admin)
+            users = repository.list_authorized_users(include_disabled=True)
+            if callback.message is not None:
+                await callback.message.edit_text(format_authorized_users_list(users), reply_markup=build_admin_users_keyboard(users))
+            await callback.answer("Utilisateur reactive.")
             return
+        await callback.answer()
 
-    # End of interactive alert creation handlers
+    @router.message(lambda message: bool(message.from_user and admin_pending.get(message.from_user.id)))
+    async def admin_pending_message(message: Message) -> None:
+        if not await admin_guard(message):
+            return
+        if message.text and message.text.startswith("/"):
+            admin_pending.pop(message.from_user.id, None)
+            await message.answer("Action admin annulee.", reply_markup=build_menu_keyboard("admin", include_admin=True))
+            return
+        action = admin_pending.get(message.from_user.id)
+        if action != "allow":
+            return
+        parsed = _user_id_and_label(message.text)
+        if parsed is None:
+            await message.answer("Format attendu: 123456789 Nom custom", reply_markup=build_menu_keyboard("admin", include_admin=True))
+            return
+        user_id, label = parsed
+        admin_pending.pop(message.from_user.id, None)
+        user = repository.upsert_authorized_user(user_id, label)
+        await message.answer(f"Utilisateur autorise: {format_authorized_user(user)}", reply_markup=build_menu_keyboard("admin", include_admin=True))
 
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
@@ -1594,13 +1351,178 @@ def format_price_limit(alert: Alert) -> str | None:
     return f"prix<={price:g}EUR/To"
 
 
+def format_alert_button(alert: Alert) -> str:
+    state = "on" if alert.enabled else "off"
+    media = ",".join(_display_value(value) for value in alert.media_types) or "HDD/SSD"
+    capacity = format_capacity_range(alert.min_capacity_tb, alert.max_capacity_tb)
+    price = format_price_limit(alert) or "prix libre"
+    return f"#{alert.id} {alert.name} | {state} | {media} | {capacity} | {price}"
+
+
+def format_capacity_range(min_capacity_tb: float | None, max_capacity_tb: float | None) -> str:
+    if min_capacity_tb is None and max_capacity_tb is None:
+        return "toute capacite"
+    if min_capacity_tb is None:
+        return f"<={max_capacity_tb:g} To"
+    if max_capacity_tb is None:
+        return f">={min_capacity_tb:g} To"
+    return f"{min_capacity_tb:g}-{max_capacity_tb:g} To"
+
+
+def format_alert_media(alert: Alert) -> str:
+    return (
+        "Type de disque\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Coche HDD pour rotational, SSD pour solid state, ou les deux."
+    )
+
+
+def format_alert_condition(alert: Alert) -> str:
+    return (
+        "Etat produit\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Coche New, Used, ou les deux selon ce que tu acceptes."
+    )
+
+
+def format_alert_capacity(alert: Alert) -> str:
+    return (
+        "Plage de stockage\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Choisis une plage. Les presets SSD sont en Go/To, les presets HDD en To."
+    )
+
+
+def format_alert_price(alert: Alert) -> str:
+    return (
+        "Prix maximum\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Choisis un seuil. Les boutons SSD affichent EUR/Go et sont stockes en EUR/To en interne."
+    )
+
+
+def format_alert_sources(alert: Alert) -> str:
+    return (
+        "Sources\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Coche les sources que cette alerte doit utiliser."
+    )
+
+
+def format_alert_categories(alert: Alert) -> str:
+    return (
+        "Categories DiskPrices\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Coche les familles voulues: externe, interne, 2.5, 3.5, SAS, SSD, M.2 ou U.2/U.3."
+    )
+
+
+def format_alert_interfaces(alert: Alert) -> str:
+    return (
+        "Connexions\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Coche SATA, SAS, NVMe ou USB selon les offres que tu veux recevoir."
+    )
+
+
+def format_alert_delete(alert: Alert) -> str:
+    return (
+        "Supprimer l'alerte\n\n"
+        f"{format_alert_button(alert)}\n\n"
+        "Confirme seulement si tu veux supprimer cette alerte."
+    )
+
+
+def format_draft(draft: AlertDraft) -> str:
+    titles = {
+        "media": "1/8 Type de disque",
+        "condition": "2/8 Etat produit",
+        "capacity": "3/8 Capacite",
+        "price": "4/8 Prix",
+        "categories": "5/8 Categories DiskPrices",
+        "interfaces": "6/8 Connexions",
+        "sources": "7/8 Sources",
+        "confirm": "8/8 Recapitulatif",
+    }
+    hints = {
+        "media": "Choisis HDD, SSD, ou les deux.",
+        "condition": "Choisis New, Used, ou les deux.",
+        "capacity": "Choisis une plage de stockage predefinie.",
+        "price": "Choisis un prix maximum par To ou par Go selon le type.",
+        "categories": "Filtre les familles DiskPrices: interne, externe, M.2, SAS, etc.",
+        "interfaces": "Filtre les connexions: SATA, SAS, NVMe ou USB.",
+        "sources": "Choisis les sources activees pour cette alerte.",
+        "confirm": "Verifie le recapitulatif puis cree l'alerte.",
+    }
+    return f"{titles.get(draft.step, 'Creation alerte')}\n\n{format_draft_summary(draft)}\n\n{hints.get(draft.step, '')}"
+
+
+def format_draft_summary(draft: AlertDraft) -> str:
+    return (
+        f"Nom: {draft.name}\n"
+        f"Type: {format_values(draft.media_types)}\n"
+        f"Etat: {format_values(draft.conditions)}\n"
+        f"Capacite: {format_capacity_range(draft.min_capacity_tb, draft.max_capacity_tb)}\n"
+        f"Prix max: {format_draft_price(draft)}\n"
+        f"Categories: {format_values(draft.drive_categories)}\n"
+        f"Connexions: {format_values(draft.interfaces)}\n"
+        f"Sources: {format_values(draft.sources)}"
+    )
+
+
+def format_draft_price(draft: AlertDraft) -> str:
+    if draft.max_price_per_tb is None:
+        return "aucune limite"
+    price = Decimal(draft.max_price_per_tb)
+    if draft.media_types == ["solid_state"]:
+        return f"{price / Decimal('1000'):g} EUR/Go"
+    return f"{price:g} EUR/To"
+
+
+def format_values(values: list[str]) -> str:
+    if not values:
+        return "tous"
+    return ", ".join(_display_value(value) for value in values)
+
+
+def _display_value(value: str) -> str:
+    labels = {
+        "rotational": "HDD",
+        "solid_state": "SSD",
+        "new": "New",
+        "used": "Used",
+        "external_3_5": "External 3.5",
+        "external_2_5": "External 2.5",
+        "internal_3_5": "Internal 3.5",
+        "internal_2_5": "Internal 2.5",
+        "internal_hybrid": "Internal Hybrid",
+        "internal_sas": "Internal SAS",
+        "external_ssd": "External SSD",
+        "internal_ssd": "Internal SSD",
+        "m2_sata": "M.2 SATA",
+        "m2_nvme": "M.2 NVMe",
+        "u2_u3": "U.2/U.3",
+        "sata": "SATA",
+        "sas": "SAS",
+        "nvme": "NVMe",
+        "usb": "USB",
+        "diskprices": "DiskPrices",
+        "dealabs": "Dealabs",
+        "ebay": "eBay",
+        "leboncoin": "leboncoin",
+        "idealo": "Idealo",
+        "ledenicheur": "leDenicheur",
+        "keepa": "Keepa",
+    }
+    return labels.get(value, value)
+
+
 def format_alerts_list(alerts: list[Alert]) -> str:
     if not alerts:
         return (
             "Mes alertes\n\n"
             "Aucune alerte pour ton compte.\n\n"
-            "Pour en creer une:\n"
-            "/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used"
+            "Utilise Creer une alerte pour demarrer avec les tuiles."
         )
     return "Mes alertes\n\n" + "\n".join(format_alert(alert) for alert in alerts)
 
@@ -1609,8 +1531,7 @@ def format_alert_detail(alert: Alert) -> str:
     return (
         "Modifier une notification\n\n"
         f"{format_alert(alert)}\n\n"
-        "Utilise les cases pour HDD/SSD, New/Used, categories DiskPrices et connexions.\n"
-        "Pour la capacite et le prix, ouvre Stockage/Prix puis envoie la commande indiquee."
+        "Ouvre une categorie pour modifier directement ses valeurs."
     )
 
 

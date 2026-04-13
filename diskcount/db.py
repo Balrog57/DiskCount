@@ -342,6 +342,8 @@ class Repository:
             "media": "media_types_json",
             "category": "drive_categories_json",
             "interface": "interfaces_json",
+            "source": "sources_json",
+            "sources": "sources_json",
         }
         column = fields.get(field)
         if column is None:

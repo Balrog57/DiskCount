@@ -129,6 +129,9 @@ def test_repository_updates_alert_filters() -> None:
     updated = repository.toggle_alert_filter_value(1001, alert.id, "category", "m2_nvme")
     assert updated is not None
     assert updated.drive_categories == ["m2_nvme"]
+    updated = repository.toggle_alert_filter_value(1001, alert.id, "source", "ebay")
+    assert updated is not None
+    assert updated.sources == ["diskprices", "ebay"]
 
 
 def test_repository_authorized_users() -> None:

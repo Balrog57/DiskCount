@@ -1,13 +1,22 @@
 from decimal import Decimal
 
 from diskcount.bot import (
+    AlertDraft,
     _alert_id_and_price,
     _user_id_and_label,
+    apply_capacity_preset_to_draft,
+    apply_price_preset_to_draft,
+    build_alert_capacity_keyboard,
     build_alert_category_keyboard,
     build_alert_edit_keyboard,
+    build_alert_price_keyboard,
+    build_alert_source_keyboard,
     build_bot_commands,
+    build_draft_keyboard,
     build_main_keyboard,
     build_menu_keyboard,
+    create_alert_from_draft,
+    draft_to_alert_args,
     is_authorized,
     is_env_admin,
     parse_alert_args,
@@ -72,6 +81,7 @@ def test_build_bot_commands() -> None:
     user_commands = [command.command for command in build_bot_commands()]
     admin_commands = [command.command for command in build_bot_commands(include_admin=True)]
     assert "menu" in user_commands
+    assert "create" in user_commands
     assert "add" in user_commands
     assert "status" in user_commands
     assert "allow" not in user_commands
@@ -94,7 +104,8 @@ def test_build_menu_keyboard_navigation() -> None:
     alert_buttons = [button.text for row in build_menu_keyboard("alerts").inline_keyboard for button in row]
     admin_home_buttons = [button.text for row in build_menu_keyboard(include_admin=True).inline_keyboard for button in row]
 
-    assert "Alertes" in home_buttons
+    assert "Creer une alerte" in home_buttons
+    assert "Mes alertes" in home_buttons
     assert "Admin" not in home_buttons
     assert "Admin" in admin_home_buttons
     assert "Mes alertes" in alert_buttons
@@ -110,7 +121,7 @@ def test_build_alert_edit_keyboards() -> None:
         owner_user_id=1001,
         name="NAS",
         min_capacity_tb=16,
-        max_capacity_tb=None,
+        max_capacity_tb=20,
         conditions=["new"],
         media_types=["rotational"],
         drive_categories=["internal_3_5"],
@@ -122,8 +133,52 @@ def test_build_alert_edit_keyboards() -> None:
     )
     edit_buttons = [button.text for row in build_alert_edit_keyboard(alert).inline_keyboard for button in row]
     category_buttons = [button.text for row in build_alert_category_keyboard(alert).inline_keyboard for button in row]
-    assert "[x] HDD" in edit_buttons
-    assert "[x] New" in edit_buttons
-    assert "Stockage/Prix" in edit_buttons
+    capacity_buttons = [button.text for row in build_alert_capacity_keyboard(alert).inline_keyboard for button in row]
+    price_buttons = [button.text for row in build_alert_price_keyboard(alert).inline_keyboard for button in row]
+    source_buttons = [button.text for row in build_alert_source_keyboard(alert).inline_keyboard for button in row]
+    assert "Type" in edit_buttons
+    assert "Etat" in edit_buttons
+    assert "Capacite" in edit_buttons
+    assert "Prix" in edit_buttons
     assert "[x] Internal 3.5" in category_buttons
+    assert "[x] HDD 16-20 To" in capacity_buttons
+    assert "[x] HDD <=20 EUR/To" in price_buttons
+    assert "[x] DiskPrices" in source_buttons
     assert "Accueil" in category_buttons
+
+
+def test_alert_draft_presets_and_create() -> None:
+    repository = Repository(create_db_engine("sqlite:///:memory:"))
+    repository.init()
+
+    draft = AlertDraft()
+    apply_capacity_preset_to_draft(draft, "ssd_2")
+    apply_price_preset_to_draft(draft, "s008")
+    draft.conditions = ["new"]
+    draft.drive_categories = ["m2_nvme"]
+    draft.interfaces = ["nvme"]
+    draft.sources = ["diskprices", "ebay"]
+
+    args = draft_to_alert_args(draft)
+    assert args.min_capacity_tb == 1.8
+    assert args.max_capacity_tb == 2.4
+    assert args.media_types == ["rotational", "solid_state"]
+    assert args.max_price_per_tb == Decimal("80")
+
+    alert = create_alert_from_draft(repository, chat_id=42, owner_user_id=1001, draft=draft)
+    assert alert.owner_user_id == 1001
+    assert alert.conditions == ["new"]
+    assert alert.drive_categories == ["m2_nvme"]
+    assert alert.interfaces == ["nvme"]
+    assert alert.sources == ["diskprices", "ebay"]
+
+
+def test_draft_keyboard_marks_selected_values() -> None:
+    draft = AlertDraft(step="price", media_types=["solid_state"], max_price_per_tb=Decimal("80"))
+    price_buttons = [button.text for row in build_draft_keyboard(draft).inline_keyboard for button in row]
+    assert "[x] SSD <=0.08 EUR/Go" in price_buttons
+
+    draft.step = "capacity"
+    apply_capacity_preset_to_draft(draft, "hdd_16_20")
+    capacity_buttons = [button.text for row in build_draft_keyboard(draft).inline_keyboard for button in row]
+    assert "[x] HDD 16-20 To" in capacity_buttons

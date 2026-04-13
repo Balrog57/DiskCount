@@ -1,6 +1,6 @@
 # Dashboard de realisation DiskCount
 
-Derniere mise a jour : 2026-04-12
+Derniere mise a jour : 2026-04-13
 
 ## Statut global
 
@@ -20,16 +20,16 @@ Derniere mise a jour : 2026-04-12
 | Bot Telegram | Termine | Commandes demandees implementees. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
-| Edition alertes Telegram | Termine | `Mes alertes` permet de rouvrir une alerte, modifier ses cases HDD/SSD, new/used, categories DiskPrices, connexions, pause/reprise et suppression. |
+| Edition alertes Telegram | Termine | `Mes alertes` ouvre chaque alerte comme tuile; modification cliquable de type, etat, capacite, prix, categories, connexions, sources, pause/reprise et suppression confirmee. |
 | Filtres DiskPrices avances | Termine | Categories interne/externe/form factor, connectiques SATA/SAS/NVMe/USB, `max_eur_gb` SSD converti en EUR/To. |
 | Panel admin Telegram | Termine | `/users`, `/allow <id> <nom>`, `/revoke <id>` avec super-admin env. |
 | Alertes par utilisateur | Termine | Chaque utilisateur autorise possede ses alertes et ne peut modifier/supprimer que les siennes. |
 | Boutons Telegram | Termine | Les alertes incluent un bouton direct vers l'offre. |
-| Assistant de creation d'alerte | Termine | Commande `/create` interactive avec validation par etapes. |
+| Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD, prix, categories, connexions, sources et recapitulatif. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<REDACTED_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 29 tests passent. |
+| Tests | Termine | 31 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Acces VPS SSH server | Debloque | Seule l'IP client `<REDACTED_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
@@ -45,7 +45,7 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 29 passed in 1.75s
+Resultat: 31 passed in 1.65s
 ```
 
 ```text
@@ -65,22 +65,23 @@ Migration SQLite: colonne alerts.owner_user_id presente
 Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
 Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
 Assistant creation alerte deployee: commande `/create` fonctionnelle sur server
+UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite/prix, sources, categories, connexions, suppression confirmee; admin ajouter/revoquer/reactiver en tuiles
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, products.drive_category, products.interfaces_json presentes
 ```
 
 ```text
 Telegram command menu
-Default: start, menu, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
-Admin 123456789: start, menu, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
-Tiles: /start, /menu et /help affichent des tuiles inline; categories Alertes, Scan, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
+Default: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
+Admin 123456789: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
+Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une alerte, Mes alertes, Scanner/Test, Sources, Aide, Admin; sous-menus avec Precedent et Accueil
 Verification Bot API server: OK
-Edition alertes: boutons Modifier/Supprimer depuis Mes alertes; cases HDD/SSD, New/Used, categories DiskPrices, connexions
+Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacite, prix, categories DiskPrices, connexions, sources, pause/reprise, suppression confirmee
 Verification Bot API server apres edition avancee: set_capacity present pour default et admin
 ```
 
 Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite temporaire hors du repo.
 
-## Reste a faire avant VPS
+## Reste a configurer
 
 | Priorite | Tache | Detail |
 | --- | --- | --- |

@@ -54,9 +54,30 @@ Environment variables:
 - `POLL_INTERVAL_SECONDS`: default `900`.
 - `TELEGRAM_MESSAGE_DELAY_SECONDS`: default `0.5`, used to pace Telegram notifications.
 
-## Telegram commands
+## Telegram UX
 
-Create an alert:
+The main Telegram interface is clickable:
+
+- `/start`, `/menu`, `/help` open the inline home menu.
+- Home tiles: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Sources`, `Aide`, and `Admin` for admin users.
+- `/create` starts a full alert wizard with inline buttons. Each step edits the same message when Telegram allows it.
+- Every wizard and edit screen keeps `Precedent` and `Accueil` at the bottom.
+- `Mes alertes` shows each alert as a tile. Opening an alert lets you edit type, condition, capacity, price, DiskPrices categories, connections, sources, pause/resume, and delete with confirmation.
+- Admin users get tiles for `Utilisateurs`, `Ajouter`, `Revoquer`, and `Reactiver`. `Ajouter` asks for one controlled text reply: `id nom custom`.
+
+Creation presets:
+
+- SSD capacity: `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, or `Toute capacite`.
+- HDD capacity: `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, or `Toute capacite`.
+- HDD price: `<=15`, `<=18`, `<=20`, `<=22`, `<=25` EUR/To, or `Aucune limite`.
+- SSD price: `<=0.04`, `<=0.06`, `<=0.08`, `<=0.10`, `<=0.12` EUR/Go, or `Aucune limite`. Internally, SSD thresholds are still stored in EUR/To.
+- DiskPrices categories: `External 3.5`, `External 2.5`, `Internal 3.5`, `Internal 2.5`, `Internal Hybrid`, `Internal SAS`, `External SSD`, `Internal SSD`, `M.2 SATA`, `M.2 NVMe`, `U.2/U.3`.
+- Connections: `SATA`, `SAS`, `NVMe`, `USB`.
+- Sources: `DiskPrices`, `Dealabs`, `eBay`, `leboncoin`, `Idealo`, `leDenicheur`, `Keepa`.
+
+Text commands remain as advanced fallbacks.
+
+Create an alert by text:
 
 ```text
 /add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 sources=diskprices,dealabs,ebay,leboncoin cooldown=24
@@ -73,11 +94,11 @@ Useful commands:
 - Type `/` in Telegram to open the command menu with descriptions.
 - `/menu` opens the inline tile navigation.
 - `/start`, `/menu`, and `/help` remove the old persistent keyboard and show inline tiles under the message.
-- `/create` starts an interactive alert creation assistant.
-- Tile categories: `Alertes`, `Scan`, `Sources`, `Aide`, and `Admin` for admin users.
+- `/create` starts the clickable alert creation wizard.
+- Tile categories: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Sources`, `Aide`, and `Admin` for admin users.
 - Submenus always include `Precedent` and `Accueil` at the bottom.
 - `/alerts` lists alerts.
-- From `/alerts`, each alert has inline buttons to reopen, modify, pause/resume, or delete it.
+- From `/alerts`, each alert opens a clickable editor.
 - `/pause 1` disables an alert.
 - `/resume 1` enables it again.
 - `/delete 1` removes it.
