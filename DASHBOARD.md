@@ -73,6 +73,7 @@ Test pytest distant: non execute, le venv de production ne contient pas pytest
 Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `capacity_presets_json`; sources retirees de la creation/edition Telegram et conservees comme backend scanner/env
 Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
 Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
+Deploiement Guide Aide 2026-04-13: commit 7889a5e extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=429 matched=0 notified=0 errors=0
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
