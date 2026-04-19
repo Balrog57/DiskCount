@@ -26,9 +26,9 @@ notepad .env
 
 ## Production Location
 
-The active DiskCount bot runs on Proxmox LXC `105`, IP `<LOCAL_PRODUCTION_VM>`, hosted by Proxmox node `<LOCAL_PROXMOX_HOST>`.
-Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`, the SQLite database is
-`/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
+The active DiskCount bot runs on Proxmox LXC `105`; exact host addresses are kept in the local server inventory
+outside this GitHub repository. Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`,
+the SQLite database is `/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
 
 ## Build and Run Commands
 

@@ -73,7 +73,7 @@ def test_repository_alerts_are_owned_per_user() -> None:
     first = repository.create_alert(
         chat_id=42,
         owner_user_id=1001,
-        name="NAS User",
+        name="NAS Lab",
         min_capacity_tb=16,
         max_capacity_tb=None,
         conditions=["new"],
@@ -144,9 +144,9 @@ def test_repository_authorized_users() -> None:
     repository = Repository(create_db_engine("sqlite:///:memory:"))
     repository.init()
 
-    user = repository.upsert_authorized_user(123, "User")
+    user = repository.upsert_authorized_user(123, "Alice")
     assert user.telegram_user_id == 123
-    assert user.label == "User"
+    assert user.label == "Alice"
     assert repository.is_user_allowed(123)
     assert len(repository.list_authorized_users()) == 1
 

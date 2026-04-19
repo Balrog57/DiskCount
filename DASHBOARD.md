@@ -32,7 +32,7 @@ Derniere mise a jour : 2026-04-19
 | Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD multi-selection, prix, categories, connexions et recapitulatif. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
-| Deploiement LXC Proxmox 105 | Termine | Service `diskcount` actif sur `<LOCAL_PRODUCTION_VM>`; bot `@DiskCount_bot` en polling. |
+| Deploiement LXC Proxmox 105 | Termine | Service `diskcount` actif sur le LXC 105; bot `@DiskCount_bot` en polling. |
 | Cadence scanner | Termine | `POLL_INTERVAL_SECONDS=14400` par defaut, avec 30s de delai initial pour stabiliser le polling Telegram. |
 | Tests | Termine | 37 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
@@ -73,14 +73,14 @@ Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `ca
 Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
 Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
 Deploiement Guide Aide 2026-04-13: commit 7889a5e extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=429 matched=0 notified=0 errors=0
-Deploiement sources prix 2026-04-19: code `main` extrait dans /opt/diskcount sur LXC 105 (`<LOCAL_PRODUCTION_VM>`), service systemd actif, compileall distant OK, Playwright/Chromium installe pour l'utilisateur `diskcount`, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1045 matched=2 notified=2 errors=0
+Deploiement sources prix 2026-04-19: code `main` extrait dans /opt/diskcount sur LXC 105, service systemd actif, compileall distant OK, Playwright/Chromium installe pour l'utilisateur `diskcount`, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1045 matched=2 notified=2 errors=0
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
 ```text
 Telegram command menu
 Default: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
-Admin 123456789: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
+Admin menu: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
 Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une alerte, Mes alertes, Scanner/Test, Aide, Admin; sous-menus avec Precedent et Accueil
 Verification Bot API LXC 105: OK
 Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacites multi-selection, prix, categories DiskPrices, connexions, pause/reprise, suppression confirmee

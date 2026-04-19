@@ -138,7 +138,7 @@ Alerts are owned per Telegram user. Every authorized user can create, list, paus
 Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
 
 - `/users` lists allowed and disabled users.
-- `/allow 123456789 User` adds or re-enables a user with a custom label.
+- `/allow 123456789 Alice` adds or re-enables a user with a custom label.
 - `/revoke 123456789` disables a user.
 
 Admin users get an expanded Telegram command menu for these admin commands.
@@ -186,9 +186,9 @@ sudo -u diskcount /opt/diskcount/.venv/bin/python -m diskcount init-db
 
 ## Production location
 
-The active DiskCount bot runs on Proxmox LXC `105`, IP `<LOCAL_PRODUCTION_VM>`, hosted by Proxmox node `<LOCAL_PROXMOX_HOST>`.
-Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`, the SQLite database is
-`/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
+The active DiskCount bot runs on Proxmox LXC `105`; exact host addresses are kept in the local server inventory
+outside this GitHub repository. Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`,
+the SQLite database is `/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
 
 ## CLI
 
