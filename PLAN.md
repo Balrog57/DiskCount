@@ -110,7 +110,7 @@ python -m diskcount run
 - Repository : isolation des alertes par `owner_user_id`, avec migration SQLite automatique pour les bases existantes.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.
 - Scanner : `dry_run=True` simule les notifications sans persister les produits.
-- Scheduler : cadence par defaut de 4h via `POLL_INTERVAL_SECONDS=14400`.
+- Scheduler : cadence par defaut de 4h via `POLL_INTERVAL_SECONDS=14400`, avec delai initial configurable avant le premier scan.
 
 ## Deploiement Debian
 

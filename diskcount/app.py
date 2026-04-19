@@ -28,7 +28,12 @@ async def run_bot(settings: Settings) -> None:
     scanner = Scanner(settings, repository, sources, notifier=TelegramNotifier(bot))
     dispatcher = build_dispatcher(settings, repository, scanner)
 
-    scheduler_task = asyncio.create_task(scheduler_loop(scanner, settings.poll_interval_seconds))
+    async def delayed_scheduler_loop() -> None:
+        if settings.scheduler_initial_delay_seconds > 0:
+            await asyncio.sleep(settings.scheduler_initial_delay_seconds)
+        await scheduler_loop(scanner, settings.poll_interval_seconds)
+
+    scheduler_task = asyncio.create_task(delayed_scheduler_loop())
     try:
         await dispatcher.start_polling(bot)
     finally:

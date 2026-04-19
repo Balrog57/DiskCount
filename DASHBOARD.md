@@ -32,7 +32,7 @@ Derniere mise a jour : 2026-04-19
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<SERVER_IP>`; bot `@DiskCount_bot` en polling. |
-| Cadence scanner | Termine | `POLL_INTERVAL_SECONDS=14400` par defaut, soit un scan toutes les 4h. |
+| Cadence scanner | Termine | `POLL_INTERVAL_SECONDS=14400` par defaut, avec 30s de delai initial pour stabiliser le polling Telegram. |
 | Tests | Termine | 37 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |

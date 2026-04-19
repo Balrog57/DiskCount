@@ -28,6 +28,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///./diskcount.sqlite3"
     poll_interval_seconds: int = 14400
+    scheduler_initial_delay_seconds: int = 30
     request_timeout_seconds: float = 30.0
     user_agent: str = "DiskCountBot/0.1"
 

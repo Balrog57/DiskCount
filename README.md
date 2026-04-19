@@ -64,6 +64,7 @@ Environment variables:
 - `KEEPA_API_KEY`: optional Keepa API key.
 - `KEEPA_ASINS`: optional comma-separated ASINs to query through Keepa.
 - `POLL_INTERVAL_SECONDS`: default `14400` (4 hours).
+- `SCHEDULER_INITIAL_DELAY_SECONDS`: default `30`, lets Telegram polling establish before the first startup scan.
 - `TELEGRAM_MESSAGE_DELAY_SECONDS`: default `0.5`, used to pace Telegram notifications.
 
 For headless page rendering on Debian or a fresh Windows environment, install the browser once:
