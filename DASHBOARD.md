@@ -11,7 +11,7 @@ Derniere mise a jour : 2026-04-19
 | Stockage SQLite | Termine | Alertes, produits, observations, notifications, subscribers. |
 | Collecteur DiskPrices | Termine | Dry-run live verifie : 429 offres parsees, 0 erreur. |
 | Collecteur PricePerGig | Termine | API JSON publique `api.pricepergig.com/drives`, filtre `amazon.fr`, pagination 50 lignes. |
-| Collecteur PricePerTB | Termine | Parsing du tableau public `https://pricepertb.com/fr`. |
+| Collecteur PricePerTB | Termine | Parsing du tableau public `https://pricepertb.com/fr`, avec fallback Playwright si HTTP direct echoue. |
 | Collecteur Dealabs RSS | Termine | Parsing RSS configure par `DEALABS_RSS_URLS`. |
 | Collecteur eBay | Termine | API officielle Browse, active avec credentials eBay. |
 | Flux/pages Idealo | Termine v2 | Via `IDEALO_FEED_URLS`; pages publiques via `IDEALO_PAGE_URLS` avec fallback Playwright headless. |

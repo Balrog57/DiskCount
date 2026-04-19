@@ -15,20 +15,48 @@ from diskcount.parsing import (
     parse_capacity_tb,
     parse_price_eur,
 )
+from diskcount.sources.html_pages import render_pages
 
 
 class PricePerTBSource:
     name = "pricepertb"
 
-    def __init__(self, urls: list[str]) -> None:
+    def __init__(
+        self,
+        urls: list[str],
+        headless_fallback: bool = True,
+        user_agent: str = "DiskCountBot/0.1",
+        timeout_seconds: float = 30.0,
+    ) -> None:
         self.urls = urls
+        self.headless_fallback = headless_fallback
+        self.user_agent = user_agent
+        self.timeout_seconds = timeout_seconds
 
     async def fetch(self, client: httpx.AsyncClient) -> list[Deal]:
         deals: list[Deal] = []
+        unresolved_urls: list[str] = []
         for url in self.urls:
             response = await client.get(url)
+            if response.status_code >= 400 and self.headless_fallback:
+                unresolved_urls.append(url)
+                continue
             response.raise_for_status()
-            deals.extend(parse_pricepertb_html(response.text))
+            parsed = parse_pricepertb_html(response.text)
+            if parsed:
+                deals.extend(parsed)
+            elif self.headless_fallback:
+                unresolved_urls.append(url)
+
+        if unresolved_urls:
+            rendered_pages = await render_pages(
+                unresolved_urls,
+                user_agent=self.user_agent,
+                timeout_seconds=self.timeout_seconds,
+            )
+            for html in rendered_pages.values():
+                deals.extend(parse_pricepertb_html(html))
+
         return deals
 
 

@@ -46,7 +46,7 @@ au prix habituel observe sur 30 jours.
 
 - `diskprices` : source principale, parsing de `https://diskprices.com/?locale=fr`.
 - `pricepergig` : API JSON publique `https://api.pricepergig.com/drives`, filtree sur `amazon.fr`.
-- `pricepertb` : parsing du tableau public `https://pricepertb.com/fr`.
+- `pricepertb` : parsing du tableau public `https://pricepertb.com/fr`, avec fallback Playwright si HTTP direct echoue.
 - `dealabs` : flux RSS d'alertes configures par l'utilisateur dans `DEALABS_RSS_URLS`.
 - `ebay` : API officielle eBay Browse, active si `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` et `EBAY_SEARCH_QUERIES` sont definis.
 - `idealo` : flux/alertes configures dans `IDEALO_FEED_URLS`; pages publiques configurees dans `IDEALO_PAGE_URLS` avec fallback Playwright headless.

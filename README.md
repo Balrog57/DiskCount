@@ -13,7 +13,7 @@ The scanner is intentionally conservative:
 
 - DiskPrices France is parsed from its public table.
 - PricePerGig is consumed through its public JSON API for `amazon.fr`.
-- PricePerTB France is parsed from its public table.
+- PricePerTB France is parsed from its public table, with the same headless fallback when direct HTTP cannot read it.
 - Dealabs is consumed through RSS alert feeds that you configure.
 - Keepa is optional and only queried through its API when a key and ASIN list are configured.
 - eBay is queried through the official Browse API when credentials are configured.

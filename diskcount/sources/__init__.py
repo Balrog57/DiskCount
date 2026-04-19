@@ -24,7 +24,14 @@ def build_sources(settings: Settings) -> list[Source]:
             )
         )
     if settings.pricepertb_urls:
-        sources.append(PricePerTBSource(settings.pricepertb_urls))
+        sources.append(
+            PricePerTBSource(
+                settings.pricepertb_urls,
+                headless_fallback=settings.source_headless_fallback,
+                user_agent=settings.user_agent,
+                timeout_seconds=settings.request_timeout_seconds,
+            )
+        )
     if settings.dealabs_rss_urls:
         sources.append(DealabsRssSource(settings.dealabs_rss_urls))
     if settings.idealo_feed_urls:
