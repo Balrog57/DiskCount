@@ -38,9 +38,6 @@ Derniere mise a jour : 2026-04-19
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
-| Server DiskCount | Supprime | Installation accidentelle retiree le 2026-04-19: service, fichiers, env, base, utilisateur et processus absents. |
-| Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
-| Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
 
 ## Verification executee
 
@@ -77,7 +74,6 @@ Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans
 Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
 Deploiement Guide Aide 2026-04-13: commit 7889a5e extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=429 matched=0 notified=0 errors=0
 Deploiement sources prix 2026-04-19: code `main` extrait dans /opt/diskcount sur LXC 105 (`<LOCAL_PRODUCTION_VM>`), service systemd actif, compileall distant OK, Playwright/Chromium installe pour l'utilisateur `diskcount`, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1045 matched=2 notified=2 errors=0
-Menage server 2026-04-19: service, unit systemd, `/opt/diskcount`, `/var/lib/diskcount`, `/etc/diskcount.env`, utilisateur `diskcount` et processus associes supprimes de server.
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 

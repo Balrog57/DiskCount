@@ -184,91 +184,11 @@ Initialize the database before first start if desired:
 sudo -u diskcount /opt/diskcount/.venv/bin/python -m diskcount init-db
 ```
 
-## SSH troubleshooting
+## Production location
 
-If the VPS SSH port times out after failed login attempts, unblock the client IP from the provider console, rescue shell, or another already-authorized machine.
-
-Current local public IP observed during setup:
-
-```text
-<YOUR_CLIENT_IP>
-```
-
-Useful Debian commands:
-
-```bash
-sudo fail2ban-client status
-sudo fail2ban-client status sshd
-sudo fail2ban-client set sshd unbanip <YOUR_CLIENT_IP>
-sudo systemctl restart ssh
-```
-
-If fail2ban is not installed or does not show the ban, check the firewall:
-
-```bash
-sudo ufw status numbered
-sudo nft list ruleset | grep -n "<YOUR_CLIENT_IP>\|<SSH_PORT>\|ssh"
-sudo iptables -S | grep "<YOUR_CLIENT_IP>\|<SSH_PORT>\|ssh"
-```
-
-If the VPS provider console shows `[UFW BLOCK]` messages over the login prompt, they are kernel firewall logs printed on the TTY. Press `Enter`, type the Linux username and password normally, then silence console kernel logs for the current session:
-
-```bash
-sudo dmesg -n 1
-```
-
-If the server was configured for SSH key-only access and the `debian` account has no password, the normal provider TTY console cannot log in as `debian`. Use the provider rescue mode, a root console offered by the provider, or a firewall panel rule instead. In rescue mode, mount the installed system disk, then inspect and edit the installed system files from the mounted path:
-
-```bash
-lsblk
-sudo mkdir -p /mnt/diskcount-root
-sudo mount /dev/sdX1 /mnt/diskcount-root
-sudo chroot /mnt/diskcount-root
-```
-
-After entering the installed system through `chroot`, run the unban/firewall commands below, then exit and reboot normally.
-
-Server specifics from the server audit:
-
-- working user: `debian`
-- working key: `~/.ssh/deployment_key`
-- SSH port: `<SSH_PORT>`
-- `PasswordAuthentication no`
-- `KbdInteractiveAuthentication no`
-- `PermitRootLogin no`
-- `MaxAuthTries 3`
-- fail2ban jail: `sshd`
-- fail2ban `bantime = 3600`, `findtime = 600`, `maxretry = 3`
-
-After three bad key/user attempts, wait up to one hour or unban the IP from rescue mode.
-
-Current fail2ban SSH whitelist on server:
-
-```text
-127.0.0.1/8
-::1
-<YOUR_CLIENT_IP>
-```
-
-Only the local trusted client IP is explicitly allowed in UFW for `<SSH_PORT>/tcp`; fail2ban remains active for all other remote IPs.
-
-Server and Server SSH whitelist:
-
-- `<SERVER_IP>` / `server`: only `<YOUR_CLIENT_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
-- `<SERVER_IP>` / `server`: only `<YOUR_CLIENT_IP>` is in fail2ban `ignoreip` and explicitly allowed in UFW for `<SSH_PORT>/tcp`.
-
-To explicitly allow this workstation on the custom SSH port:
-
-```bash
-sudo ufw allow from <YOUR_CLIENT_IP> to any port <SSH_PORT> proto tcp
-sudo ufw reload
-```
-
-Expected working SSH command from this workstation:
-
-```powershell
-ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<SERVER_IP>
-```
+The active DiskCount bot runs on Proxmox LXC `105`, IP `<LOCAL_PRODUCTION_VM>`, hosted by Proxmox node `<LOCAL_PROXMOX_HOST>`.
+Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`, the SQLite database is
+`/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
 
 ## CLI
 
@@ -278,7 +198,6 @@ ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<SERVER_IP>
 - `diskcount list --min-tb 16 --max-eur-tb 20 --media rotational`: print the best current offers sorted by EUR/TB.
 - `diskcount run`: start Telegram polling and the background scheduler.
 
-Current production note: the active bot is on Proxmox LXC `105`, IP `<LOCAL_PRODUCTION_VM>`, hosted by `<LOCAL_PROXMOX_HOST>`.
-It was updated on 2026-04-19 from `main`; `diskcount.service` is active, scans every 4 hours, and the first scan
-after deployment fetched 1045 offers from `diskprices`, `pricepergig`, and `pricepertb` with 0 source errors.
-The accidental DiskCount deployment on server was fully removed on 2026-04-19.
+Current production note: LXC `105` was updated on 2026-04-19 from `main`; `diskcount.service` is active, scans every
+4 hours, and the first scan after deployment fetched 1045 offers from `diskprices`, `pricepergig`, and `pricepertb`
+with 0 source errors.
