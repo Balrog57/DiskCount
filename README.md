@@ -9,13 +9,17 @@ Project tracking files:
 
 Maintenance rule: every functional, deployment, or configuration change must update the relevant Markdown tracking files and be pushed to the private GitHub repository.
 
-The first version is intentionally conservative:
+The scanner is intentionally conservative:
 
 - DiskPrices France is parsed from its public table.
+- PricePerGig is consumed through its public JSON API for `amazon.fr`.
+- PricePerTB France is parsed from its public table.
 - Dealabs is consumed through RSS alert feeds that you configure.
 - Keepa is optional and only queried through its API when a key and ASIN list are configured.
 - eBay is queried through the official Browse API when credentials are configured.
-- Idealo, leDenicheur, and leboncoin are consumed through configured alert/feed URLs. They are not page-scraped by default.
+- Idealo and leDenicheur can consume configured feeds and configured page URLs. Page URLs use normal HTTP first,
+  then optional Playwright headless rendering for public pages that require JavaScript.
+- leboncoin is consumed through configured alert/feed URLs.
 
 ## Quick start
 
@@ -41,18 +45,32 @@ Environment variables:
 - `TELEGRAM_ALLOWED_USER_IDS`: optional static comma-separated Telegram user IDs allowed to control the bot. Dynamic users are managed from Telegram and stored in SQLite.
 - `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; Debian example uses `/var/lib/diskcount/diskcount.sqlite3`.
 - `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
+- `PRICEPERGIG_ENABLED`: default `true`.
+- `PRICEPERGIG_API_URL`: default `https://api.pricepergig.com/drives`.
+- `PRICEPERGIG_MARKETPLACE`: default `amazon.fr`.
+- `PRICEPERGIG_MAX_RESULTS`: default `200`.
+- `PRICEPERTB_URLS`: default `https://pricepertb.com/fr`.
 - `DEALABS_RSS_URLS`: comma-separated RSS alert URLs from Dealabs.
 - `IDEALO_FEED_URLS`: comma-separated feed or alert URLs for Idealo-compatible entries.
+- `IDEALO_PAGE_URLS`: comma-separated public Idealo page URLs to parse, with optional headless fallback.
 - `LEDENICHEUR_FEED_URLS`: comma-separated feed or alert URLs for leDenicheur-compatible entries.
+- `LEDENICHEUR_PAGE_URLS`: comma-separated public leDenicheur page URLs to parse, with optional headless fallback.
 - `LEBONCOIN_FEED_URLS`: comma-separated feed or alert URLs for leboncoin-compatible entries.
+- `SOURCE_HEADLESS_FALLBACK`: default `true`; requires Playwright and a Chromium browser install.
 - `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`: official eBay developer credentials.
 - `EBAY_SEARCH_QUERIES`: comma-separated eBay Browse API searches, for example `disque dur 16 To HDD,disque dur 18 To HDD`.
 - `EBAY_MARKETPLACE_ID`: default `EBAY_FR`.
 - `EBAY_CATEGORY_IDS`: optional comma-separated eBay category IDs.
 - `KEEPA_API_KEY`: optional Keepa API key.
 - `KEEPA_ASINS`: optional comma-separated ASINs to query through Keepa.
-- `POLL_INTERVAL_SECONDS`: default `900`.
+- `POLL_INTERVAL_SECONDS`: default `14400` (4 hours).
 - `TELEGRAM_MESSAGE_DELAY_SECONDS`: default `0.5`, used to pace Telegram notifications.
+
+For headless page rendering on Debian or a fresh Windows environment, install the browser once:
+
+```powershell
+python -m playwright install chromium
+```
 
 ## Telegram UX
 

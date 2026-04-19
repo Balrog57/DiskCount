@@ -45,10 +45,12 @@ au prix habituel observe sur 30 jours.
 ## Sources v1
 
 - `diskprices` : source principale, parsing de `https://diskprices.com/?locale=fr`.
+- `pricepergig` : API JSON publique `https://api.pricepergig.com/drives`, filtree sur `amazon.fr`.
+- `pricepertb` : parsing du tableau public `https://pricepertb.com/fr`.
 - `dealabs` : flux RSS d'alertes configures par l'utilisateur dans `DEALABS_RSS_URLS`.
 - `ebay` : API officielle eBay Browse, active si `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET` et `EBAY_SEARCH_QUERIES` sont definis.
-- `idealo` : flux/alertes configures dans `IDEALO_FEED_URLS`, sans scraping de pages.
-- `ledenicheur` : flux/alertes configures dans `LEDENICHEUR_FEED_URLS`, sans scraping de pages.
+- `idealo` : flux/alertes configures dans `IDEALO_FEED_URLS`; pages publiques configurees dans `IDEALO_PAGE_URLS` avec fallback Playwright headless.
+- `ledenicheur` : flux/alertes configures dans `LEDENICHEUR_FEED_URLS`; pages publiques configurees dans `LEDENICHEUR_PAGE_URLS` avec fallback Playwright headless.
 - `leboncoin` : flux/alertes configures dans `LEBONCOIN_FEED_URLS`, sans scraping de pages.
 - `keepa` : connecteur API optionnel si `KEEPA_API_KEY` et `KEEPA_ASINS` sont definis.
 
@@ -56,7 +58,7 @@ au prix habituel observe sur 30 jours.
 
 - `diskcount/config.py` : configuration par variables d'environnement.
 - `diskcount/parsing.py` : normalisation prix, capacite, condition, type de disque et ASIN.
-- `diskcount/sources/` : collecteurs DiskPrices, Dealabs RSS, flux configures, eBay Browse API et Keepa API.
+- `diskcount/sources/` : collecteurs DiskPrices, PricePerGig API, PricePerTB HTML, Dealabs RSS, flux/pages configures, eBay Browse API et Keepa API.
 - `diskcount/db.py` : modeles SQLAlchemy et repository SQLite.
 - `diskcount/rules.py` : matching d'alertes, baseline, seuils et cooldown.
 - `diskcount/scanner.py` : orchestration collecte/evaluation/notification.
@@ -85,8 +87,10 @@ python -m diskcount run
 ## Tests et acceptance criteria
 
 - Parsing DiskPrices : prix, capacite, technologie, condition et ASIN.
+- Parsing PricePerGig API : prix, capacite, technologie, condition, marketplace et URL preservee.
+- Parsing PricePerTB : prix, capacite, technologie, condition et ASIN.
 - Parsing Dealabs RSS : titre, lien, prix, capacite, type disque et condition.
-- Parsing flux configures Idealo/leDenicheur/leboncoin : titre, lien, prix, capacite, type disque et condition par defaut.
+- Parsing flux/pages configures Idealo/leDenicheur/leboncoin : titre, lien, prix, capacite, type disque et condition par defaut.
 - Parsing eBay Browse API : item ID, lien, prix EUR, capacite, type disque et condition.
 - Normalisation : prix FR, capacites To/Go, HDD/SSD, neuf/occasion.
 - Regles : seuil EUR/To sans historique, remise rolling 30 jours, cooldown anti-spam.
@@ -106,6 +110,7 @@ python -m diskcount run
 - Repository : isolation des alertes par `owner_user_id`, avec migration SQLite automatique pour les bases existantes.
 - CLI : filtrage `list` par capacite, EUR/To, technologie et etat.
 - Scanner : `dry_run=True` simule les notifications sans persister les produits.
+- Scheduler : cadence par defaut de 4h via `POLL_INTERVAL_SECONDS=14400`.
 
 ## Deploiement Debian
 

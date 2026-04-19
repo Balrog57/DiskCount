@@ -122,7 +122,7 @@ def normalize_interfaces(text: str | None) -> tuple[DriveInterface, ...]:
     folded = ascii_fold(text)
     interfaces: list[DriveInterface] = []
     for value, patterns in (
-        ("nvme", ("nvme",)),
+        ("nvme", ("nvme", "pcie", "pci-e")),
         ("sata", ("sata",)),
         ("sas", ("sas",)),
         ("usb", ("usb",)),

@@ -27,15 +27,23 @@ class Settings(BaseSettings):
     telegram_admin_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
     database_url: str = "sqlite:///./diskcount.sqlite3"
-    poll_interval_seconds: int = 900
+    poll_interval_seconds: int = 14400
     request_timeout_seconds: float = 30.0
     user_agent: str = "DiskCountBot/0.1"
 
     diskprices_url: str = "https://diskprices.com/?locale=fr"
+    pricepergig_enabled: bool = True
+    pricepergig_api_url: str = "https://api.pricepergig.com/drives"
+    pricepergig_marketplace: str = "amazon.fr"
+    pricepergig_max_results: int = 200
+    pricepertb_urls: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["https://pricepertb.com/fr"])
     dealabs_rss_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     idealo_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    idealo_page_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     ledenicheur_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    ledenicheur_page_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     leboncoin_feed_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    source_headless_fallback: bool = True
 
     keepa_api_key: str = ""
     keepa_asins: Annotated[list[str], NoDecode] = Field(default_factory=list)
@@ -59,8 +67,11 @@ class Settings(BaseSettings):
 
     @field_validator(
         "dealabs_rss_urls",
+        "pricepertb_urls",
         "idealo_feed_urls",
+        "idealo_page_urls",
         "ledenicheur_feed_urls",
+        "ledenicheur_page_urls",
         "leboncoin_feed_urls",
         "keepa_asins",
         "ebay_search_queries",

@@ -1,6 +1,6 @@
 # Dashboard de realisation DiskCount
 
-Derniere mise a jour : 2026-04-13
+Derniere mise a jour : 2026-04-19
 
 ## Statut global
 
@@ -10,10 +10,12 @@ Derniere mise a jour : 2026-04-13
 | Configuration | Termine | Variables d'environnement via `pydantic-settings`, `.env` supporte en local; listes CSV supportees. |
 | Stockage SQLite | Termine | Alertes, produits, observations, notifications, subscribers. |
 | Collecteur DiskPrices | Termine | Dry-run live verifie : 429 offres parsees, 0 erreur. |
+| Collecteur PricePerGig | Termine | API JSON publique `api.pricepergig.com/drives`, filtre `amazon.fr`, pagination 50 lignes. |
+| Collecteur PricePerTB | Termine | Parsing du tableau public `https://pricepertb.com/fr`. |
 | Collecteur Dealabs RSS | Termine | Parsing RSS configure par `DEALABS_RSS_URLS`. |
 | Collecteur eBay | Termine | API officielle Browse, active avec credentials eBay. |
-| Flux Idealo | Termine v1 | Via `IDEALO_FEED_URLS`, sans scraping de pages. |
-| Flux leDenicheur | Termine v1 | Via `LEDENICHEUR_FEED_URLS`, sans scraping de pages. |
+| Flux/pages Idealo | Termine v2 | Via `IDEALO_FEED_URLS`; pages publiques via `IDEALO_PAGE_URLS` avec fallback Playwright headless. |
+| Flux/pages leDenicheur | Termine v2 | Via `LEDENICHEUR_FEED_URLS`; pages publiques via `LEDENICHEUR_PAGE_URLS` avec fallback Playwright headless. |
 | Flux leboncoin | Termine v1 | Via `LEBONCOIN_FEED_URLS`, sans scraping de pages. |
 | Connecteur Keepa API | Termine v1 | Optionnel, actif seulement avec `KEEPA_API_KEY` + `KEEPA_ASINS`. |
 | Regles de notification | Termine | Seuil EUR/To, remise rolling 30 jours, cooldown, baisse significative. |
@@ -30,7 +32,8 @@ Derniere mise a jour : 2026-04-13
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
 | Deploiement server | Termine | Service `diskcount` actif sur `<SERVER_IP>`; bot `@DiskCount_bot` en polling. |
-| Tests | Termine | 33 tests passent. |
+| Cadence scanner | Termine | `POLL_INTERVAL_SECONDS=14400` par defaut, soit un scan toutes les 4h. |
+| Tests | Termine | 37 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
@@ -47,15 +50,13 @@ Resultat: OK
 
 ```text
 pytest -q
-Resultat: 33 passed in 1.63s
+Resultat: 37 passed in 1.68s
 ```
 
 ```text
-python -m diskcount init-db
-python -m diskcount check
 python -m diskcount list --min-tb 16 --max-eur-tb 20 --media rotational
-Resultat: fetched=431 matched=0 notified=0 dry_run_notifications=0 errors=0
-Top live liste: 24 To a 19.36 EUR/To, 18 To a 19.88 EUR/To, 28 To a 19.95 EUR/To
+Resultat: diskprices=439, pricepergig=200, pricepertb=419, errors=0
+Top live liste: 16 To a 18.69 EUR/To, 18 To a 19.25 EUR/To, 22 To a 19.50 EUR/To
 ```
 
 ```text
@@ -99,8 +100,8 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 | P0 | Recuperer l'ID utilisateur | Definir `TELEGRAM_ADMIN_USER_IDS` avec ton ID Telegram. |
 | P1 | Configurer Dealabs | Ajouter les flux RSS d'alertes dans `DEALABS_RSS_URLS`. |
 | P1 | Configurer eBay | Creer des credentials eBay Developer puis definir `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`. |
-| P1 | Configurer Idealo | Ajouter des flux/alertes compatibles dans `IDEALO_FEED_URLS`. |
-| P1 | Configurer leDenicheur | Ajouter des flux/alertes compatibles dans `LEDENICHEUR_FEED_URLS`. |
+| P1 | Configurer Idealo | Ajouter des flux dans `IDEALO_FEED_URLS` ou des pages publiques dans `IDEALO_PAGE_URLS`. |
+| P1 | Configurer leDenicheur | Ajouter des flux dans `LEDENICHEUR_FEED_URLS` ou des pages publiques dans `LEDENICHEUR_PAGE_URLS`. |
 | P1 | Configurer leboncoin | Ajouter des flux/alertes compatibles dans `LEBONCOIN_FEED_URLS`. |
 | P1 | Ajouter Keepa si besoin | Definir `KEEPA_API_KEY` et `KEEPA_ASINS`; sinon laisser vide. |
 | P2 | Observer les premieres donnees | Laisser tourner pour constituer l'historique rolling 30 jours. |
@@ -118,4 +119,4 @@ Le dry-run CLI a ete execute dans un venv temporaire et avec une base SQLite tem
 | RSS Dealabs peu structure | Moyen | Parser seulement les entrees avec prix + capacite detectables. |
 | Keepa API incomplet sans ASIN | Moyen | Connecteur optionnel; DiskPrices reste source principale. |
 | Prix habituel immature au demarrage | Faible | `max_eur_tb` declenche immediatement; remise rolling active apres historique. |
-| Sites non compatibles scraping | Faible | Idealo/leDenicheur/leboncoin consommes uniquement via flux configures; eBay via API officielle. |
+| Pages dynamiques sans donnees parseables | Moyen | HTTP direct puis fallback Playwright headless sur pages publiques configurees; pas de contournement CAPTCHA/blocage d'acces. |

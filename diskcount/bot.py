@@ -28,7 +28,17 @@ from .scanner import Scanner
 
 VALID_CONDITIONS = {"new", "used"}
 VALID_MEDIA_TYPES = {"rotational", "solid_state"}
-VALID_SOURCES = {"diskprices", "dealabs", "idealo", "ledenicheur", "leboncoin", "ebay", "keepa"}
+VALID_SOURCES = {
+    "diskprices",
+    "pricepergig",
+    "pricepertb",
+    "dealabs",
+    "idealo",
+    "ledenicheur",
+    "leboncoin",
+    "ebay",
+    "keepa",
+}
 VALID_DRIVE_CATEGORIES = {
     "external_3_5",
     "external_2_5",
@@ -63,6 +73,8 @@ SSD_CATEGORIES: tuple[tuple[str, str], ...] = (
 INTERFACE_OPTIONS: tuple[tuple[str, str], ...] = (("SATA", "sata"), ("SAS", "sas"), ("NVMe", "nvme"), ("USB", "usb"))
 SOURCE_OPTIONS: tuple[tuple[str, str], ...] = (
     ("DiskPrices", "diskprices"),
+    ("PricePerGig", "pricepergig"),
+    ("PricePerTB", "pricepertb"),
     ("Dealabs", "dealabs"),
     ("eBay", "ebay"),
     ("leboncoin", "leboncoin"),
@@ -206,13 +218,16 @@ def build_menu_keyboard(view: str = "home", include_admin: bool = False) -> Inli
         "scan:status": nav,
         "scan:test": nav,
         "sources": [
-            [button("DiskPrices", "menu:sources:diskprices"), button("Dealabs", "menu:sources:dealabs")],
+            [button("DiskPrices", "menu:sources:diskprices"), button("PricePerGig", "menu:sources:pricepergig")],
+            [button("PricePerTB", "menu:sources:pricepertb"), button("Dealabs", "menu:sources:dealabs")],
             [button("eBay", "menu:sources:ebay"), button("leboncoin", "menu:sources:leboncoin")],
             [button("Idealo", "menu:sources:idealo"), button("leDenicheur", "menu:sources:ledenicheur")],
             [button("Keepa", "menu:sources:keepa")],
             *nav,
         ],
         "sources:diskprices": nav,
+        "sources:pricepergig": nav,
+        "sources:pricepertb": nav,
         "sources:dealabs": nav,
         "sources:ebay": nav,
         "sources:leboncoin": nav,
@@ -689,8 +704,8 @@ def menu_static_text(view: str) -> str:
         ),
         "sources": (
             "Sources\n\n"
-            "DiskPrices est la source principale. Dealabs, Idealo, leDenicheur et leboncoin passent par des flux "
-            "configures. eBay utilise l'API officielle. Keepa est optionnel pour enrichir l'historique Amazon."
+            "DiskPrices, PricePerGig et PricePerTB couvrent les prix Amazon FR. Dealabs, Idealo, leDenicheur et "
+            "leboncoin passent par des flux ou pages configurees. eBay utilise l'API officielle. Keepa est optionnel."
         ),
         "sources:diskprices": (
             "DiskPrices\n\n"
@@ -700,6 +715,14 @@ def menu_static_text(view: str) -> str:
         "sources:dealabs": (
             "Dealabs\n\n"
             "Utilise des flux RSS d'alertes que tu configures dans DEALABS_RSS_URLS. Pas de scraping agressif."
+        ),
+        "sources:pricepergig": (
+            "PricePerGig\n\n"
+            "Utilise l'API JSON publique PricePerGig filtree sur amazon.fr pour recuperer les HDD/SSD et leurs prix."
+        ),
+        "sources:pricepertb": (
+            "PricePerTB\n\n"
+            "Lit le tableau public PricePerTB FR pour recuperer les prix Amazon FR par To."
         ),
         "sources:ebay": (
             "eBay\n\n"
@@ -711,11 +734,13 @@ def menu_static_text(view: str) -> str:
         ),
         "sources:idealo": (
             "Idealo\n\n"
-            "Consomme uniquement des flux/alertes compatibles dans IDEALO_FEED_URLS. Pas de scraping de pages."
+            "Consomme les flux/alertes IDEALO_FEED_URLS et peut rendre les pages IDEALO_PAGE_URLS en headless si "
+            "le HTML direct ne donne pas d'offres."
         ),
         "sources:ledenicheur": (
             "leDenicheur\n\n"
-            "Consomme uniquement des flux/alertes compatibles dans LEDENICHEUR_FEED_URLS. Pas de scraping de pages."
+            "Consomme les flux/alertes LEDENICHEUR_FEED_URLS et peut rendre les pages LEDENICHEUR_PAGE_URLS en "
+            "headless si le HTML direct ne donne pas d'offres."
         ),
         "sources:keepa": (
             "Keepa\n\n"
@@ -781,7 +806,8 @@ def menu_static_text(view: str) -> str:
         "help:sources": (
             "Guide - Sources backend\n\n"
             "Les sources ne sont pas un filtre utilisateur dans Telegram. Elles sont gerees par la configuration du service: "
-            "DiskPrices, Dealabs RSS, eBay API, flux Idealo/leDenicheur/leboncoin et Keepa API.\n\n"
+            "DiskPrices, PricePerGig API, PricePerTB, Dealabs RSS, eBay API, flux/pages Idealo/leDenicheur/leboncoin "
+            "et Keepa API.\n\n"
             "Utilise /status pour voir les sources chargees."
         ),
         "help:filters": (
@@ -1569,6 +1595,8 @@ def _display_value(value: str) -> str:
         "nvme": "NVMe",
         "usb": "USB",
         "diskprices": "DiskPrices",
+        "pricepergig": "PricePerGig",
+        "pricepertb": "PricePerTB",
         "dealabs": "Dealabs",
         "ebay": "eBay",
         "leboncoin": "leboncoin",
