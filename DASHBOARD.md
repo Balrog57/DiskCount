@@ -20,6 +20,7 @@ Derniere mise a jour : 2026-04-19
 | Connecteur Keepa API | Termine v1 | Optionnel, actif seulement avec `KEEPA_API_KEY` + `KEEPA_ASINS`. |
 | Regles de notification | Termine | Seuil EUR/To, remise rolling 30 jours, cooldown, baisse significative. |
 | Bot Telegram | Termine | Commandes demandees implementees. |
+| Polling Telegram | Termine | Timeout long-poll court configurable (`TELEGRAM_POLLING_TIMEOUT_SECONDS=2`) pour limiter les conflits au redemarrage. |
 | Menu commandes Telegram | Termine | `setMyCommands` configure un menu `/` utilisateur et un menu admin pour `TELEGRAM_ADMIN_USER_IDS`. |
 | Tuiles commandes Telegram | Termine | `/start`, `/menu` et `/help` affichent une navigation inline par categories; sous-menus avec `Precedent` et `Accueil`. |
 | Guide Aide Telegram | Termine | `Aide` contient un guide complet en tuiles pour creation, alertes, capacites, prix, categories, connexions, scan/test, admin, sources backend, commandes et filtres texte. |

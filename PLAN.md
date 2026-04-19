@@ -34,6 +34,7 @@ au prix habituel observe sur 30 jours.
 - Notification immediate possible quand `max_eur_tb` est atteint, meme sans historique de 30 jours.
 - Anti-spam par cooldown d'alerte et re-notification anticipee seulement en cas de nouvelle baisse significative.
 - Notifications Telegram avec bouton direct vers l'offre et delai configurable entre messages.
+- Timeout de polling Telegram configurable pour stabiliser les redemarrages systemd.
 - Assistant de creation d'alerte 100% tuiles (commande `/create` ou bouton `Creer une alerte`) avec etapes type, etat, capacite, prix, categories, interfaces et recapitulatif.
 - Les sources sont un sujet backend : elles se configurent par variables d'environnement et connecteurs scanner, pas dans la creation/edition Telegram.
 - Presets capacite SSD multi-selection : `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, `Toute capacite`.

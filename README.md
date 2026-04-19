@@ -43,6 +43,7 @@ Environment variables:
 - `TELEGRAM_BOT_TOKEN`: token created with BotFather.
 - `TELEGRAM_ADMIN_USER_IDS`: comma-separated Telegram user IDs with admin rights. Set your own ID here on the VPS.
 - `TELEGRAM_ALLOWED_USER_IDS`: optional static comma-separated Telegram user IDs allowed to control the bot. Dynamic users are managed from Telegram and stored in SQLite.
+- `TELEGRAM_POLLING_TIMEOUT_SECONDS`: default `2`, short long-poll timeout for stable restarts.
 - `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; Debian example uses `/var/lib/diskcount/diskcount.sqlite3`.
 - `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
 - `PRICEPERGIG_ENABLED`: default `true`.

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     telegram_admin_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    telegram_polling_timeout_seconds: int = 2
 
     database_url: str = "sqlite:///./diskcount.sqlite3"
     poll_interval_seconds: int = 14400

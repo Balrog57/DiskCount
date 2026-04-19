@@ -35,7 +35,10 @@ async def run_bot(settings: Settings) -> None:
 
     scheduler_task = asyncio.create_task(delayed_scheduler_loop())
     try:
-        await dispatcher.start_polling(bot)
+        await dispatcher.start_polling(
+            bot,
+            polling_timeout=settings.telegram_polling_timeout_seconds,
+        )
     finally:
         scheduler_task.cancel()
         await bot.session.close()
