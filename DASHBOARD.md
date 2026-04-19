@@ -32,13 +32,13 @@ Derniere mise a jour : 2026-04-19
 | Assistant de creation d'alerte | Termine | Commande `/create` et bouton `Creer une alerte`; wizard 100% tuiles avec presets HDD/SSD multi-selection, prix, categories, connexions et recapitulatif. |
 | CLI kimsufi-like | Termine | `check`, `list`, `scan`, `run`, `init-db`. |
 | Deploiement Debian | Termine | Fichiers `deploy/diskcount.service` et `deploy/diskcount.env.example`. |
-| Deploiement server | Termine | Service `diskcount` actif sur `<SERVER_IP>`; bot `@DiskCount_bot` en polling. |
+| Deploiement LXC Proxmox 105 | Termine | Service `diskcount` actif sur `<LOCAL_PRODUCTION_VM>`; bot `@DiskCount_bot` en polling. |
 | Cadence scanner | Termine | `POLL_INTERVAL_SECONDS=14400` par defaut, avec 30s de delai initial pour stabiliser le polling Telegram. |
 | Tests | Termine | 37 tests passent. |
 | Documentation | En cours | README, plan projet et dashboard presents. |
 | Workflow projet | Actif | Toute evolution doit mettre a jour les `.md` concernes et etre poussee sur le repo prive GitHub. |
 | Menage depot | Termine | Artefacts locaux non suivis supprimes; `.gitignore` couvre archives zip, backups et exports temporaires. |
-| Acces VPS SSH server | Debloque | Seule l'IP client `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SSH_PORT>/tcp`; fail2ban reste actif pour les autres IPs. |
+| Server DiskCount | Supprime | Installation accidentelle retiree le 2026-04-19: service, fichiers, env, base, utilisateur et processus absents. |
 | Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
 | Acces VPS SSH server | Debloque | `<YOUR_CLIENT_IP>` est en ignoreip fail2ban et autorisee UFW sur `<SERVER_IP>:<SSH_PORT>`. |
 
@@ -61,14 +61,14 @@ Top live liste: 16 To a 18.69 EUR/To, 18 To a 19.25 EUR/To, 22 To a 19.50 EUR/To
 ```
 
 ```text
-server systemd
+LXC 105 systemd
 Resultat: diskcount.service active
 Bot: @DiskCount_bot
 Dernier scan: fetched=435 matched=0 notified=0 errors=0
 Migration SQLite: colonne alerts.owner_user_id presente
 Menu inline deploye: service actif apres redemarrage, dernier scan fetched=432 matched=0 notified=0 errors=0
 Edition alertes avancee deployee: service actif, dernier scan fetched=432 matched=0 notified=0 errors=0
-Assistant creation alerte deployee: commande `/create` fonctionnelle sur server
+Assistant creation alerte deployee: commande `/create` fonctionnelle sur LXC 105
 UX tuiles kimsufi-like: wizard creation et edition alertes avec presets capacite/prix, categories, connexions, suppression confirmee; admin ajouter/revoquer/reactiver en tuiles
 Deploiement UX tuiles 2026-04-13: commit 4e95fc5 extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=419 matched=0 notified=0 errors=0
 Test pytest distant: non execute, le venv de production ne contient pas pytest
@@ -76,8 +76,8 @@ Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `ca
 Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
 Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
 Deploiement Guide Aide 2026-04-13: commit 7889a5e extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=429 matched=0 notified=0 errors=0
-Deploiement sources prix 2026-04-19: commit 028186a extrait dans /opt/diskcount sur server, service systemd active, compileall distant OK, Playwright/Chromium installe, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1049 matched=0 notified=0 errors=0
-Note polling 2026-04-19: server alterne encore des `TelegramConflictError` et `Connection established`; aucun autre process DiskCount/Python bot trouve sur server, server ou server.
+Deploiement sources prix 2026-04-19: code `main` extrait dans /opt/diskcount sur LXC 105 (`<LOCAL_PRODUCTION_VM>`), service systemd actif, compileall distant OK, Playwright/Chromium installe pour l'utilisateur `diskcount`, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1045 matched=2 notified=2 errors=0
+Menage server 2026-04-19: service, unit systemd, `/opt/diskcount`, `/var/lib/diskcount`, `/etc/diskcount.env`, utilisateur `diskcount` et processus associes supprimes de server.
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
@@ -86,10 +86,10 @@ Telegram command menu
 Default: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status
 Admin 123456789: start, menu, create, help, add, alerts, pause, resume, delete, set_max_price, set_capacity, test, status, users, allow, revoke
 Tiles: /start, /menu et /help affichent des tuiles inline; actions Creer une alerte, Mes alertes, Scanner/Test, Aide, Admin; sous-menus avec Precedent et Accueil
-Verification Bot API server: OK
+Verification Bot API LXC 105: OK
 Edition alertes: ouverture de chaque alerte depuis Mes alertes; ecrans type, etat, capacites multi-selection, prix, categories DiskPrices, connexions, pause/reprise, suppression confirmee
-Verification Bot API server apres edition avancee: set_capacity present pour default et admin
-Verification Bot API server apres UX tuiles: create present pour default et admin
+Verification Bot API LXC 105 apres edition avancee: set_capacity present pour default et admin
+Verification Bot API LXC 105 apres UX tuiles: create present pour default et admin
 Menage depot 2026-04-13: suppression des artefacts non suivis `bot_clean.py`, `diskcount/bot.py.backup`, archives zip et dossier `diskcount-deploy`; ajout des exclusions correspondantes dans `.gitignore`
 ```
 

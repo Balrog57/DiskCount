@@ -278,6 +278,7 @@ ssh -i $env:USERPROFILE\.ssh\deployment_key -p <SSH_PORT> debian@<SERVER_IP>
 - `diskcount list --min-tb 16 --max-eur-tb 20 --media rotational`: print the best current offers sorted by EUR/TB.
 - `diskcount run`: start Telegram polling and the background scheduler.
 
-Current production note: server was updated on 2026-04-19 to commit `028186a`; the service is active, scans every
-4 hours, and the first deployed scan fetched 1049 offers with 0 source errors. If Telegram logs intermittent
-`TelegramConflictError`, verify no second bot poller is running before changing the token.
+Current production note: the active bot is on Proxmox LXC `105`, IP `<LOCAL_PRODUCTION_VM>`, hosted by `<LOCAL_PROXMOX_HOST>`.
+It was updated on 2026-04-19 from `main`; `diskcount.service` is active, scans every 4 hours, and the first scan
+after deployment fetched 1045 offers from `diskprices`, `pricepergig`, and `pricepertb` with 0 source errors.
+The accidental DiskCount deployment on server was fully removed on 2026-04-19.
