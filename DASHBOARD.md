@@ -76,6 +76,8 @@ Correction UX capacites/sources 2026-04-13: capacites en multi-selection via `ca
 Deploiement correction capacites/sources 2026-04-13: commit f9ebe0c extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, migration `capacity_presets_json=True`, dernier scan fetched=420 matched=0 notified=0 errors=0
 Guide Aide 2026-04-13: ajout des tuiles de documentation pour chaque fonction principale du bot
 Deploiement Guide Aide 2026-04-13: commit 7889a5e extrait dans /opt/diskcount, service redemarre, compileall distant OK, systemd active, dernier scan fetched=429 matched=0 notified=0 errors=0
+Deploiement sources prix 2026-04-19: commit 028186a extrait dans /opt/diskcount sur server, service systemd active, compileall distant OK, Playwright/Chromium installe, env cadence `POLL_INTERVAL_SECONDS=14400`, premier scan fetched=1049 matched=0 notified=0 errors=0
+Note polling 2026-04-19: server alterne encore des `TelegramConflictError` et `Connection established`; aucun autre process DiskCount/Python bot trouve sur server, server ou server.
 Migration SQLite: colonnes alerts.drive_categories_json, alerts.interfaces_json, alerts.capacity_presets_json, products.drive_category, products.interfaces_json presentes
 ```
 
