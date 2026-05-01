@@ -13,6 +13,10 @@ dist/
 build/
 *.zip
 *.backup
-bot_clean.py
-GEMINI.md
-diskcount-deploy/
+deploy/
+tests/
+*.conf
+wg0.conf
+_d*.sh
+_recover*.py
+.seed.sql
