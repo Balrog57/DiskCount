@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	capacityRE = regexp.MustCompile(`(?i)(?P<value>\d+(?:[,.]\d+)?)\s*(?P<unit>t[bo]|g[bo]|tb|gb)\b`)
+	capacityRE = regexp.MustCompile(`(?i)(?P<value>\d+(?:[,.]\d+)?)\s*(?P<unit>t[bo]|g[bo]|m[bo]|tb|gb|mb)\b`)
 	euroRE     = regexp.MustCompile(`(?i)(?:^|[€]\s*)(?P<prefix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)|(?P<suffix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)\s*[€]`)
 	asinRE     = regexp.MustCompile(`(?i)(?:/dp/|/gp/product/|/product/)(?P<asin>[A-Z0-9]{10})(?:[/?#]|$)`)
 )
@@ -51,6 +51,10 @@ func ParsePriceEUR(text string) (float64, error) {
 	if text == "" {
 		return 0, nil
 	}
+	folded := asciiFold(text)
+	if containsAny(folded, "/mois", "mensuel", "par mois", "month", "monthly") {
+		return 0, nil
+	}
 	match := euroRE.FindStringSubmatch(text)
 	if match != nil {
 		prefixIdx := euroRE.SubexpIndex("prefix")
@@ -87,6 +91,9 @@ func ParseCapacityTB(text string) (float64, error) {
 	if err != nil || value == 0 {
 		return 0, err
 	}
+	if strings.HasPrefix(unitStr, "m") {
+		return value / 1000_000.0, nil
+	}
 	if strings.HasPrefix(unitStr, "g") {
 		return value / 1000.0, nil
 	}
@@ -95,7 +102,7 @@ func ParseCapacityTB(text string) (float64, error) {
 
 func NormalizeCondition(text string) *domain.Condition {
 	folded := asciiFold(text)
-	usedWords := []string{"used", "occasion", "reconditionne", "refurbished"}
+	usedWords := []string{"used", "occasion", "reconditionne", "reconditionne", "refurbished", "renewed", "seconde main"}
 	newWords := []string{"new", "neuf", "neuve"}
 	for _, w := range usedWords {
 		if strings.Contains(folded, w) {
@@ -114,8 +121,8 @@ func NormalizeCondition(text string) *domain.Condition {
 
 func NormalizeMediaType(text string) *domain.MediaType {
 	folded := asciiFold(text)
-	ssdWords := []string{"ssd", "nvme", "solid state"}
-	hddWords := []string{"hdd", "disque dur", "hard drive", "7200rpm", "5400rpm", "3.5", "2.5"}
+	ssdWords := []string{"ssd", "nvme", "solid state", "nand", "tlc", "qlc", "mlc", "m2", "m 2", "pcie", "pci-e", "u2", "u 2", "u3", "u 3"}
+	hddWords := []string{"hdd", "disque dur", "hard drive", "hard disk", "7200rpm", "5400rpm", "7200 tr", "5400 tr"}
 	for _, w := range ssdWords {
 		if strings.Contains(folded, w) {
 			m := domain.MediaTypeSolidState
@@ -138,14 +145,14 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 	compact = strings.ReplaceAll(compact, "-", " ")
 
 	isExternal := false
-	for _, w := range []string{"external", "externe", "usb"} {
+	for _, w := range []string{"external", "externe", "portable", "usb", "boitier"} {
 		if strings.Contains(compact, w) {
 			isExternal = true
 			break
 		}
 	}
 	isInternal := false
-	for _, w := range []string{"internal", "interne", "m2", "m 2", "u2", "u 2", "u3", "u 3"} {
+	for _, w := range []string{"internal", "interne", "m2", "m 2", "u2", "u 2", "u3", "u 3", "sata", "sas", "nas", "surveillance"} {
 		if strings.Contains(compact, w) {
 			isInternal = true
 			break
@@ -171,6 +178,13 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 				return &c
 			}
 		}
+		if containsAny(compact, "25", "2 5", "2,5", "25 inch", "25 pouces") && !containsAny(compact, "35", "3 5", "3,5") {
+			c := domain.DriveCategoryInternalSSD
+			if isExternal {
+				c = domain.DriveCategoryExternalSSD
+			}
+			return &c
+		}
 		if isExternal {
 			c := domain.DriveCategoryExternalSSD
 			return &c
@@ -190,15 +204,17 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 		c := domain.DriveCategoryInternalSAS
 		return &c
 	}
-	if isExternal && strings.Contains(compact, "25") {
+	is25 := containsAny(compact, "25", "2 5", "2,5", "25 inch", "25 pouces")
+	is35 := containsAny(compact, "35", "3 5", "3,5", "35 inch", "35 pouces")
+	if isExternal && is25 && !is35 {
 		c := domain.DriveCategoryExternal2_5
 		return &c
 	}
-	if isExternal {
+	if isExternal && (is35 || !is25) {
 		c := domain.DriveCategoryExternal3_5
 		return &c
 	}
-	if isInternal && strings.Contains(compact, "25") {
+	if isInternal && is25 && !is35 {
 		c := domain.DriveCategoryInternal2_5
 		return &c
 	}

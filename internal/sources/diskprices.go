@@ -13,22 +13,40 @@ import (
 
 func init() {
 	Register(func(r *Registry) Source {
-		return &DiskPrices{http: r.HTTP(), url: r.Config().DiskPricesURL}
+		cfg := r.Config()
+		return &DiskPrices{
+			http:   r.HTTP(),
+			byparr: r.Byparr(),
+			url:    cfg.DiskPricesURL,
+			useFB:  cfg.HeadlessFallback,
+		}
 	})
 }
 
 type DiskPrices struct {
-	http *scraper.HTTPFetcher
-	url  string
+	http   *scraper.HTTPFetcher
+	byparr *scraper.ByparrClient
+	url    string
+	useFB  bool
 }
 
 func (s *DiskPrices) Name() string { return "diskprices" }
 
 func (s *DiskPrices) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	html, err := s.http.Get(ctx, s.url)
+	if err != nil && s.useFB && s.byparr != nil {
+		if ses, e2 := s.byparr.GetPage(ctx, s.url); e2 == nil {
+			html = ses.HTML
+			err = nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
+	return parseDiskPrices(html)
+}
+
+func parseDiskPrices(html string) ([]domain.Deal, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil, err

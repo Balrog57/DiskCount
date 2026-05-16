@@ -1,23 +1,57 @@
 package config
 
 import (
-	"fmt"
+	"bufio"
+	"os"
+	"strconv"
 	"strings"
-	"sync"
-
-	"github.com/spf13/viper"
 )
 
-var (
-	instance *Config
-	once     sync.Once
-)
+type SettingMeta struct {
+	Key             string
+	Label           string
+	Secret          bool
+	RestartRequired bool
+	Default         string
+}
+
+var AppSettings = []SettingMeta{
+	{"TELEGRAM_BOT_TOKEN", "Telegram bot token", true, true, ""},
+	{"REQUEST_TIMEOUT_SECONDS", "Request timeout seconds", false, true, "30"},
+	{"USER_AGENT", "HTTP user agent", false, true, "DiskCountBot/2.0"},
+	{"DISKPRICES_URL", "DiskPrices URL", false, true, "https://diskprices.com/?locale=fr"},
+	{"PRICEPERGIG_ENABLED", "PricePerGig enabled", false, true, "true"},
+	{"PRICEPERGIG_API_URL", "PricePerGig API URL", false, true, "https://api.pricepergig.com/drives"},
+	{"PRICEPERGIG_MARKET", "PricePerGig market", false, true, "amazon.fr"},
+	{"PRICEPERTB_URLS", "PricePerTB URLs", false, true, "https://pricepertb.com/fr"},
+	{"DEALABS_RSS_URLS", "Dealabs RSS URLs", false, true, ""},
+	{"IDEALO_FEED_URLS", "Idealo feed URLs", false, true, ""},
+	{"IDEALO_PAGE_URLS", "Idealo page URLs", false, true, ""},
+	{"LEDENICHEUR_FEED_URLS", "leDenicheur feed URLs", false, true, ""},
+	{"LEDENICHEUR_PAGE_URLS", "leDenicheur page URLs", false, true, ""},
+	{"LEBONCOIN_FEED_URLS", "leboncoin feed URLs", false, true, ""},
+	{"KEEPA_API_KEY", "Keepa API key", true, true, ""},
+	{"KEEPA_ASINS", "Keepa ASINs", false, true, ""},
+	{"EBAY_CLIENT_ID", "eBay client ID", false, true, ""},
+	{"EBAY_CLIENT_SECRET", "eBay client secret", true, true, ""},
+	{"EBAY_SEARCH_QUERIES", "eBay search queries", false, true, ""},
+	{"SOURCE_HEADLESS_FALLBACK", "Headless fallback", false, true, "true"},
+	{"BYPARR_URL", "Byparr URL", false, true, "http://byparr:8191"},
+	{"NOTIFICATION_PRICE_DROP_PCT", "Notification price drop percent", false, true, "2.0"},
+	{"TELEGRAM_MESSAGE_DELAY_SECONDS", "Telegram message delay seconds", false, true, "0.5"},
+	{"SCRAPE_INTERVAL_CRON", "Scan interval", false, true, "@every 4h"},
+	{"AMAZON_TLDS", "Amazon TLDs", false, true, "fr,de"},
+	{"LDLC_ENABLED", "LDLC enabled", false, true, "true"},
+	{"ALTERNATE_TLDS", "Alternate TLDs", false, true, "fr,de"},
+	{"GEIZHALS_ENABLED", "Geizhals enabled", false, true, "true"},
+	{"RDC_ENABLED", "Rue du Commerce enabled", false, true, "true"},
+	{"PCPART_ENABLED", "PCPartPicker enabled", false, true, "true"},
+}
 
 type Config struct {
 	TelegramBotToken         string
-	TelegramAdminUserIDs     []int64
 	DatabaseURL              string
-	PollIntervalSeconds      int
+	WebAdminAddr             string
 	RequestTimeoutSeconds    float64
 	UserAgent                string
 	DiskPricesURL            string
@@ -49,66 +83,161 @@ type Config struct {
 	PCPartEnabled            bool
 }
 
-func Get() *Config {
-	once.Do(func() { instance = load() })
-	return instance
+func LoadBootstrap() *Config {
+	return LoadWithAppValues(nil)
 }
 
-func load() *Config {
-	v := viper.New()
-	v.SetConfigName(".env")
-	v.SetConfigType("env")
-	v.AddConfigPath(".")
-	_ = v.ReadInConfig()
-	v.AutomaticEnv()
+func LoadWithAppValues(appValues map[string]string) *Config {
+	values := DefaultValues()
+	for k, v := range ReadEnvFile(".env") {
+		values[k] = v
+	}
+	for _, env := range os.Environ() {
+		k, v, ok := strings.Cut(env, "=")
+		if ok {
+			values[k] = v
+		}
+	}
+	for k, v := range appValues {
+		values[k] = v
+	}
+
 	return &Config{
-		TelegramBotToken:         getStr(v, "TELEGRAM_BOT_TOKEN"),
-		TelegramAdminUserIDs:     splitI64(getStr(v, "TELEGRAM_ADMIN_USER_IDS")),
-		DatabaseURL:              getStr(v, "DATABASE_URL", "postgres://diskcount:diskcount@localhost:5432/diskcount"),
-		RequestTimeoutSeconds:    getFl(v, "REQUEST_TIMEOUT_SECONDS", 30),
-		UserAgent:                getStr(v, "USER_AGENT", "DiskCountBot/2.0"),
-		DiskPricesURL:            getStr(v, "DISKPRICES_URL", "https://diskprices.com/?locale=fr"),
-		PricePerGigEnabled:       v.GetBool("PRICEPERGIG_ENABLED"),
-		PricePerGigAPIURL:        getStr(v, "PRICEPERGIG_API_URL", "https://api.pricepergig.com/drives"),
-		PricePerGigMarket:        getStr(v, "PRICEPERGIG_MARKET", "amazon.fr"),
-		PricePerTBURLs:           splitCSV(getStr(v, "PRICEPERTB_URLS", "https://pricepertb.com/fr")),
-		DealabsRSSURLs:           splitCSV(getStr(v, "DEALABS_RSS_URLS")),
-		IdealoFeedURLs:           splitCSV(getStr(v, "IDEALO_FEED_URLS")),
-		IdealoPageURLs:           splitCSV(getStr(v, "IDEALO_PAGE_URLS")),
-		LeDenicheurFeedURLs:      splitCSV(getStr(v, "LEDENICHEUR_FEED_URLS")),
-		LeDenicheurPageURLs:      splitCSV(getStr(v, "LEDENICHEUR_PAGE_URLS")),
-		LeBonCoinFeedURLs:        splitCSV(getStr(v, "LEBONCOIN_FEED_URLS")),
-		KeepaAPIKey:              getStr(v, "KEEPA_API_KEY"),
-		KeepaASINs:               splitCSV(getStr(v, "KEEPA_ASINS")),
-		EbayClientID:             getStr(v, "EBAY_CLIENT_ID"),
-		EbayClientSecret:         getStr(v, "EBAY_CLIENT_SECRET"),
-		EbaySearchQueries:        splitCSV(getStr(v, "EBAY_SEARCH_QUERIES")),
-		HeadlessFallback:         v.GetBool("SOURCE_HEADLESS_FALLBACK"),
-		ByparrURL:                getStr(v, "BYPARR_URL", "http://byparr:8191"),
-		NotificationPriceDropPct: getFl(v, "NOTIFICATION_PRICE_DROP_PCT", 2),
-		TelegramMessageDelayS:    getFl(v, "TELEGRAM_MESSAGE_DELAY_SECONDS", 0.5),
-		ScrapeIntervalCron:       getStr(v, "SCRAPE_INTERVAL_CRON", "@every 4h"),
-		AmazonTLDs:               splitCSV(getStr(v, "AMAZON_TLDS")),
-		LDLCEnabled:              v.GetBool("LDLC_ENABLED"),
-		AlternateTLDs:            splitCSV(getStr(v, "ALTERNATE_TLDS")),
-		GeizhalsEnabled:          v.GetBool("GEIZHALS_ENABLED"),
-		RDCEnabled:               v.GetBool("RDC_ENABLED"),
-		PCPartEnabled:            v.GetBool("PCPART_ENABLED"),
+		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
+		DatabaseURL:           value(values, "DATABASE_URL", "postgres://diskcount:diskcount@localhost:5432/diskcount"),
+		WebAdminAddr:          value(values, "WEB_ADMIN_ADDR", "0.0.0.0:47832"),
+		RequestTimeoutSeconds: parseFloat(values["REQUEST_TIMEOUT_SECONDS"], 30),
+		UserAgent:             value(values, "USER_AGENT", "DiskCountBot/2.0"),
+		DiskPricesURL:         values["DISKPRICES_URL"],
+		PricePerGigEnabled:    parseBool(values["PRICEPERGIG_ENABLED"], true),
+		PricePerGigAPIURL:     values["PRICEPERGIG_API_URL"],
+		PricePerGigMarket:     value(values, "PRICEPERGIG_MARKET", "amazon.fr"),
+		PricePerTBURLs:        splitCSV(values["PRICEPERTB_URLS"]),
+		DealabsRSSURLs:        splitCSV(values["DEALABS_RSS_URLS"]),
+		IdealoFeedURLs:        splitCSV(values["IDEALO_FEED_URLS"]),
+		IdealoPageURLs:        splitCSV(values["IDEALO_PAGE_URLS"]),
+		LeDenicheurFeedURLs:   splitCSV(values["LEDENICHEUR_FEED_URLS"]),
+		LeDenicheurPageURLs:   splitCSV(values["LEDENICHEUR_PAGE_URLS"]),
+		LeBonCoinFeedURLs:     splitCSV(values["LEBONCOIN_FEED_URLS"]),
+		KeepaAPIKey:           values["KEEPA_API_KEY"],
+		KeepaASINs:            splitCSV(values["KEEPA_ASINS"]),
+		EbayClientID:          values["EBAY_CLIENT_ID"],
+		EbayClientSecret:      values["EBAY_CLIENT_SECRET"],
+		EbaySearchQueries:     splitCSV(values["EBAY_SEARCH_QUERIES"]),
+		HeadlessFallback:      parseBool(values["SOURCE_HEADLESS_FALLBACK"], true),
+		ByparrURL:             value(values, "BYPARR_URL", "http://byparr:8191"),
+		NotificationPriceDropPct: parseFloat(
+			values["NOTIFICATION_PRICE_DROP_PCT"], 2,
+		),
+		TelegramMessageDelayS: parseFloat(
+			values["TELEGRAM_MESSAGE_DELAY_SECONDS"], 0.5,
+		),
+		ScrapeIntervalCron: value(values, "SCRAPE_INTERVAL_CRON", "@every 4h"),
+		AmazonTLDs:         splitCSV(values["AMAZON_TLDS"]),
+		LDLCEnabled:        parseBool(values["LDLC_ENABLED"], true),
+		AlternateTLDs:      splitCSV(values["ALTERNATE_TLDS"]),
+		GeizhalsEnabled:    parseBool(values["GEIZHALS_ENABLED"], true),
+		RDCEnabled:         parseBool(values["RDC_ENABLED"], true),
+		PCPartEnabled:      parseBool(values["PCPART_ENABLED"], true),
 	}
 }
 
-func getStr(v *viper.Viper, key string, fb ...string) string {
-	val := v.GetString(key)
-	if val == "" && len(fb) > 0 {
-		return fb[0]
+func DefaultValues() map[string]string {
+	values := make(map[string]string, len(AppSettings))
+	for _, meta := range AppSettings {
+		values[meta.Key] = meta.Default
+	}
+	return values
+}
+
+func ImportableEnvValues() map[string]string {
+	values := make(map[string]string)
+	for k, v := range ReadEnvFile(".env") {
+		if IsAppSetting(k) {
+			values[k] = v
+		}
+	}
+	for _, env := range os.Environ() {
+		k, v, ok := strings.Cut(env, "=")
+		if ok && IsAppSetting(k) {
+			values[k] = v
+		}
+	}
+	return values
+}
+
+func ReadEnvFile(path string) map[string]string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	values := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
+		val = strings.Trim(val, `"'`)
+		if key != "" {
+			values[key] = val
+		}
+	}
+	return values
+}
+
+func IsAppSetting(key string) bool {
+	for _, meta := range AppSettings {
+		if meta.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func SecretKeys() map[string]bool {
+	out := make(map[string]bool)
+	for _, meta := range AppSettings {
+		if meta.Secret {
+			out[meta.Key] = true
+		}
+	}
+	return out
+}
+
+func value(values map[string]string, key, fallback string) string {
+	if val, ok := values[key]; ok {
+		return val
+	}
+	return fallback
+}
+
+func parseFloat(raw string, fallback float64) float64 {
+	if raw == "" {
+		return fallback
+	}
+	val, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
 	}
 	return val
 }
 
-func getFl(v *viper.Viper, key string, fb float64) float64 {
-	val := v.GetFloat64(key)
-	if val == 0 {
-		return fb
+func parseBool(raw string, fallback bool) bool {
+	if raw == "" {
+		return fallback
+	}
+	val, err := strconv.ParseBool(raw)
+	if err != nil {
+		return fallback
 	}
 	return val
 }
@@ -122,18 +251,6 @@ func splitCSV(s string) []string {
 		p = strings.TrimSpace(p)
 		if p != "" {
 			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func splitI64(s string) []int64 {
-	parts := splitCSV(s)
-	out := make([]int64, 0, len(parts))
-	for _, p := range parts {
-		var n int64
-		if _, err := fmt.Sscanf(p, "%d", &n); err == nil && n != 0 {
-			out = append(out, n)
 		}
 	}
 	return out

@@ -51,6 +51,13 @@ CREATE TABLE IF NOT EXISTS products (
     technology VARCHAR(120),
     drive_category VARCHAR(40),
     interfaces JSONB NOT NULL DEFAULT '[]',
+    quality_score INTEGER NOT NULL DEFAULT 0,
+    classification_source VARCHAR(40),
+    canonical_url TEXT,
+    merchant VARCHAR(120),
+    brand VARCHAR(120),
+    model VARCHAR(180),
+    raw_title TEXT,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -63,6 +70,7 @@ CREATE TABLE IF NOT EXISTS price_observations (
     observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     price_eur NUMERIC(10,2) NOT NULL,
     price_per_tb NUMERIC(10,2) NOT NULL,
+    quality_score INTEGER NOT NULL DEFAULT 0,
     raw_json JSONB NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_obs_pid ON price_observations(product_id);
@@ -83,3 +91,22 @@ CREATE TABLE IF NOT EXISTS notifications (
 CREATE INDEX IF NOT EXISTS idx_notif_aid ON notifications(alert_id);
 CREATE INDEX IF NOT EXISTS idx_notif_pid ON notifications(product_id);
 CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(sent_at);
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS rejected_deals (
+    id SERIAL PRIMARY KEY,
+    source VARCHAR(40) NOT NULL,
+    reason VARCHAR(80) NOT NULL,
+    detail TEXT,
+    title TEXT,
+    url TEXT,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    raw_json JSONB NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_rejected_deals_source ON rejected_deals(source);
+CREATE INDEX IF NOT EXISTS idx_rejected_deals_observed ON rejected_deals(observed_at);

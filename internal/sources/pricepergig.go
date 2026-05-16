@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -37,13 +38,19 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 
 	var drives []struct {
 		ID         json.Number `json:"id"`
+		Name       string      `json:"name"`
 		Title      string      `json:"title"`
-		URL        string      `json:"affiliate_url"`
+		URL        string      `json:"url"`
+		Affiliate  string      `json:"affiliate_url"`
 		Price      float64     `json:"price"`
+		PricePerTB float64     `json:"price_per_tb"`
 		CapacityGB float64     `json:"capacity_gb"`
 		Technology string      `json:"technology"`
+		Interface  string      `json:"interface"`
 		FormFactor string      `json:"form_factor"`
 		ASIN       string      `json:"asin"`
+		Brand      string      `json:"brand"`
+		Model      string      `json:"model"`
 		Condition  string      `json:"condition"`
 	}
 	if err := json.Unmarshal([]byte(html), &drives); err != nil {
@@ -67,18 +74,44 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		} else if id := d.ID.String(); id != "" {
 			extID = &id
 		}
+		title := strings.TrimSpace(firstNonEmpty(d.Name, d.Title))
+		if title == "" {
+			title = strings.TrimSpace(strings.Join([]string{d.Technology, d.FormFactor, fmt.Sprintf("%.0f Go", d.CapacityGB)}, " "))
+		}
+		url := strings.TrimSpace(firstNonEmpty(d.URL, d.Affiliate))
+		if url == "" && d.ASIN != "" {
+			url = "https://www.amazon.fr/dp/" + d.ASIN
+		}
+		classText := strings.Join([]string{title, d.Technology, d.FormFactor, d.Interface}, " ")
+		media := normalMedia(classText)
+		dc := parsing.NormalizeDriveCategory(classText, media)
+		ifaces := parsing.NormalizeInterfaces(classText)
+		if d.PricePerTB > 0 {
+			pt = d.PricePerTB
+		}
 		deals = append(deals, domain.Deal{
-			Source: "pricepergig", Title: d.Title, URL: d.URL,
+			Source: "pricepergig", Title: title, URL: url,
 			PriceEUR: round2(d.Price), PricePerTB: round2(pt), CapacityTB: round2(tb),
 			Condition:  &cond,
-			MediaType:  normalMedia(d.Technology),
+			MediaType:  media,
 			ExternalID: extID,
 			FormFactor: strPtr(d.FormFactor), Technology: strPtr(d.Technology),
+			DriveCategory: dc, Interfaces: ifaces,
+			Brand: strPtr(d.Brand), Model: strPtr(d.Model),
 			ObservedAt: domain.UTCNow(),
 		})
 	}
 	slog.Debug("pricepergig", "deals", len(deals))
 	return deals, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func normalMedia(text string) *domain.MediaType {

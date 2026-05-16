@@ -2,20 +2,26 @@ package scanner
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/normalize"
 	"github.com/Balrog57/DiskCount/internal/notifier"
 	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/sources"
-	"log/slog"
-	"strings"
-	"time"
 )
 
 type ScanReport struct {
-	Fetched, Matched, Notified, DryRunNotified int
-	Errors                                     []string
+	Fetched, Accepted, Rejected, Matched, Notified, DryRunNotified int
+	Errors                                                         []string
+	RejectReasons                                                  map[string]int
+	StartedAt, FinishedAt                                          time.Time
+	DryRun                                                         bool
 }
 
 type Scanner struct {
@@ -23,16 +29,38 @@ type Scanner struct {
 	db   *db.DB
 	srcs []sources.Source
 	ntf  *notifier.TelegramNotifier
+	mu   sync.RWMutex
+	last *ScanReport
 }
 
 func New(cfg *config.Config, dbase *db.DB, srcs []sources.Source, n *notifier.TelegramNotifier) *Scanner {
 	return &Scanner{cfg: cfg, db: dbase, srcs: srcs, ntf: n}
 }
 func (s *Scanner) Sources() []sources.Source { return s.srcs }
+func (s *Scanner) LastReport() *ScanReport {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.last == nil {
+		return nil
+	}
+	cp := *s.last
+	cp.Errors = append([]string(nil), s.last.Errors...)
+	cp.RejectReasons = make(map[string]int, len(s.last.RejectReasons))
+	for k, v := range s.last.RejectReasons {
+		cp.RejectReasons[k] = v
+	}
+	return &cp
+}
 
 func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 	now := time.Now().UTC()
-	r := &ScanReport{}
+	r := &ScanReport{StartedAt: now, DryRun: dryRun, RejectReasons: make(map[string]int)}
+	defer func() {
+		r.FinishedAt = time.Now().UTC()
+		s.mu.Lock()
+		s.last = r
+		s.mu.Unlock()
+	}()
 	for _, src := range s.srcs {
 		ctx2, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.RequestTimeoutSeconds)*time.Second)
 		deals, err := src.Fetch(ctx2)
@@ -52,11 +80,34 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 }
 
 func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) {
-	alerts, _ := s.db.ListAlerts(ctx, true)
-	for _, deal := range deals {
-		base, _ := s.db.BaselinePricePerTB(ctx, deal.ProductID(), now, 30)
-		if !dryRun {
+	var alerts []db.Alert
+	if s.db != nil {
+		alerts, _ = s.db.ListAlerts(ctx, true)
+	}
+	for _, raw := range deals {
+		res := normalize.Deal(raw)
+		if res.Reject != nil {
+			r.Rejected++
+			r.RejectReasons[res.Reject.Reason]++
+			if !dryRun && s.db != nil {
+				_ = s.db.RecordRejectedDeal(ctx, res.Deal, res.Reject.Reason, res.Reject.Detail)
+			}
+			continue
+		}
+		deal := res.Deal
+		r.Accepted++
+		var base *float64
+		if s.db != nil {
+			base, _ = s.db.BaselinePricePerTB(ctx, deal.ProductID(), now, 30)
+		}
+		if !dryRun && s.db != nil {
 			s.db.UpsertProduct(ctx, deal)
+		}
+		if !normalize.IsAlertQuality(deal) {
+			if !dryRun && s.db != nil {
+				s.db.RecordObservation(ctx, deal)
+			}
+			continue
 		}
 		for i := range alerts {
 			a := &alerts[i]
@@ -80,7 +131,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			s.db.RecordNotification(ctx, a, deal, dec.Reason, dec.DiscountPct)
 			r.Notified++
 		}
-		if !dryRun {
+		if !dryRun && s.db != nil {
 			s.db.RecordObservation(ctx, deal)
 		}
 	}
@@ -88,8 +139,6 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 
 func ScheduleLoop(ctx context.Context, s *Scanner, cron string) error {
 	for {
-		r := s.RunOnce(ctx, false)
-		slog.Info("scan", "fetched", r.Fetched, "matched", r.Matched, "notified", r.Notified, "errors", len(r.Errors))
 		d, err := parDur(cron)
 		if err != nil {
 			return err
@@ -99,6 +148,8 @@ func ScheduleLoop(ctx context.Context, s *Scanner, cron string) error {
 			return ctx.Err()
 		case <-time.After(d):
 		}
+		r := s.RunOnce(ctx, false)
+		slog.Info("scan", "fetched", r.Fetched, "matched", r.Matched, "notified", r.Notified, "errors", len(r.Errors))
 	}
 }
 

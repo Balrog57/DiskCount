@@ -48,21 +48,28 @@ const (
 )
 
 type Deal struct {
-	Source        string
-	Title         string
-	URL           string
-	PriceEUR      float64
-	PricePerTB    float64
-	CapacityTB    float64
-	Condition     *Condition
-	MediaType     *MediaType
-	ExternalID    *string
-	FormFactor    *string
-	Technology    *string
-	DriveCategory *DriveCategory
-	Interfaces    []DriveInterface
-	ObservedAt    time.Time
-	Raw           map[string]interface{}
+	Source               string
+	Title                string
+	URL                  string
+	CanonicalURL         string
+	PriceEUR             float64
+	PricePerTB           float64
+	CapacityTB           float64
+	Condition            *Condition
+	MediaType            *MediaType
+	ExternalID           *string
+	FormFactor           *string
+	Technology           *string
+	DriveCategory        *DriveCategory
+	Interfaces           []DriveInterface
+	ObservedAt           time.Time
+	Raw                  map[string]interface{}
+	QualityScore         int
+	ClassificationSource string
+	Merchant             *string
+	Brand                *string
+	Model                *string
+	RawTitle             string
 }
 
 type NotificationDecision struct {
@@ -101,7 +108,15 @@ func (d Deal) ProductID() string {
 	if d.ExternalID != nil && *d.ExternalID != "" {
 		return strings.ToLower(fmt.Sprintf("%s:%s", d.Source, *d.ExternalID))
 	}
-	identity := canonicalURL(d.URL)
+	identity := d.CanonicalURL
+	if identity == "" {
+		identity = canonicalURL(d.URL)
+	}
+	if identity == "" {
+		identity = strings.ToLower(fmt.Sprintf("%s:%s:%.3f:%.2f", d.Source, strings.TrimSpace(d.Title), d.CapacityTB, d.PriceEUR))
+	}
 	digest := sha256.Sum256([]byte(identity))
 	return fmt.Sprintf("%s:url:%x", d.Source, digest[:12])
 }
+
+func CanonicalURL(rawURL string) string { return canonicalURL(rawURL) }

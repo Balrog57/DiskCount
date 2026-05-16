@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
@@ -44,13 +45,13 @@ func (s *PricePerTB) Fetch(ctx context.Context) ([]domain.Deal, error) {
 			slog.Warn("pricepertb", "url", u, "err", err)
 			continue
 		}
-		all = append(all, parsePTB(html)...)
+		all = append(all, parsePTB(html, u)...)
 	}
 	slog.Debug("pricepertb", "deals", len(all))
 	return all, nil
 }
 
-func parsePTB(html string) []domain.Deal {
+func parsePTB(html, baseURL string) []domain.Deal {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
 		return nil
@@ -67,30 +68,59 @@ func parsePTB(html string) []domain.Deal {
 			return
 		}
 
-		priceEUR, err := parseFloatClean(texts[0])
+		priceEUR, err := parseFloatClean(textAt(texts, 2))
 		if err != nil || priceEUR <= 0 {
 			return
 		}
-		capText := texts[1]
+		pricePerTB, err := parseFloatClean(strings.TrimSpace(row.Find("td.price-per-tb").First().Text()))
+		if err != nil || pricePerTB <= 0 {
+			return
+		}
+		capText := textAt(texts, 3)
 		var tb float64
-		if parts := strings.Fields(capText); len(parts) > 0 {
-			if v, e := parseFloatClean(parts[0]); e == nil && v > 0 {
-				tb = v
-				if len(parts) > 1 && strings.EqualFold(parts[1], "Go") {
-					tb /= 1000
+		if attr, ok := row.Attr("data-capacity"); ok {
+			if gb, e := parseFloatClean(attr); e == nil && gb > 0 {
+				tb = gb / 1000
+			}
+		}
+		if tb <= 0 {
+			if parsed, e := parsing.ParseCapacityTB(capText); e == nil && parsed > 0 {
+				tb = parsed
+			}
+		}
+		if tb <= 0 {
+			if parts := strings.Fields(capText); len(parts) > 0 {
+				if v, e := parseFloatClean(parts[0]); e == nil && v > 0 {
+					tb = v
+					if len(parts) > 1 && strings.EqualFold(parts[1], "Go") {
+						tb /= 1000
+					}
 				}
 			}
 		}
 		if tb <= 0 {
 			return
 		}
-		link := cells.Eq(2).Find("a")
+		link := row.Find("a").First()
 		href, _ := link.Attr("href")
+		href = absolutizeURL(baseURL, strings.TrimSpace(href))
 		title := strings.TrimSpace(link.Text())
+		if title == "" && len(texts) > 2 {
+			title = strings.TrimSpace(texts[2])
+		}
+		if title == "" || href == "" {
+			return
+		}
 
-		media := normalMedia(title)
-		dc := parsing.NormalizeDriveCategory(title, media)
-		ifaces := parsing.NormalizeInterfaces(title)
+		formFactor := textAt(texts, 5)
+		technology := textAt(texts, 6)
+		classText := strings.Join([]string{title, formFactor, technology}, " ")
+		media := normalMedia(classText)
+		if media == nil {
+			return
+		}
+		dc := parsing.NormalizeDriveCategory(classText, media)
+		ifaces := parsing.NormalizeInterfaces(classText)
 		if len(ifaces) == 0 && dc != nil {
 			switch *dc {
 			case domain.DriveCategoryInternal3_5, domain.DriveCategoryInternal2_5, domain.DriveCategoryInternalHybrid, domain.DriveCategoryInternalSSD, domain.DriveCategoryM2SATA:
@@ -105,14 +135,46 @@ func parsePTB(html string) []domain.Deal {
 		}
 
 		cond := domain.ConditionNew
-		pt := priceEUR / tb
+		condText := strings.TrimSpace(textAt(texts, 7))
+		if attr, ok := row.Attr("data-condition"); ok && strings.TrimSpace(attr) != "" {
+			condText = attr
+		}
+		if strings.Contains(strings.ToLower(condText), "used") || strings.Contains(strings.ToLower(condText), "occasion") {
+			cond = domain.ConditionUsed
+		}
 		deals = append(deals, domain.Deal{
 			Source: "pricepertb", Title: title, URL: href,
-			PriceEUR: round2(priceEUR), PricePerTB: round2(pt), CapacityTB: round2(tb),
+			PriceEUR: round2(priceEUR), PricePerTB: round2(pricePerTB), CapacityTB: round2(tb),
 			Condition: &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
+			FormFactor: strPtr(formFactor), Technology: strPtr(technology),
 			ObservedAt: domain.UTCNow(),
 		})
 	})
 	return deals
+}
+
+func textAt(texts []string, i int) string {
+	if i < 0 || i >= len(texts) {
+		return ""
+	}
+	return strings.TrimSpace(texts[i])
+}
+
+func absolutizeURL(baseURL, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	if parsed.IsAbs() {
+		return parsed.String()
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return raw
+	}
+	return base.ResolveReference(parsed).String()
 }

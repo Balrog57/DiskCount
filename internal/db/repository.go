@@ -3,9 +3,11 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
@@ -38,13 +40,26 @@ CREATE TABLE IF NOT EXISTS subscribers (chat_id BIGINT PRIMARY KEY, username VAR
 CREATE TABLE IF NOT EXISTS authorized_users (telegram_user_id BIGINT PRIMARY KEY, label VARCHAR(120) NOT NULL, is_admin BOOLEAN DEFAULT FALSE, enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS alerts (id SERIAL PRIMARY KEY, chat_id BIGINT NOT NULL, owner_user_id BIGINT NOT NULL, name VARCHAR(120) NOT NULL, min_capacity_tb DOUBLE PRECISION, max_capacity_tb DOUBLE PRECISION, capacity_presets JSONB DEFAULT '[]', conditions JSONB DEFAULT '[]', media_types JSONB DEFAULT '[]', drive_categories JSONB DEFAULT '[]', interfaces JSONB DEFAULT '[]', sources JSONB DEFAULT '[]', max_price_per_tb NUMERIC(10,2), min_discount_pct REAL DEFAULT 5.0, cooldown_hours INTEGER DEFAULT 24, enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner_user_id);
-CREATE TABLE IF NOT EXISTS products (id VARCHAR(80) PRIMARY KEY, source VARCHAR(40) NOT NULL, external_id VARCHAR(255), title TEXT NOT NULL, url TEXT NOT NULL, capacity_tb NUMERIC(10,3) NOT NULL, condition VARCHAR(20), media_type VARCHAR(30), form_factor VARCHAR(120), technology VARCHAR(120), drive_category VARCHAR(40), interfaces JSONB DEFAULT '[]', first_seen_at TIMESTAMPTZ DEFAULT NOW(), last_seen_at TIMESTAMPTZ DEFAULT NOW());
-CREATE TABLE IF NOT EXISTS price_observations (id SERIAL PRIMARY KEY, product_id VARCHAR(80) REFERENCES products(id), source VARCHAR(40) NOT NULL, observed_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, raw_json JSONB DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS products (id VARCHAR(80) PRIMARY KEY, source VARCHAR(40) NOT NULL, external_id VARCHAR(255), title TEXT NOT NULL, url TEXT NOT NULL, capacity_tb NUMERIC(10,3) NOT NULL, condition VARCHAR(20), media_type VARCHAR(30), form_factor VARCHAR(120), technology VARCHAR(120), drive_category VARCHAR(40), interfaces JSONB DEFAULT '[]', quality_score INTEGER DEFAULT 0, classification_source VARCHAR(40), canonical_url TEXT, merchant VARCHAR(120), brand VARCHAR(120), model VARCHAR(180), raw_title TEXT, first_seen_at TIMESTAMPTZ DEFAULT NOW(), last_seen_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS price_observations (id SERIAL PRIMARY KEY, product_id VARCHAR(80) REFERENCES products(id), source VARCHAR(40) NOT NULL, observed_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, quality_score INTEGER DEFAULT 0, raw_json JSONB DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS idx_obs_pid ON price_observations(product_id);
 CREATE INDEX IF NOT EXISTS idx_obs_ts ON price_observations(observed_at);
 CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, alert_id INTEGER REFERENCES alerts(id), product_id VARCHAR(80) REFERENCES products(id), sent_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, discount_pct NUMERIC(6,2), reason VARCHAR(80) NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_notif_aid ON notifications(alert_id);
 CREATE INDEX IF NOT EXISTS idx_notif_pid ON notifications(product_id);
+CREATE INDEX IF NOT EXISTS idx_notif_ts ON notifications(sent_at);
+CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS rejected_deals (id SERIAL PRIMARY KEY, source VARCHAR(40) NOT NULL, reason VARCHAR(80) NOT NULL, detail TEXT, title TEXT, url TEXT, observed_at TIMESTAMPTZ DEFAULT NOW(), raw_json JSONB DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_rejected_deals_source ON rejected_deals(source);
+CREATE INDEX IF NOT EXISTS idx_rejected_deals_observed ON rejected_deals(observed_at);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS classification_source VARCHAR(40);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS canonical_url TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant VARCHAR(120);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(120);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS model VARCHAR(180);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS raw_title TEXT;
+ALTER TABLE price_observations ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
 `)
 	return err
 }
@@ -62,8 +77,10 @@ type Alert struct {
 type Product struct {
 	ID, Source, Title, URL                                                  string
 	ExternalID, Condition, MediaType, FormFactor, Technology, DriveCategory *string
+	ClassificationSource, CanonicalURL, Merchant, Brand, Model, RawTitle    *string
 	CapacityTB                                                              float64
 	Interfaces                                                              []string
+	QualityScore                                                            int
 	FirstSeenAt, LastSeenAt                                                 time.Time
 }
 type PriceObservation struct {
@@ -71,6 +88,7 @@ type PriceObservation struct {
 	ProductID, Source    string
 	ObservedAt           time.Time
 	PriceEUR, PricePerTB float64
+	QualityScore         int
 	RawJSON              string
 }
 type Notification struct {
@@ -86,6 +104,92 @@ type AuthorizedUser struct {
 	IsAdmin, Enabled     bool
 	CreatedAt, UpdatedAt time.Time
 }
+type CurrentPrice struct {
+	ProductID            string
+	Source, Title, URL   string
+	MediaType            *string
+	CapacityTB           float64
+	PriceEUR, PricePerTB float64
+	ObservedAt           time.Time
+}
+type Stats struct {
+	ActiveAlerts, InactiveAlerts          int64
+	AuthorizedEnabled, AuthorizedDisabled int64
+	Products, Observations, Notifications int64
+	RejectedDeals                         int64
+	LastObservationAt, LastNotificationAt *time.Time
+}
+
+type SourceQuality struct {
+	Source                                         string
+	Products, Observations, Rejected               int64
+	MissingTitle, MissingMedia, MissingCategory    int64
+	MissingInterfaces                              int64
+	MinPricePerTB, MedianPricePerTB, MaxPricePerTB *float64
+}
+
+type RejectReasonStat struct {
+	Source, Reason string
+	Count          int64
+}
+
+type QualityStats struct {
+	Sources []SourceQuality
+	Reasons []RejectReasonStat
+}
+
+func (db *DB) ImportAppConfig(ctx context.Context, values map[string]string) (int, error) {
+	if len(values) == 0 {
+		return 0, nil
+	}
+	count := 0
+	for key, val := range values {
+		if key == "" {
+			continue
+		}
+		tag, err := db.Pool.Exec(ctx, `INSERT INTO app_config (key,value) VALUES ($1,$2) ON CONFLICT(key) DO NOTHING`, key, val)
+		if err != nil {
+			return count, err
+		}
+		count += int(tag.RowsAffected())
+	}
+	return count, nil
+}
+
+func (db *DB) ListAppConfig(ctx context.Context) (map[string]string, error) {
+	rows, err := db.Pool.Query(ctx, `SELECT key,value FROM app_config ORDER BY key`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var key, val string
+		if err := rows.Scan(&key, &val); err != nil {
+			return nil, err
+		}
+		out[key] = val
+	}
+	return out, rows.Err()
+}
+
+func (db *DB) SetAppConfig(ctx context.Context, values map[string]string) error {
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for key, val := range values {
+		if key == "" {
+			continue
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO app_config (key,value) VALUES ($1,$2) ON CONFLICT(key) DO UPDATE SET value=$2, updated_at=NOW()`, key, val)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
 
 func (db *DB) UpsertSubscriber(ctx context.Context, chatID int64, username *string) error {
 	_, err := db.Pool.Exec(ctx, `INSERT INTO subscribers (chat_id, username) VALUES ($1,$2) ON CONFLICT(chat_id) DO UPDATE SET username=$2, last_seen_at=NOW(), enabled=TRUE`, chatID, username)
@@ -98,6 +202,17 @@ func (db *DB) IsUserAllowed(ctx context.Context, uid int64) (bool, error) {
 		return false, nil
 	}
 	return e, err
+}
+func (db *DB) UpsertAuthorizedUser(ctx context.Context, uid int64, label string, enabled bool) error {
+	if label == "" {
+		label = fmt.Sprintf("%d", uid)
+	}
+	_, err := db.Pool.Exec(ctx, `INSERT INTO authorized_users (telegram_user_id,label,is_admin,enabled) VALUES ($1,$2,FALSE,$3) ON CONFLICT(telegram_user_id) DO UPDATE SET label=$2,is_admin=FALSE,enabled=$3,updated_at=NOW()`, uid, label, enabled)
+	return err
+}
+func (db *DB) SetAuthorizedUserEnabled(ctx context.Context, uid int64, enabled bool) error {
+	_, err := db.Pool.Exec(ctx, `UPDATE authorized_users SET enabled=$1, updated_at=NOW() WHERE telegram_user_id=$2`, enabled, uid)
+	return err
 }
 
 func (db *DB) CreateAlert(ctx context.Context, chatID, ownerID int64, name string, maxPrice *float64, minDisc float64, cooldown int, caps, conds, medias, cats, ifaces, srcs []string) (*Alert, error) {
@@ -147,20 +262,23 @@ func (db *DB) DeleteAlert(ctx context.Context, ownerID, aID int64) error {
 
 func (db *DB) UpsertProduct(ctx context.Context, deal domain.Deal) error {
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := db.Pool.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces))
+	_, err := db.Pool.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
 	return err
 }
 
 func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
+	if err := validateObservationDeal(deal); err != nil {
+		return err
+	}
 	tx, _ := db.Pool.Begin(ctx)
 	if tx == nil {
 		return fmt.Errorf("tx begin failed")
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces))
+	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
 	if err != nil {
 		return err
 	}
@@ -169,11 +287,22 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	if obs.IsZero() {
 		obs = time.Now().UTC()
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO price_observations(product_id,source,observed_at,price_eur,price_per_tb,raw_json) VALUES($1,$2,$3,$4,$5,$6)`, deal.ProductID(), deal.Source, obs, deal.PriceEUR, deal.PricePerTB, raw)
+	_, err = tx.Exec(ctx, `INSERT INTO price_observations(product_id,source,observed_at,price_eur,price_per_tb,quality_score,raw_json) VALUES($1,$2,$3,$4,$5,$6,$7)`, deal.ProductID(), deal.Source, obs, deal.PriceEUR, deal.PricePerTB, deal.QualityScore, raw)
 	if err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+func (db *DB) RecordRejectedDeal(ctx context.Context, deal domain.Deal, reason, detail string) error {
+	raw, _ := json.Marshal(deal.Raw)
+	obs := deal.ObservedAt
+	if obs.IsZero() {
+		obs = time.Now().UTC()
+	}
+	_, err := db.Pool.Exec(ctx, `INSERT INTO rejected_deals(source,reason,detail,title,url,observed_at,raw_json) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+		deal.Source, reason, detail, deal.Title, deal.URL, obs, raw)
+	return err
 }
 
 func (db *DB) BaselinePricePerTB(ctx context.Context, pid string, before time.Time, days int) (*float64, error) {
@@ -214,14 +343,17 @@ func (db *DB) LastNotification(ctx context.Context, aID int64, pid string) (*Not
 }
 
 func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.Deal, reason string, disc *float64) error {
+	if err := validateObservationDeal(deal); err != nil {
+		return err
+	}
 	tx, _ := db.Pool.Begin(ctx)
 	if tx == nil {
 		return fmt.Errorf("tx begin")
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces))
+	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
 	if err != nil {
 		return err
 	}
@@ -280,8 +412,46 @@ func (db *DB) UpdateAlertCaps(ctx context.Context, ownerID, aID int64, presets [
 	return err
 }
 
+func (db *DB) LatestPrices(ctx context.Context, limit int) ([]CurrentPrice, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	rows, err := db.Pool.Query(ctx, `
+WITH latest AS (
+	SELECT DISTINCT ON (product_id)
+		product_id, source, observed_at, price_eur, price_per_tb
+	FROM price_observations
+	WHERE price_per_tb > 0 AND quality_score >= 70
+	ORDER BY product_id, observed_at DESC
+)
+SELECT l.product_id, l.source, p.title, p.url, p.media_type, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
+FROM latest l
+JOIN products p ON p.id = l.product_id
+WHERE p.quality_score >= 50
+ORDER BY l.price_per_tb ASC, l.observed_at DESC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CurrentPrice
+	for rows.Next() {
+		var p CurrentPrice
+		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.MediaType, &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) ListAuthorizedUsers(ctx context.Context, includeDisabled bool) ([]AuthorizedUser, error) {
-	rows, err := db.Pool.Query(ctx, "SELECT telegram_user_id,label,is_admin,enabled,created_at,updated_at FROM authorized_users ORDER BY label")
+	q := "SELECT telegram_user_id,label,is_admin,enabled,created_at,updated_at FROM authorized_users"
+	if !includeDisabled {
+		q += " WHERE enabled=TRUE"
+	}
+	q += " ORDER BY label"
+	rows, err := db.Pool.Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}
@@ -293,6 +463,101 @@ func (db *DB) ListAuthorizedUsers(ctx context.Context, includeDisabled bool) ([]
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+func (db *DB) Stats(ctx context.Context) (*Stats, error) {
+	s := &Stats{}
+	err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FILTER (WHERE enabled), COUNT(*) FILTER (WHERE NOT enabled) FROM alerts`).Scan(&s.ActiveAlerts, &s.InactiveAlerts)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FILTER (WHERE enabled), COUNT(*) FILTER (WHERE NOT enabled) FROM authorized_users`).Scan(&s.AuthorizedEnabled, &s.AuthorizedDisabled)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM products`).Scan(&s.Products)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*), MAX(observed_at) FROM price_observations`).Scan(&s.Observations, &s.LastObservationAt)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*), MAX(sent_at) FROM notifications`).Scan(&s.Notifications, &s.LastNotificationAt)
+	if err != nil {
+		return nil, err
+	}
+	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM rejected_deals`).Scan(&s.RejectedDeals)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (db *DB) QualityStats(ctx context.Context) (*QualityStats, error) {
+	out := &QualityStats{}
+	rows, err := db.Pool.Query(ctx, `
+WITH product_stats AS (
+	SELECT source,
+		COUNT(*) AS products,
+		COUNT(*) FILTER (WHERE title='') AS missing_title,
+		COUNT(*) FILTER (WHERE media_type IS NULL) AS missing_media,
+		COUNT(*) FILTER (WHERE drive_category IS NULL) AS missing_category,
+		COUNT(*) FILTER (WHERE jsonb_array_length(interfaces)=0) AS missing_interfaces
+	FROM products GROUP BY source
+),
+obs_stats AS (
+	SELECT source,
+		COUNT(*) AS observations,
+		MIN(price_per_tb)::float8 AS min_price_per_tb,
+		percentile_cont(0.5) WITHIN GROUP (ORDER BY price_per_tb)::float8 AS median_price_per_tb,
+		MAX(price_per_tb)::float8 AS max_price_per_tb
+	FROM price_observations
+	WHERE price_per_tb > 0 AND quality_score >= 70
+	GROUP BY source
+),
+reject_stats AS (
+	SELECT source, COUNT(*) AS rejected FROM rejected_deals GROUP BY source
+),
+all_sources AS (
+	SELECT source FROM product_stats UNION SELECT source FROM obs_stats UNION SELECT source FROM reject_stats
+)
+SELECT s.source,
+	COALESCE(p.products,0), COALESCE(o.observations,0), COALESCE(r.rejected,0),
+	COALESCE(p.missing_title,0), COALESCE(p.missing_media,0), COALESCE(p.missing_category,0), COALESCE(p.missing_interfaces,0),
+	o.min_price_per_tb, o.median_price_per_tb, o.max_price_per_tb
+FROM all_sources s
+LEFT JOIN product_stats p ON p.source=s.source
+LEFT JOIN obs_stats o ON o.source=s.source
+LEFT JOIN reject_stats r ON r.source=s.source
+ORDER BY s.source`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s SourceQuality
+		if err := rows.Scan(&s.Source, &s.Products, &s.Observations, &s.Rejected, &s.MissingTitle, &s.MissingMedia, &s.MissingCategory, &s.MissingInterfaces, &s.MinPricePerTB, &s.MedianPricePerTB, &s.MaxPricePerTB); err != nil {
+			return nil, err
+		}
+		out.Sources = append(out.Sources, s)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	reasonRows, err := db.Pool.Query(ctx, `SELECT source, reason, COUNT(*) FROM rejected_deals GROUP BY source, reason ORDER BY COUNT(*) DESC, source, reason LIMIT 20`)
+	if err != nil {
+		return nil, err
+	}
+	defer reasonRows.Close()
+	for reasonRows.Next() {
+		var r RejectReasonStat
+		if err := reasonRows.Scan(&r.Source, &r.Reason, &r.Count); err != nil {
+			return nil, err
+		}
+		out.Reasons = append(out.Reasons, r)
+	}
+	return out, reasonRows.Err()
 }
 
 func scanAlerts(rows pgx.Rows, err error) ([]Alert, error) {
@@ -338,6 +603,33 @@ func ptrStr[T ~string](v *T) *string {
 	}
 	s := string(*v)
 	return &s
+}
+
+func nilIfEmpty(s string) *string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func validateObservationDeal(deal domain.Deal) error {
+	if strings.TrimSpace(deal.Title) == "" {
+		return errors.New("cannot record observation with empty title")
+	}
+	if strings.TrimSpace(deal.URL) == "" {
+		return errors.New("cannot record observation with empty URL")
+	}
+	if deal.CapacityTB <= 0 {
+		return errors.New("cannot record observation with invalid capacity")
+	}
+	if deal.PriceEUR <= 0 {
+		return errors.New("cannot record observation with invalid price")
+	}
+	if deal.PricePerTB <= 0 {
+		return errors.New("cannot record observation with invalid price per TB")
+	}
+	return nil
 }
 
 func ifaceStrs(ifs []domain.DriveInterface) []string {

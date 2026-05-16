@@ -14,21 +14,17 @@ import (
 	"github.com/Balrog57/DiskCount/internal/notifier"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 	"github.com/Balrog57/DiskCount/internal/sources"
+	"github.com/Balrog57/DiskCount/internal/web"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 
-	cfg := config.Get()
-	if cfg.TelegramBotToken == "" {
-		slog.Error("TELEGRAM_BOT_TOKEN is required")
-		os.Exit(1)
-	}
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	dbase, err := db.New(ctx, cfg.DatabaseURL)
+	bootstrap := config.LoadBootstrap()
+	dbase, err := db.New(ctx, bootstrap.DatabaseURL)
 	if err != nil {
 		slog.Error("db connect", "error", err)
 		os.Exit(1)
@@ -39,31 +35,78 @@ func main() {
 		slog.Warn("db migrate", "error", err)
 	}
 
+	imported, err := dbase.ImportAppConfig(ctx, config.ImportableEnvValues())
+	if err != nil {
+		slog.Warn("app config import", "error", err)
+	} else if imported > 0 {
+		slog.Info("app config imported", "count", imported)
+	}
+
+	appValues, err := dbase.ListAppConfig(ctx)
+	if err != nil {
+		slog.Warn("app config load", "error", err)
+	}
+	cfg := config.LoadWithAppValues(appValues)
+	cfg.DatabaseURL = bootstrap.DatabaseURL
+	cfg.WebAdminAddr = bootstrap.WebAdminAddr
+
 	reg := sources.NewRegistry(cfg)
 	srcs := sources.BuildAll(reg)
 	slog.Info("sources loaded", "count", len(srcs))
+	var sourceNames []string
+	for _, src := range srcs {
+		sourceNames = append(sourceNames, src.Name())
+	}
 
 	notify := notifier.New(nil, cfg.TelegramMessageDelayS)
 	scan := scanner.New(cfg, dbase, srcs, notify)
 
-	b, err := bot.New(cfg, dbase, scan)
-	if err != nil {
-		slog.Error("bot create", "error", err)
-		os.Exit(1)
+	telegramRunning := false
+	var b *bot.Bot
+	if cfg.TelegramBotToken == "" {
+		slog.Warn("telegram bot token is missing; web admin only")
+	} else {
+		b, err = bot.New(cfg, dbase, scan)
+		if err != nil {
+			slog.Error("bot create", "error", err)
+		} else {
+			notify.Bot = b.TB
+			telegramRunning = true
+		}
 	}
-	notify.Bot = b.TB
 
-	go func() {
-		slog.Info("initial scan starting")
-		report := scan.RunOnce(context.Background(), false)
-		slog.Info("initial scan done", "fetched", report.Fetched, "notified", report.Notified, "errors", len(report.Errors))
-	}()
+	webSrv := web.New(dbase, scan, cfg, sourceNames, telegramRunning)
+	errCh := make(chan error, 1)
+	go func() { errCh <- webSrv.Run(ctx, cfg.WebAdminAddr) }()
 
-	go scanner.ScheduleLoop(ctx, scan, cfg.ScrapeIntervalCron)
+	if telegramRunning {
+		go func() {
+			slog.Info("initial scan starting")
+			report := scan.RunOnce(context.Background(), false)
+			slog.Info("initial scan done", "fetched", report.Fetched, "notified", report.Notified, "errors", len(report.Errors))
+		}()
+
+		go scanner.ScheduleLoop(ctx, scan, cfg.ScrapeIntervalCron)
+	}
 
 	fmt.Println("DiskCount v2.0 running...")
-	go b.TB.Start()
-	<-ctx.Done()
+	if telegramRunning {
+		go func() {
+			if err := b.Run(ctx); err != nil {
+				slog.Error("bot run", "error", err)
+				cancel()
+			}
+		}()
+	}
+
+	select {
+	case <-ctx.Done():
+	case err := <-errCh:
+		if err != nil {
+			slog.Error("web admin", "error", err)
+			os.Exit(1)
+		}
+	}
 
 	slog.Info("shutting down")
 }

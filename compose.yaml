@@ -30,16 +30,10 @@ services:
         condition: service_started
     environment:
       DATABASE_URL: postgres://diskcount:diskcount@db:5432/diskcount
+      WEB_ADMIN_ADDR: 0.0.0.0:47832
       BYPARR_URL: http://byparr:8191
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_ADMIN_USER_IDS: ${TELEGRAM_ADMIN_USER_IDS:-}
-      SCRAPE_INTERVAL_CRON: "@every 4h"
-      AMAZON_TLDS: "fr,de"
-      LDLC_ENABLED: "true"
-      ALTERNATE_TLDS: "fr,de"
-      GEIZHALS_ENABLED: "true"
-      RDC_ENABLED: "true"
-      PCPART_ENABLED: "true"
+    ports:
+      - "47832:47832"
 
 volumes:
   pgdata:

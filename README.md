@@ -1,186 +1,92 @@
 # DiskCount
 
-DiskCount is a Telegram bot that watches HDD/SSD deals and notifies you when an alert matches your filters.
+DiskCount watches HDD/SSD deals, records price history, and sends Telegram notifications when a user alert matches.
 
-The scanner is intentionally conservative:
+The project is a Go service with two interfaces:
 
-- DiskPrices France is parsed from its public table.
-- PricePerGig is consumed through its public JSON API for `amazon.fr`.
-- PricePerTB France is parsed from its public table, with the same headless fallback when direct HTTP cannot read it.
-- Dealabs is consumed through RSS alert feeds that you configure.
-- Keepa is optional and only queried through its API when a key and ASIN list are configured.
-- eBay is queried through the official Browse API when credentials are configured.
-- Idealo and leDenicheur can consume configured feeds and configured page URLs. Page URLs use normal HTTP first,
-  then optional Playwright headless rendering for public pages that require JavaScript.
-- leboncoin is consumed through configured alert/feed URLs.
+- Telegram: alert creation, alert editing, and deal notifications.
+- Web admin: local-network dashboard for supervision, users, configuration, data quality, products, and safe alert administration.
 
-## Quick start
+## Quick Start
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python -m pip install -e ".[dev]"
-copy deploy\diskcount.env.example .env
-notepad .env
-.\.venv\Scripts\python -m diskcount init-db
-.\.venv\Scripts\python -m diskcount check
-.\.venv\Scripts\python -m diskcount list --min-tb 16 --max-eur-tb 20 --media rotational
-.\.venv\Scripts\python -m diskcount run
+go test ./...
+go run ./cmd/diskcount
 ```
 
-On Linux the same app can run under a service manager such as `systemd`.
+For local containers:
+
+```powershell
+docker compose up --build
+```
+
+The web admin listens on `0.0.0.0:47832` by default. Protect it with your LAN, firewall, VPN, or reverse proxy; it has no application login in v1.
 
 ## Configuration
 
-Environment variables:
+Bootstrap environment variables:
+
+- `DATABASE_URL`: PostgreSQL connection string. Default: `postgres://diskcount:diskcount@localhost:5432/diskcount`.
+- `WEB_ADMIN_ADDR`: web admin listen address. Default: `0.0.0.0:47832`.
+
+App settings can be imported from environment variables and then managed from the web admin:
 
 - `TELEGRAM_BOT_TOKEN`: Telegram bot token.
-- `TELEGRAM_ADMIN_USER_IDS`: comma-separated Telegram user IDs with admin rights.
-- `TELEGRAM_ALLOWED_USER_IDS`: optional static comma-separated Telegram user IDs allowed to control the bot. Dynamic users are managed from Telegram and stored in SQLite.
-- `TELEGRAM_POLLING_TIMEOUT_SECONDS`: default `2`, short long-poll timeout for stable restarts.
-- `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; set this to your deployment database location in production.
-- `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
-- `PRICEPERGIG_ENABLED`: default `true`.
-- `PRICEPERGIG_API_URL`: default `https://api.pricepergig.com/drives`.
-- `PRICEPERGIG_MARKETPLACE`: default `amazon.fr`.
-- `PRICEPERGIG_MAX_RESULTS`: default `200`.
-- `PRICEPERTB_URLS`: default `https://pricepertb.com/fr`.
-- `DEALABS_RSS_URLS`: comma-separated RSS alert URLs from Dealabs.
-- `IDEALO_FEED_URLS`: comma-separated feed or alert URLs for Idealo-compatible entries.
-- `IDEALO_PAGE_URLS`: comma-separated public Idealo page URLs to parse, with optional headless fallback.
-- `LEDENICHEUR_FEED_URLS`: comma-separated feed or alert URLs for leDenicheur-compatible entries.
-- `LEDENICHEUR_PAGE_URLS`: comma-separated public leDenicheur page URLs to parse, with optional headless fallback.
-- `LEBONCOIN_FEED_URLS`: comma-separated feed or alert URLs for leboncoin-compatible entries.
-- `SOURCE_HEADLESS_FALLBACK`: default `true`; requires Playwright and a Chromium browser install.
-- `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`: official eBay developer credentials.
-- `EBAY_SEARCH_QUERIES`: comma-separated eBay Browse API searches, for example `disque dur 16 To HDD,disque dur 18 To HDD`.
-- `EBAY_MARKETPLACE_ID`: default `EBAY_FR`.
-- `EBAY_CATEGORY_IDS`: optional comma-separated eBay category IDs.
-- `KEEPA_API_KEY`: optional Keepa API key.
-- `KEEPA_ASINS`: optional comma-separated ASINs to query through Keepa.
-- `POLL_INTERVAL_SECONDS`: default `14400` (4 hours).
-- `SCHEDULER_INITIAL_DELAY_SECONDS`: default `30`, lets Telegram polling establish before the first startup scan.
-- `TELEGRAM_MESSAGE_DELAY_SECONDS`: default `0.5`, used to pace Telegram notifications.
+- `REQUEST_TIMEOUT_SECONDS`: HTTP request timeout.
+- `USER_AGENT`: scanner HTTP user agent.
+- `DISKPRICES_URL`: DiskPrices URL.
+- `PRICEPERGIG_ENABLED`, `PRICEPERGIG_API_URL`, `PRICEPERGIG_MARKET`: PricePerGig settings.
+- `PRICEPERTB_URLS`: comma-separated PricePerTB URLs.
+- `DEALABS_RSS_URLS`, `IDEALO_FEED_URLS`, `IDEALO_PAGE_URLS`, `LEDENICHEUR_FEED_URLS`, `LEDENICHEUR_PAGE_URLS`, `LEBONCOIN_FEED_URLS`: optional configured feeds or pages.
+- `SOURCE_HEADLESS_FALLBACK`, `BYPARR_URL`: optional headless fallback settings.
+- `KEEPA_API_KEY`, `KEEPA_ASINS`: optional Keepa settings.
+- `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`: optional eBay settings.
+- `NOTIFICATION_PRICE_DROP_PCT`, `TELEGRAM_MESSAGE_DELAY_SECONDS`, `SCRAPE_INTERVAL_CRON`: notification and scanner cadence.
 
-For headless page rendering on Debian or a fresh Windows environment, install the browser once:
+Secret values are masked in the web admin and only replaced when explicitly requested.
 
-```powershell
-python -m playwright install chromium
-```
+## Web Admin
 
-## Telegram UX
+Available pages:
 
-The main Telegram interface is clickable:
+- `/`: overview, service state, sources, counters, latest scanner report.
+- `/quality`: data quality per source and reject reasons.
+- `/products`: recent best products with source, media, capacity, and price filters.
+- `/alerts`: existing alerts with pause, resume, and delete actions only.
+- `/config`: persisted app configuration.
+- `/users`: authorized Telegram users.
 
-- `/start`, `/menu`, `/help` open the inline home menu.
-- Home tiles: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, and `Admin` for admin users.
-- `/create` starts a full alert wizard with inline buttons. Each step edits the same message when Telegram allows it.
-- Every wizard and edit screen keeps `Precedent` and `Accueil` at the bottom.
-- `Mes alertes` shows each alert as a tile. Opening an alert lets you edit type, condition, capacity, price, DiskPrices categories, connections, pause/resume, and delete with confirmation.
-- Admin users get tiles for `Utilisateurs`, `Ajouter`, `Revoquer`, and `Reactiver`. `Ajouter` asks for one controlled text reply: `id nom custom`.
+Alert creation and detailed alert editing stay on Telegram. The web admin intentionally does not create alerts.
 
-Creation presets:
-
-- SSD capacity, multi-select: `<256 Go`, `~256 Go`, `~512 Go`, `~1 To`, `~2 To`, `~4 To`, `>4 To`, or `Toute capacite`.
-- HDD capacity, multi-select: `<4 To`, `4-8 To`, `8-12 To`, `12-16 To`, `16-20 To`, `20-24 To`, `24-30 To`, `>30 To`, or `Toute capacite`.
-- HDD price: `<=15`, `<=18`, `<=20`, `<=22`, `<=25` EUR/To, or `Aucune limite`.
-- SSD price: `<=0.04`, `<=0.06`, `<=0.08`, `<=0.10`, `<=0.12` EUR/Go, or `Aucune limite`. Internally, SSD thresholds are still stored in EUR/To.
-- DiskPrices categories: `External 3.5`, `External 2.5`, `Internal 3.5`, `Internal 2.5`, `Internal Hybrid`, `Internal SAS`, `External SSD`, `Internal SSD`, `M.2 SATA`, `M.2 NVMe`, `U.2/U.3`.
-- Connections: `SATA`, `SAS`, `NVMe`, `USB`.
-- Sources are backend configuration only. They do not appear in alert creation or editing.
-
-Help guide:
-
-- `Aide` contains a complete tile guide for creation, alert management, capacity presets, prices, DiskPrices categories, connections, scanner/test, admin actions, backend sources, command shortcuts, and advanced text filters.
-- Guide screens use the same `Precedent` and `Accueil` navigation as the rest of the bot.
-
-Text commands remain as advanced fallbacks.
-
-Create an alert by text:
-
-```text
-/add name=NAS min_tb=16 max_eur_tb=20 media=rotational condition=new,used discount=5 cooldown=24
-```
-
-SSD example with price per GB:
-
-```text
-/add name=SSD min_tb=2 max_eur_gb=0.08 media=solid_state condition=new category=m2_nvme interface=nvme
-```
+## Telegram
 
 Useful commands:
 
-- Type `/` in Telegram to open the command menu with descriptions.
-- `/menu` opens the inline tile navigation.
-- `/start`, `/menu`, and `/help` remove the old persistent keyboard and show inline tiles under the message.
-- `/create` starts the clickable alert creation wizard.
-- Tile categories: `Creer une alerte`, `Mes alertes`, `Scanner/Test`, `Aide`, and `Admin` for admin users.
-- Submenus always include `Precedent` and `Accueil` at the bottom.
-- `/alerts` lists alerts.
-- From `/alerts`, each alert opens a clickable editor.
-- `/pause 1` disables an alert.
-- `/resume 1` enables it again.
-- `/delete 1` removes it.
-- `/set_max_price 1 18.5` updates the maximum EUR/TB threshold for alert `1`; use `none` to disable it.
-- `/set_max_price 1 0.08 gb` sets an SSD-style maximum EUR/GB threshold; it is converted to EUR/TB internally.
-- `/set_capacity 1 16 24` updates the minimum and maximum TB range; use `none` for an open bound.
-- `/test` runs a dry scan and reports what would match.
-- `/status` shows source and database status.
+- `/start`, `/menu`, `/help`: open the inline navigation.
+- `/create`: start the clickable alert creation wizard.
+- `/add`: create an alert from text.
+- `/alerts`: list and edit your alerts.
+- `/pause ID`, `/resume ID`, `/delete ID`: manage an existing alert.
+- `/set_max_price ID VALUE`: update the maximum EUR/TB threshold; use `none` to disable it.
+- `/set_capacity ID MIN MAX`: update capacity bounds; use `none` for an open bound.
+- `/prices`: show current best recorded prices.
 
-Alerts are owned per Telegram user. Every authorized user can create, list, pause, resume, update, and delete their own alerts, but cannot manage alerts owned by another authorized user.
+Supported text alert keys include `name`, `min_tb`, `max_tb`, `max_eur_tb`, `max_eur_gb`, `condition`, `media`, `category`, `interface`, `discount`, and `cooldown`.
 
-Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
+## Data Sources
 
-- `/users` lists allowed and disabled users.
-- `/allow USER_ID Label` adds or re-enables a user with a custom label.
-- `/revoke USER_ID` disables a user.
+The scanner is intentionally conservative:
 
-Admin users get an expanded Telegram command menu for these admin commands.
-They also get admin tiles in the inline navigation.
+- DiskPrices France public table.
+- PricePerGig public API.
+- PricePerTB public table.
+- Dealabs RSS feeds.
+- Idealo, leDenicheur, and leboncoin configured feeds/pages.
+- Optional Keepa API.
+- Optional eBay Browse API.
 
-Accepted alert keys:
+## Deployment Notes
 
-- `name`: alert name.
-- `min_tb`, `max_tb`: capacity range in TB.
-- `max_eur_tb`: maximum EUR/TB; this can notify immediately, before 30 days of history exist.
-- `max_eur_gb`: maximum EUR/GB for SSD alerts; converted to EUR/TB internally.
-- `condition`: `new`, `used`, or comma-separated values.
-- `media`: `rotational`, `solid_state`, or comma-separated values.
-- `category`: DiskPrices-style category filter. Supported values: `external_3_5`, `external_2_5`, `internal_3_5`, `internal_2_5`, `internal_hybrid`, `internal_sas`, `external_ssd`, `internal_ssd`, `m2_sata`, `m2_nvme`, `u2_u3`.
-- `interface`: connection filter. Supported values: `sata`, `sas`, `nvme`, `usb`.
-- Sources are configured on the backend through environment variables and scanner connectors, not through the Telegram alert editor.
-- `discount`: minimum discount percentage compared with the rolling 30 day median; default `5`.
-- `cooldown`: hours before repeating a notification for the same product unless price drops further; default `24`.
+The included Dockerfile exposes port `47832`. The compose files run PostgreSQL, optional Byparr headless fetch support, and the DiskCount service.
 
-## Linux deployment
-
-Example:
-
-```bash
-sudo useradd --system --home /srv/diskcount --shell /usr/sbin/nologin diskcount
-sudo mkdir -p /srv/diskcount /srv/diskcount/data
-sudo chown -R diskcount:diskcount /srv/diskcount
-sudo cp -r . /srv/diskcount/app
-cd /srv/diskcount/app
-sudo -u diskcount python3.11 -m venv .venv
-sudo -u diskcount .venv/bin/python -m pip install -e .
-sudo cp deploy/diskcount.env.example /etc/example-diskcount.env
-sudo nano /etc/example-diskcount.env
-sudo cp deploy/diskcount.service /etc/systemd/system/example-diskcount.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now example-diskcount
-sudo journalctl -u example-diskcount -f
-```
-
-Initialize the database before first start if desired:
-
-```bash
-sudo -u diskcount /srv/diskcount/app/.venv/bin/python -m diskcount init-db
-```
-
-## CLI
-
-- `diskcount check`: dry-run scan, equivalent to checking current sources without persisting observations.
-- `diskcount check --persist`: check and persist observations.
-- `diskcount scan --dry-run`: explicit dry-run scan.
-- `diskcount list --min-tb 16 --max-eur-tb 20 --media rotational`: print the best current offers sorted by EUR/TB.
-- `diskcount run`: start Telegram polling and the background scheduler.
+The service runs database migrations at startup using idempotent `CREATE IF NOT EXISTS` and `ALTER TABLE IF NOT EXISTS` statements.

@@ -17,4 +17,6 @@ WORKDIR /app
 
 COPY --from=builder /diskcount /app/diskcount
 
+EXPOSE 47832
+
 CMD ["/app/diskcount"]
