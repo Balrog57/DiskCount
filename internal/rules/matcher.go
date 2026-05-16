@@ -1,9 +1,9 @@
 package rules
 
 import (
+	"github.com/Balrog57/DiskCount/internal/db"
+	"github.com/Balrog57/DiskCount/internal/domain"
 	"time"
-	"github.com/MarcPartensky/DiskCount/internal/db"
-	"github.com/MarcPartensky/DiskCount/internal/domain"
 )
 
 type Preset struct {
@@ -35,48 +35,98 @@ var CapacityPresets = map[string]Preset{
 func pf(v float64) *float64 { return &v }
 
 func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
-	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) { return false }
-	if len(alert.Conditions) > 0 && (deal.Condition == nil || !cont(alert.Conditions, string(*deal.Condition))) { return false }
-	if len(alert.MediaTypes) > 0 && (deal.MediaType == nil || !cont(alert.MediaTypes, string(*deal.MediaType))) { return false }
-	if len(alert.DriveCategories) > 0 && (deal.DriveCategory == nil || !cont(alert.DriveCategories, string(*deal.DriveCategory))) { return false }
-	if len(alert.Interfaces) > 0 {
-		m := false; for _, di := range deal.Interfaces { if cont(alert.Interfaces, string(di)) { m = true; break } }; if !m { return false }
+	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) {
+		return false
 	}
-	if !capMatch(alert, deal.CapacityTB) { return false }
-	if alert.MaxPricePerTB != nil && deal.PricePerTB > *alert.MaxPricePerTB { return false }
+	if len(alert.Conditions) > 0 && (deal.Condition == nil || !cont(alert.Conditions, string(*deal.Condition))) {
+		return false
+	}
+	if len(alert.MediaTypes) > 0 && (deal.MediaType == nil || !cont(alert.MediaTypes, string(*deal.MediaType))) {
+		return false
+	}
+	if len(alert.DriveCategories) > 0 && (deal.DriveCategory == nil || !cont(alert.DriveCategories, string(*deal.DriveCategory))) {
+		return false
+	}
+	if len(alert.Interfaces) > 0 {
+		m := false
+		for _, di := range deal.Interfaces {
+			if cont(alert.Interfaces, string(di)) {
+				m = true
+				break
+			}
+		}
+		if !m {
+			return false
+		}
+	}
+	if !capMatch(alert, deal.CapacityTB) {
+		return false
+	}
+	if alert.MaxPricePerTB != nil && deal.PricePerTB > *alert.MaxPricePerTB {
+		return false
+	}
 	return true
 }
 
 func capMatch(a *db.Alert, tb float64) bool {
 	if len(a.CapacityPresets) > 0 {
 		for _, k := range a.CapacityPresets {
-			p, ok := CapacityPresets[k]; if !ok { continue }
-			if p.MinTB != nil && tb < *p.MinTB { continue }
-			if p.MaxTB != nil && tb > *p.MaxTB { continue }
+			p, ok := CapacityPresets[k]
+			if !ok {
+				continue
+			}
+			if p.MinTB != nil && tb < *p.MinTB {
+				continue
+			}
+			if p.MaxTB != nil && tb > *p.MaxTB {
+				continue
+			}
 			return true
 		}
 		return false
 	}
-	if a.MinCapacityTB != nil && tb < *a.MinCapacityTB { return false }
-	if a.MaxCapacityTB != nil && tb > *a.MaxCapacityTB { return false }
+	if a.MinCapacityTB != nil && tb < *a.MinCapacityTB {
+		return false
+	}
+	if a.MaxCapacityTB != nil && tb > *a.MaxCapacityTB {
+		return false
+	}
 	return true
 }
 
 func ShouldNotify(alert *db.Alert, deal domain.Deal, baseline *float64, last *db.Notification, now time.Time, sigDrop float64) domain.NotificationDecision {
-	var disc *float64; dHit := false
+	var disc *float64
+	dHit := false
 	tHit := alert.MaxPricePerTB != nil && deal.PricePerTB <= *alert.MaxPricePerTB
 	if baseline != nil && *baseline > 0 {
-		f := 1.0 - alert.MinDiscountPct/100; dHit = deal.PricePerTB <= (*baseline * f)
-		p := ((*baseline - deal.PricePerTB) / *baseline) * 100; disc = &p
+		f := 1.0 - alert.MinDiscountPct/100
+		dHit = deal.PricePerTB <= (*baseline * f)
+		p := ((*baseline - deal.PricePerTB) / *baseline) * 100
+		disc = &p
 	}
-	if !tHit && !dHit { return domain.NotificationDecision{ShouldNotify: false, Reason: "no_threshold", DiscountPct: disc, BaselinePricePerTB: baseline} }
+	if !tHit && !dHit {
+		return domain.NotificationDecision{ShouldNotify: false, Reason: "no_threshold", DiscountPct: disc, BaselinePricePerTB: baseline}
+	}
 	if last != nil {
 		cd := last.SentAt.Add(time.Duration(alert.CooldownHours) * time.Hour)
-		df := 1.0 - sigDrop/100; drop := deal.PricePerTB <= (last.PricePerTB * df)
-		if now.Before(cd) && !drop { return domain.NotificationDecision{ShouldNotify: false, Reason: "cooldown", DiscountPct: disc, BaselinePricePerTB: baseline} }
+		df := 1.0 - sigDrop/100
+		drop := deal.PricePerTB <= (last.PricePerTB * df)
+		if now.Before(cd) && !drop {
+			return domain.NotificationDecision{ShouldNotify: false, Reason: "cooldown", DiscountPct: disc, BaselinePricePerTB: baseline}
+		}
 	}
-	r := "max_price_per_tb"; if !tHit { r = "rolling_discount" }
+	r := "max_price_per_tb"
+	if !tHit {
+		r = "rolling_discount"
+	}
 	return domain.NotificationDecision{ShouldNotify: true, Reason: r, DiscountPct: disc, BaselinePricePerTB: baseline}
 }
 
-func cont[T comparable](s []T, v T) bool { for _, x := range s { if x == v { return true } }; return false }
+func cont[T comparable](s []T, v T) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}

@@ -8,12 +8,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/MarcPartensky/DiskCount/internal/bot"
-	"github.com/MarcPartensky/DiskCount/internal/config"
-	"github.com/MarcPartensky/DiskCount/internal/db"
-	"github.com/MarcPartensky/DiskCount/internal/notifier"
-	"github.com/MarcPartensky/DiskCount/internal/scanner"
-	"github.com/MarcPartensky/DiskCount/internal/sources"
+	"github.com/Balrog57/DiskCount/internal/bot"
+	"github.com/Balrog57/DiskCount/internal/config"
+	"github.com/Balrog57/DiskCount/internal/db"
+	"github.com/Balrog57/DiskCount/internal/notifier"
+	"github.com/Balrog57/DiskCount/internal/scanner"
+	"github.com/Balrog57/DiskCount/internal/sources"
 )
 
 func main() {
@@ -62,7 +62,8 @@ func main() {
 	go scanner.ScheduleLoop(ctx, scan, cfg.ScrapeIntervalCron)
 
 	fmt.Println("DiskCount v2.0 running...")
-	b.Run(ctx)
+	go b.TB.Start()
+	<-ctx.Done()
 
 	slog.Info("shutting down")
 }

@@ -25,17 +25,17 @@ const (
 type DriveCategory string
 
 const (
-	DriveCategoryExternal3_5  DriveCategory = "external_3_5"
-	DriveCategoryExternal2_5  DriveCategory = "external_2_5"
-	DriveCategoryInternal3_5  DriveCategory = "internal_3_5"
-	DriveCategoryInternal2_5  DriveCategory = "internal_2_5"
+	DriveCategoryExternal3_5    DriveCategory = "external_3_5"
+	DriveCategoryExternal2_5    DriveCategory = "external_2_5"
+	DriveCategoryInternal3_5    DriveCategory = "internal_3_5"
+	DriveCategoryInternal2_5    DriveCategory = "internal_2_5"
 	DriveCategoryInternalHybrid DriveCategory = "internal_hybrid"
-	DriveCategoryInternalSAS  DriveCategory = "internal_sas"
-	DriveCategoryExternalSSD  DriveCategory = "external_ssd"
-	DriveCategoryInternalSSD  DriveCategory = "internal_ssd"
-	DriveCategoryM2SATA       DriveCategory = "m2_sata"
-	DriveCategoryM2NVMe       DriveCategory = "m2_nvme"
-	DriveCategoryU2U3         DriveCategory = "u2_u3"
+	DriveCategoryInternalSAS    DriveCategory = "internal_sas"
+	DriveCategoryExternalSSD    DriveCategory = "external_ssd"
+	DriveCategoryInternalSSD    DriveCategory = "internal_ssd"
+	DriveCategoryM2SATA         DriveCategory = "m2_sata"
+	DriveCategoryM2NVMe         DriveCategory = "m2_nvme"
+	DriveCategoryU2U3           DriveCategory = "u2_u3"
 )
 
 type DriveInterface string

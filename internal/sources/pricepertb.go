@@ -5,16 +5,18 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/MarcPartensky/DiskCount/internal/domain"
-	"github.com/MarcPartensky/DiskCount/internal/parsing"
-	"github.com/MarcPartensky/DiskCount/internal/scraper"
+	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/parsing"
+	"github.com/Balrog57/DiskCount/internal/scraper"
 	"github.com/PuerkitoBio/goquery"
 )
 
 func init() {
 	Register(func(r *Registry) Source {
 		cfg := r.Config()
-		if len(cfg.PricePerTBURLs) == 0 { return nil }
+		if len(cfg.PricePerTBURLs) == 0 {
+			return nil
+		}
 		return &PricePerTB{http: r.HTTP(), byparr: r.Byparr(), urls: cfg.PricePerTBURLs, useFB: cfg.HeadlessFallback}
 	})
 }
@@ -33,9 +35,15 @@ func (s *PricePerTB) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	for _, u := range s.urls {
 		html, err := s.http.Get(ctx, u)
 		if err != nil && s.useFB && s.byparr != nil {
-			if ses, e2 := s.byparr.GetPage(ctx, u); e2 == nil { html = ses.HTML; err = nil }
+			if ses, e2 := s.byparr.GetPage(ctx, u); e2 == nil {
+				html = ses.HTML
+				err = nil
+			}
 		}
-		if err != nil { slog.Warn("pricepertb", "url", u, "err", err); continue }
+		if err != nil {
+			slog.Warn("pricepertb", "url", u, "err", err)
+			continue
+		}
 		all = append(all, parsePTB(html)...)
 	}
 	slog.Debug("pricepertb", "deals", len(all))
@@ -44,26 +52,38 @@ func (s *PricePerTB) Fetch(ctx context.Context) ([]domain.Deal, error) {
 
 func parsePTB(html string) []domain.Deal {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 	var deals []domain.Deal
 	doc.Find("tr").Each(func(_ int, row *goquery.Selection) {
 		cells := row.Find("td")
-		if cells.Length() < 3 { return }
+		if cells.Length() < 3 {
+			return
+		}
 		texts := make([]string, cells.Length())
 		cells.Each(func(i int, c *goquery.Selection) { texts[i] = strings.TrimSpace(c.Text()) })
-		if strings.Contains(strings.ToLower(texts[0]), "price") { return }
+		if strings.Contains(strings.ToLower(texts[0]), "price") {
+			return
+		}
 
 		priceEUR, err := parseFloatClean(texts[0])
-		if err != nil || priceEUR <= 0 { return }
+		if err != nil || priceEUR <= 0 {
+			return
+		}
 		capText := texts[1]
 		var tb float64
 		if parts := strings.Fields(capText); len(parts) > 0 {
 			if v, e := parseFloatClean(parts[0]); e == nil && v > 0 {
 				tb = v
-				if len(parts) > 1 && strings.EqualFold(parts[1], "Go") { tb /= 1000 }
+				if len(parts) > 1 && strings.EqualFold(parts[1], "Go") {
+					tb /= 1000
+				}
 			}
 		}
-		if tb <= 0 { return }
+		if tb <= 0 {
+			return
+		}
 		link := cells.Eq(2).Find("a")
 		href, _ := link.Attr("href")
 		title := strings.TrimSpace(link.Text())
@@ -84,7 +104,8 @@ func parsePTB(html string) []domain.Deal {
 			}
 		}
 
-		cond := domain.ConditionNew; pt := priceEUR / tb
+		cond := domain.ConditionNew
+		pt := priceEUR / tb
 		deals = append(deals, domain.Deal{
 			Source: "pricepertb", Title: title, URL: href,
 			PriceEUR: round2(priceEUR), PricePerTB: round2(pt), CapacityTB: round2(tb),

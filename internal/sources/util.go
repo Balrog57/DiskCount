@@ -13,7 +13,9 @@ func round2(v float64) float64 {
 
 func strPtr(s string) *string {
 	s = strings.TrimSpace(s)
-	if s == "" || s == "-" { return nil }
+	if s == "" || s == "-" {
+		return nil
+	}
 	return &s
 }
 

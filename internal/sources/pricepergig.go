@@ -6,15 +6,17 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/MarcPartensky/DiskCount/internal/domain"
-	"github.com/MarcPartensky/DiskCount/internal/parsing"
-	"github.com/MarcPartensky/DiskCount/internal/scraper"
+	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/parsing"
+	"github.com/Balrog57/DiskCount/internal/scraper"
 )
 
 func init() {
 	Register(func(r *Registry) Source {
 		cfg := r.Config()
-		if !cfg.PricePerGigEnabled { return nil }
+		if !cfg.PricePerGigEnabled {
+			return nil
+		}
 		return &PricePerGig{http: r.HTTP(), apiURL: cfg.PricePerGigAPIURL, market: cfg.PricePerGigMarket}
 	})
 }
@@ -29,7 +31,9 @@ func (s *PricePerGig) Name() string { return "pricepergig" }
 
 func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	html, err := s.http.Get(ctx, s.apiURL+"?marketplace=eq."+s.market+"&technology=in.(HDD,SSD)&limit=50")
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 
 	var drives []struct {
 		ID         json.Number `json:"id"`
@@ -42,15 +46,27 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		ASIN       string      `json:"asin"`
 		Condition  string      `json:"condition"`
 	}
-	if err := json.Unmarshal([]byte(html), &drives); err != nil { return nil, err }
+	if err := json.Unmarshal([]byte(html), &drives); err != nil {
+		return nil, err
+	}
 
 	var deals []domain.Deal
 	for _, d := range drives {
-		tb := d.CapacityGB / 1000; if tb <= 0 || d.Price <= 0 { continue }
+		tb := d.CapacityGB / 1000
+		if tb <= 0 || d.Price <= 0 {
+			continue
+		}
 		pt := d.Price / tb
 		cond := domain.ConditionNew
-		if strings.Contains(strings.ToLower(d.Condition), "used") { cond = domain.ConditionUsed }
-		var extID *string; if d.ASIN != "" { extID = &d.ASIN } else if id := d.ID.String(); id != "" { extID = &id }
+		if strings.Contains(strings.ToLower(d.Condition), "used") {
+			cond = domain.ConditionUsed
+		}
+		var extID *string
+		if d.ASIN != "" {
+			extID = &d.ASIN
+		} else if id := d.ID.String(); id != "" {
+			extID = &id
+		}
 		deals = append(deals, domain.Deal{
 			Source: "pricepergig", Title: d.Title, URL: d.URL,
 			PriceEUR: round2(d.Price), PricePerTB: round2(pt), CapacityTB: round2(tb),
@@ -68,10 +84,12 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 func normalMedia(text string) *domain.MediaType {
 	t := strings.ToLower(text)
 	if strings.Contains(t, "ssd") || strings.Contains(t, "nvme") || strings.Contains(t, "solid") {
-		m := domain.MediaTypeSolidState; return &m
+		m := domain.MediaTypeSolidState
+		return &m
 	}
 	if strings.Contains(t, "hdd") || strings.Contains(t, "disque dur") || strings.Contains(t, "hard drive") || strings.Contains(t, "rpm") {
-		m := domain.MediaTypeRotational; return &m
+		m := domain.MediaTypeRotational
+		return &m
 	}
 	return nil
 }

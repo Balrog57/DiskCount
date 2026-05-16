@@ -2,7 +2,7 @@ package sources
 
 import (
 	"context"
-	"github.com/MarcPartensky/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/domain"
 )
 
 type Source interface {

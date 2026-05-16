@@ -35,10 +35,10 @@ type byparrResponse struct {
 }
 
 type byparrSessionRaw struct {
-	Cookies    []map[string]interface{} `json:"cookies"`
-	UserAgent  string                   `json:"userAgent"`
-	Body       string                   `json:"body"`
-	Status     int                      `json:"status"`
+	Cookies   []map[string]interface{} `json:"cookies"`
+	UserAgent string                   `json:"userAgent"`
+	Body      string                   `json:"body"`
+	Status    int                      `json:"status"`
 }
 
 func NewByparrClient(baseURL string) *ByparrClient {

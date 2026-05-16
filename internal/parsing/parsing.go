@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MarcPartensky/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/domain"
 )
 
 var (

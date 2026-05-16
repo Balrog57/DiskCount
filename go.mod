@@ -1,4 +1,4 @@
-module github.com/MarcPartensky/DiskCount
+module github.com/Balrog57/DiskCount
 
 go 1.26.2
 

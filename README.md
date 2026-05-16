@@ -2,13 +2,6 @@
 
 DiskCount is a Telegram bot that watches HDD/SSD deals and notifies you when an alert matches your filters.
 
-Project tracking files:
-
-- `PLAN.md`: implementation plan.
-- `DASHBOARD.md`: current realization dashboard.
-
-Maintenance rule: every functional, deployment, or configuration change must update the relevant Markdown tracking files and be pushed to the private GitHub repository.
-
 The scanner is intentionally conservative:
 
 - DiskPrices France is parsed from its public table.
@@ -34,17 +27,17 @@ notepad .env
 .\.venv\Scripts\python -m diskcount run
 ```
 
-On Debian the same app is intended to run under `systemd`; see `deploy/diskcount.service`.
+On Linux the same app can run under a service manager such as `systemd`.
 
 ## Configuration
 
 Environment variables:
 
-- `TELEGRAM_BOT_TOKEN`: token created with BotFather.
-- `TELEGRAM_ADMIN_USER_IDS`: comma-separated Telegram user IDs with admin rights. Set your own ID here on the VPS.
+- `TELEGRAM_BOT_TOKEN`: Telegram bot token.
+- `TELEGRAM_ADMIN_USER_IDS`: comma-separated Telegram user IDs with admin rights.
 - `TELEGRAM_ALLOWED_USER_IDS`: optional static comma-separated Telegram user IDs allowed to control the bot. Dynamic users are managed from Telegram and stored in SQLite.
 - `TELEGRAM_POLLING_TIMEOUT_SECONDS`: default `2`, short long-poll timeout for stable restarts.
-- `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; Debian example uses `/var/lib/diskcount/diskcount.sqlite3`.
+- `DATABASE_URL`: default `sqlite:///./diskcount.sqlite3`; set this to your deployment database location in production.
 - `DISKPRICES_URL`: default `https://diskprices.com/?locale=fr`.
 - `PRICEPERGIG_ENABLED`: default `true`.
 - `PRICEPERGIG_API_URL`: default `https://api.pricepergig.com/drives`.
@@ -138,8 +131,8 @@ Alerts are owned per Telegram user. Every authorized user can create, list, paus
 Admin commands, restricted to `TELEGRAM_ADMIN_USER_IDS`:
 
 - `/users` lists allowed and disabled users.
-- `/allow 123456789 Alice` adds or re-enables a user with a custom label.
-- `/revoke 123456789` disables a user.
+- `/allow USER_ID Label` adds or re-enables a user with a custom label.
+- `/revoke USER_ID` disables a user.
 
 Admin users get an expanded Telegram command menu for these admin commands.
 They also get admin tiles in the inline navigation.
@@ -158,37 +151,31 @@ Accepted alert keys:
 - `discount`: minimum discount percentage compared with the rolling 30 day median; default `5`.
 - `cooldown`: hours before repeating a notification for the same product unless price drops further; default `24`.
 
-## Debian deployment
+## Linux deployment
 
 Example:
 
 ```bash
-sudo useradd --system --home /opt/diskcount --shell /usr/sbin/nologin diskcount
-sudo mkdir -p /opt/diskcount /var/lib/diskcount
-sudo chown -R diskcount:diskcount /opt/diskcount /var/lib/diskcount
-sudo cp -r . /opt/diskcount
-cd /opt/diskcount
+sudo useradd --system --home /srv/diskcount --shell /usr/sbin/nologin diskcount
+sudo mkdir -p /srv/diskcount /srv/diskcount/data
+sudo chown -R diskcount:diskcount /srv/diskcount
+sudo cp -r . /srv/diskcount/app
+cd /srv/diskcount/app
 sudo -u diskcount python3.11 -m venv .venv
 sudo -u diskcount .venv/bin/python -m pip install -e .
-sudo cp deploy/diskcount.env.example /etc/diskcount.env
-sudo nano /etc/diskcount.env
-sudo cp deploy/diskcount.service /etc/systemd/system/diskcount.service
+sudo cp deploy/diskcount.env.example /etc/example-diskcount.env
+sudo nano /etc/example-diskcount.env
+sudo cp deploy/diskcount.service /etc/systemd/system/example-diskcount.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now diskcount
-sudo journalctl -u diskcount -f
+sudo systemctl enable --now example-diskcount
+sudo journalctl -u example-diskcount -f
 ```
 
 Initialize the database before first start if desired:
 
 ```bash
-sudo -u diskcount /opt/diskcount/.venv/bin/python -m diskcount init-db
+sudo -u diskcount /srv/diskcount/app/.venv/bin/python -m diskcount init-db
 ```
-
-## Production location
-
-The active DiskCount bot runs on Proxmox LXC `105`; exact host addresses are kept in the local server inventory
-outside this GitHub repository. Runtime files are under `/opt/diskcount`, configuration is `/etc/diskcount.env`,
-the SQLite database is `/var/lib/diskcount/diskcount.sqlite3`, and the managed service is `diskcount.service`.
 
 ## CLI
 
@@ -197,7 +184,3 @@ the SQLite database is `/var/lib/diskcount/diskcount.sqlite3`, and the managed s
 - `diskcount scan --dry-run`: explicit dry-run scan.
 - `diskcount list --min-tb 16 --max-eur-tb 20 --media rotational`: print the best current offers sorted by EUR/TB.
 - `diskcount run`: start Telegram polling and the background scheduler.
-
-Current production note: LXC `105` was updated on 2026-04-19 from `main`; `diskcount.service` is active, scans every
-4 hours, and the first scan after deployment fetched 1045 offers from `diskprices`, `pricepergig`, and `pricepertb`
-with 0 source errors.
