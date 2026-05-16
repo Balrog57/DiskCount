@@ -29,7 +29,7 @@ services:
       byparr:
         condition: service_started
     environment:
-      DATABASE_URL: postgres://diskcount:diskcount@db:5432/diskcount
+      DATABASE_URL: ${DATABASE_URL:-postgres://diskcount:changeme@db:5432/diskcount}
       WEB_ADMIN_ADDR: 0.0.0.0:47832
       BYPARR_URL: http://byparr:8191
     ports:
