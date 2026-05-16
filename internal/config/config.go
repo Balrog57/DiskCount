@@ -104,7 +104,7 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 
 	return &Config{
 		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
-		DatabaseURL:           value(values, "DATABASE_URL", "postgres://diskcount:diskcount@localhost:5432/diskcount"),
+		DatabaseURL:           value(values, "DATABASE_URL", "postgres://localhost:5432/diskcount"),
 		WebAdminAddr:          value(values, "WEB_ADMIN_ADDR", "0.0.0.0:47832"),
 		RequestTimeoutSeconds: parseFloat(values["REQUEST_TIMEOUT_SECONDS"], 30),
 		UserAgent:             value(values, "USER_AGENT", "DiskCountBot/2.0"),

@@ -26,7 +26,7 @@ The web admin listens on `0.0.0.0:47832` by default. Protect it with your LAN, f
 
 Bootstrap environment variables:
 
-- `DATABASE_URL`: PostgreSQL connection string. Default: `postgres://diskcount:diskcount@localhost:5432/diskcount`.
+- `DATABASE_URL`: PostgreSQL connection string. Default: `postgres://<user>:<password>@localhost:5432/diskcount` (set via environment variable).
 - `WEB_ADMIN_ADDR`: web admin listen address. Default: `0.0.0.0:47832`.
 
 App settings can be imported from environment variables and then managed from the web admin:
