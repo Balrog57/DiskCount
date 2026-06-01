@@ -9,9 +9,10 @@ import (
 )
 
 var (
-	capacityRE = regexp.MustCompile(`(?i)(?P<value>\d+(?:[,.]\d+)?)\s*(?P<unit>t[bo]|g[bo]|m[bo]|tb|gb|mb)\b`)
-	euroRE     = regexp.MustCompile(`(?i)(?:^|[€]\s*)(?P<prefix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)|(?P<suffix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)\s*[€]`)
-	asinRE     = regexp.MustCompile(`(?i)(?:/dp/|/gp/product/|/product/)(?P<asin>[A-Z0-9]{10})(?:[/?#]|$)`)
+	capacityRE    = regexp.MustCompile(`(?i)(?P<value>\d+(?:[,.]\d+)?)\s*(?P<unit>t[bo]|g[bo]|m[bo]|tb|gb|mb)\b`)
+	euroRE        = regexp.MustCompile(`(?i)(?:^|[€]\s*)(?P<prefix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)|(?P<suffix>\d[\d\s\x{00a0}.,]*(?:[,.]\d{1,3})?)\s*[€]`)
+	asinRE        = regexp.MustCompile(`(?i)(?:/dp/|/gp/product/|/product/)(?P<asin>[A-Z0-9]{10})(?:[/?#]|$)`)
+	nonDigitDotRE = regexp.MustCompile(`[^0-9.]`)
 )
 
 func asciiFold(s string) string {
@@ -40,7 +41,7 @@ func parseDecimal(text string) (float64, error) {
 	} else {
 		cleaned = strings.ReplaceAll(cleaned, ",", ".")
 	}
-	cleaned = regexp.MustCompile(`[^0-9.]`).ReplaceAllString(cleaned, "")
+	cleaned = nonDigitDotRE.ReplaceAllString(cleaned, "")
 	if cleaned == "" {
 		return 0, nil
 	}
