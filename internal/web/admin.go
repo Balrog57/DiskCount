@@ -53,8 +53,22 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	}
 }
 
+func (s *Server) withAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg != nil && s.cfg.WebAdminPassword != "" {
+			user, pass, ok := r.BasicAuth()
+			if !ok || user != "admin" || pass != s.cfg.WebAdminPassword {
+				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) Run(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: s.routes()}
+	srv := &http.Server{Addr: addr, Handler: s.withAuth(s.routes())}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

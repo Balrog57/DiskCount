@@ -16,6 +16,7 @@ type SettingMeta struct {
 }
 
 var AppSettings = []SettingMeta{
+	{"WEB_ADMIN_PASSWORD", "Web admin password", true, true, ""},
 	{"TELEGRAM_BOT_TOKEN", "Telegram bot token", true, true, ""},
 	{"REQUEST_TIMEOUT_SECONDS", "Request timeout seconds", false, true, "30"},
 	{"USER_AGENT", "HTTP user agent", false, true, "DiskCountBot/2.0"},
@@ -49,6 +50,7 @@ var AppSettings = []SettingMeta{
 }
 
 type Config struct {
+	WebAdminPassword         string
 	TelegramBotToken         string
 	DatabaseURL              string
 	WebAdminAddr             string
@@ -103,6 +105,7 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 	}
 
 	return &Config{
+		WebAdminPassword:      values["WEB_ADMIN_PASSWORD"],
 		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
 		DatabaseURL:           value(values, "DATABASE_URL", "postgres://localhost:5432/diskcount"),
 		WebAdminAddr:          value(values, "WEB_ADMIN_ADDR", "0.0.0.0:47832"),
