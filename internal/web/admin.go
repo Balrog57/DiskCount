@@ -534,11 +534,11 @@ const productsTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><h2>Filtres</h2></div><div class="panel-body">
 <form method="get" action="/products" class="filters">
-<div><label>Source</label><select name="source"><option value="">Toutes</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
-<div><label>Media</label><select name="media"><option value="">Tous</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
-<div><label>Min To</label><input name="min_tb" value="{{.MinTB}}" inputmode="decimal"></div>
-<div><label>Max To</label><input name="max_tb" value="{{.MaxTB}}" inputmode="decimal"></div>
-<div><label>Max EUR/To</label><input name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal"></div>
+<div><label for="filter_source">Source</label><select id="filter_source" name="source"><option value="">Toutes</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_media">Media</label><select id="filter_media" name="media"><option value="">Tous</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
+<div><label for="filter_min_tb">Min To</label><input id="filter_min_tb" name="min_tb" value="{{.MinTB}}" inputmode="decimal"></div>
+<div><label for="filter_max_tb">Max To</label><input id="filter_max_tb" name="max_tb" value="{{.MaxTB}}" inputmode="decimal"></div>
+<div><label for="filter_max_eur_tb">Max EUR/To</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal"></div>
 <div class="actions"><button type="submit">Filtrer</button><a class="badge" href="/products">Reinitialiser</a></div>
 </form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Meilleures offres recentes</h2><span class="hint">Creation d'alertes uniquement via Telegram.</span></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Source</th><th>Media</th><th>Capacite</th><th>Prix</th><th>EUR/To</th><th>Observe</th></tr></thead><tbody>
@@ -570,7 +570,7 @@ const configTpl = `{{define "body"}}
 const usersTpl = `{{define "body"}}
 {{if .Saved}}<div class="notice">Utilisateurs mis a jour.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-<section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label>Identifiant Telegram</label><input type="number" name="telegram_user_id" required></div><div><label>Nom</label><input type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
+<section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label for="add_user_id">Identifiant Telegram</label><input id="add_user_id" type="number" name="telegram_user_id" required></div><div><label for="add_user_label">Nom</label><input id="add_user_label" type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Utilisateurs autorises</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Etat</th><th>Action</th></tr></thead><tbody>
 {{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
 </tbody></table></div></section>
