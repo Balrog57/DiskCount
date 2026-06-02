@@ -55,13 +55,16 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg != nil && s.cfg.WebAdminPassword != "" {
-			user, pass, ok := r.BasicAuth()
-			if !ok || user != "admin" || pass != s.cfg.WebAdminPassword {
-				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if s.cfg == nil || s.cfg.WebAdminPassword == "" {
+			// SECURITY: Fail securely, do not allow unauthenticated access
+			http.Error(w, "Admin password not configured (set WEB_ADMIN_PASSWORD)", http.StatusForbidden)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != s.cfg.WebAdminPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
