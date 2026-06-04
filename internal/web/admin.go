@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -57,7 +58,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg != nil && s.cfg.WebAdminPassword != "" {
 			user, pass, ok := r.BasicAuth()
-			if !ok || user != "admin" || pass != s.cfg.WebAdminPassword {
+			if !ok || subtle.ConstantTimeCompare([]byte(user), []byte("admin")) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) != 1 {
 				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
