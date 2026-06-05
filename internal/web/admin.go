@@ -489,12 +489,12 @@ const layoutTpl = `<!doctype html>
 <aside class="sidebar">
 <div class="brand">DiskCount</div>
 <nav class="nav">
-<a href="/" class="{{if eq .Active "stats"}}active{{end}}"><span class="dot"></span>Vue d'ensemble</a>
-<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}"><span class="dot"></span>Qualite</a>
-<a href="/products" class="{{if eq .Active "products"}}active{{end}}"><span class="dot"></span>Produits</a>
-<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}"><span class="dot"></span>Alertes</a>
-<a href="/config" class="{{if eq .Active "config"}}active{{end}}"><span class="dot"></span>Configuration</a>
-<a href="/users" class="{{if eq .Active "users"}}active{{end}}"><span class="dot"></span>Utilisateurs</a>
+<a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot"></span>Vue d'ensemble</a>
+<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot"></span>Qualite</a>
+<a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot"></span>Produits</a>
+<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot"></span>Alertes</a>
+<a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot"></span>Configuration</a>
+<a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot"></span>Utilisateurs</a>
 </nav>
 </aside>
 <div class="shell">
@@ -566,8 +566,8 @@ const alertsTpl = `{{define "body"}}
 <div class="warnbox">Creation et edition detaillee via Telegram. Cette page permet uniquement pause, reprise et suppression.</div>
 <section class="panel"><div class="panel-head"><h2>Alertes existantes</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Proprietaire</th><th>Etat</th><th>Capacites</th><th>Media</th><th>Prix max</th><th>Actions</th></tr></thead><tbody>
 {{range .Alerts}}<tr><td>{{.Alert.Name}}</td><td>{{.Owner}}</td><td>{{if .Alert.Enabled}}<span class="badge good">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}</td><td>{{csv .Alert.CapacityPresets}}</td><td>{{csv .Alert.MediaTypes}}</td><td>{{alertPrice .Alert}}</td><td><div class="actions">
-<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}">{{if .Alert.Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit">Reprendre</button>{{end}}</form>
-<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit">Supprimer</button></form>
+<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}">{{if .Alert.Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Mettre en pause l'alerte {{.Alert.Name}}">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reprendre l'alerte {{.Alert.Name}}">Reprendre</button>{{end}}</form>
+<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit" aria-label="Supprimer l'alerte {{.Alert.Name}}">Supprimer</button></form>
 </div></td></tr>{{else}}<tr><td colspan="7" class="empty">Aucune alerte.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
@@ -586,6 +586,6 @@ const usersTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label for="add_user_id">Identifiant Telegram</label><input id="add_user_id" type="number" name="telegram_user_id" required></div><div><label for="add_user_label">Nom</label><input id="add_user_label" type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Utilisateurs autorises</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
+{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
