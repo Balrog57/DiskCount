@@ -15,37 +15,65 @@ var (
 	nonDigitDotRE = regexp.MustCompile(`[^0-9.]`)
 )
 
+// asciiFold normalizes strings efficiently by processing ASCII characters directly,
+// avoiding allocations and rune conversion where possible.
 func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
-	var b strings.Builder
-	for _, r := range s {
-		if r < 128 {
-			b.WriteRune(r)
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 128 {
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			b = append(b, c)
 		}
 	}
-	return strings.ToLower(b.String())
+	return string(b)
 }
 
+// parseDecimal extracts a float efficiently by scanning bytes, removing
+// the need for multiple strings.ReplaceAll chains and regex evaluations.
 func parseDecimal(text string) (float64, error) {
-	cleaned := strings.TrimSpace(text)
-	cleaned = strings.ReplaceAll(cleaned, "\u00a0", " ")
-	cleaned = strings.ReplaceAll(cleaned, " ", "")
-	if cleaned == "" {
+	b := make([]byte, 0, len(text))
+	hasDot := false
+	hasComma := false
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c >= '0' && c <= '9' {
+			b = append(b, c)
+		} else if c == '.' {
+			hasDot = true
+			b = append(b, c)
+		} else if c == ',' {
+			hasComma = true
+			b = append(b, c)
+		}
+	}
+	if len(b) == 0 {
 		return 0, nil
 	}
-	if strings.Contains(cleaned, ",") && strings.Contains(cleaned, ".") {
-		cleaned = strings.ReplaceAll(cleaned, ".", "")
-		cleaned = strings.ReplaceAll(cleaned, ",", ".")
-	} else {
-		cleaned = strings.ReplaceAll(cleaned, ",", ".")
+	// Normalize European formats with thousand separators and commas
+	if hasDot && hasComma {
+		filtered := make([]byte, 0, len(b))
+		for _, c := range b {
+			if c == ',' {
+				filtered = append(filtered, '.')
+			} else if c != '.' {
+				filtered = append(filtered, c)
+			}
+		}
+		b = filtered
+	} else if hasComma {
+		for i, c := range b {
+			if c == ',' {
+				b[i] = '.'
+			}
+		}
 	}
-	cleaned = nonDigitDotRE.ReplaceAllString(cleaned, "")
-	if cleaned == "" {
-		return 0, nil
-	}
-	return strconv.ParseFloat(cleaned, 64)
+	return strconv.ParseFloat(string(b), 64)
 }
 
 func ParsePriceEUR(text string) (float64, error) {
