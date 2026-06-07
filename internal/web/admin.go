@@ -82,7 +82,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 }
 
 func (s *Server) Run(ctx context.Context, addr string) error {
-	srv := &http.Server{Addr: addr, Handler: s.withAuth(s.routes())}
+	srv := &http.Server{Addr: addr, Handler: s.handler()}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -97,9 +97,23 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	return err
 }
 
+// handler composes the public health endpoints with the authenticated
+// admin endpoints. Anything not matching /health, /healthz or /readyz
+// goes through the basic-auth middleware.
+func (s *Server) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			s.health(w, r)
+			return
+		}
+		s.withAuth(s.routes()).ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) routes() http.Handler {
-	// muxAdmin is protected by basic auth; muxPublic holds the unauthenticated
-	// health and metrics endpoints consumed by external monitoring.
+	// muxAdmin is protected by basic auth (see Server.handler). Public
+	// endpoints like /health, /healthz, /readyz are dispatched in
+	// Server.handler before this mux sees the request.
 	muxAdmin := http.NewServeMux()
 	muxAdmin.HandleFunc("/", s.stats)
 	muxAdmin.HandleFunc("/quality", s.quality)
@@ -115,23 +129,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
-
-	muxPublic := http.NewServeMux()
-	muxPublic.HandleFunc("/health", s.health)
-	muxPublic.HandleFunc("/healthz", s.health)
-	muxPublic.HandleFunc("/readyz", s.health)
-
-	// Compose: any URL not handled by muxPublic is forwarded to the
-	// authenticated mux.
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, pattern := muxPublic.Handler(r)
-		_ = pattern
-		if r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
-			muxPublic.ServeHTTP(w, r)
-			return
-		}
-		muxAdmin.ServeHTTP(w, r)
-	})
+	return muxAdmin
 }
 
 func (s *Server) base(title, active string) map[string]any {
