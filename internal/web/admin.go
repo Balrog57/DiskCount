@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
@@ -97,19 +98,40 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 }
 
 func (s *Server) routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", s.stats)
-	mux.HandleFunc("/quality", s.quality)
-	mux.HandleFunc("/products", s.products)
-	mux.HandleFunc("/alerts", s.alerts)
-	mux.HandleFunc("/alerts/toggle", s.toggleAlert)
-	mux.HandleFunc("/alerts/delete", s.deleteAlert)
-	mux.HandleFunc("/config", s.config)
-	mux.HandleFunc("/config/save", s.saveConfig)
-	mux.HandleFunc("/users", s.users)
-	mux.HandleFunc("/users/add", s.addUser)
-	mux.HandleFunc("/users/toggle", s.toggleUser)
-	return mux
+	// muxAdmin is protected by basic auth; muxPublic holds the unauthenticated
+	// health and metrics endpoints consumed by external monitoring.
+	muxAdmin := http.NewServeMux()
+	muxAdmin.HandleFunc("/", s.stats)
+	muxAdmin.HandleFunc("/quality", s.quality)
+	muxAdmin.HandleFunc("/products", s.products)
+	muxAdmin.HandleFunc("/alerts", s.alerts)
+	muxAdmin.HandleFunc("/alerts/toggle", s.toggleAlert)
+	muxAdmin.HandleFunc("/alerts/delete", s.deleteAlert)
+	muxAdmin.HandleFunc("/config", s.config)
+	muxAdmin.HandleFunc("/config/save", s.saveConfig)
+	muxAdmin.HandleFunc("/users", s.users)
+	muxAdmin.HandleFunc("/users/add", s.addUser)
+	muxAdmin.HandleFunc("/users/toggle", s.toggleUser)
+	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
+	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
+	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
+
+	muxPublic := http.NewServeMux()
+	muxPublic.HandleFunc("/health", s.health)
+	muxPublic.HandleFunc("/healthz", s.health)
+	muxPublic.HandleFunc("/readyz", s.health)
+
+	// Compose: any URL not handled by muxPublic is forwarded to the
+	// authenticated mux.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pattern := muxPublic.Handler(r)
+		_ = pattern
+		if r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			muxPublic.ServeHTTP(w, r)
+			return
+		}
+		muxAdmin.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) base(title, active string) map[string]any {
@@ -338,6 +360,95 @@ func (r configRow) DisplayValue() string {
 	return r.Value
 }
 
+// apiMetrics returns a JSON snapshot of the last scan and per-source breaker
+// state. The schema is intentionally stable so it can be polled by an
+// external monitor or scraped by Prometheus (a separate exporter could map
+// the same struct into the Prometheus text format).
+func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
+	report := s.scanner.LastReport()
+	out := map[string]any{
+		"started_at":  s.startedAt,
+		"telegram":    s.telegramRunning,
+		"sources":     s.sourceNames,
+		"breakers":    s.scanner.BreakerSnapshot(),
+		"last_report": nil,
+	}
+	if report != nil {
+		out["last_report"] = map[string]any{
+			"started_at":   report.StartedAt,
+			"finished_at":  report.FinishedAt,
+			"fetched":      report.Fetched,
+			"accepted":     report.Accepted,
+			"rejected":     report.Rejected,
+			"matched":      report.Matched,
+			"notified":     report.Notified,
+			"dry_run":      report.DryRun,
+			"error_count":  len(report.Errors),
+			"breaker_skips": report.BreakerSkips,
+			"sources":      report.SourceMetrics,
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	healthy := true
+	dbStatus := "ok"
+	if s.db == nil {
+		dbStatus = "disabled"
+		healthy = false
+	} else if _, err := s.db.Stats(r.Context()); err != nil {
+		dbStatus = "error: " + err.Error()
+		healthy = false
+	}
+	report := s.scanner.LastReport()
+	lastScan := "never"
+	if report != nil && !report.FinishedAt.IsZero() {
+		lastScan = report.FinishedAt.Format(time.RFC3339)
+	}
+	out := map[string]any{
+		"status":         "ok",
+		"db":             dbStatus,
+		"telegram":       s.telegramRunning,
+		"sources":        len(s.sourceNames),
+		"last_scan":      lastScan,
+		"breakers":       s.scanner.BreakerSnapshot(),
+	}
+	if !healthy {
+		out["status"] = "degraded"
+	}
+	code := http.StatusOK
+	if !healthy {
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, out)
+}
+
+func (s *Server) apiResetBreaker(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
+		return
+	}
+	s.scanner.ResetBreaker(name)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reset": name})
+}
+
+func (s *Server) metricsDashboard(w http.ResponseWriter, r *http.Request) {
+	report := s.scanner.LastReport()
+	data := s.base("Sante & metriques", "metrics")
+	data["Report"] = report
+	data["Breakers"] = s.scanner.BreakerSnapshot()
+	render(w, metricsTpl, data)
+}
 func (r configRow) InputType() string {
 	if r.Meta.Secret {
 		return "password"
@@ -426,6 +537,14 @@ func firstErr(errs ...error) error {
 	return nil
 }
 
+func writeJSON(w http.ResponseWriter, code int, payload any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(code)
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(payload)
+}
+
 func render(w http.ResponseWriter, body string, data map[string]any) {
 	if _, ok := data["Status"]; !ok {
 		data["Status"] = appStatus{}
@@ -507,6 +626,7 @@ const layoutTpl = `<!doctype html>
 <a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Produits</a>
 <a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Alertes</a>
 <a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Configuration</a>
+<a href="/metrics/dashboard" class="{{if eq .Active "metrics"}}active{{end}}" {{if eq .Active "metrics"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Sante</a>
 <a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Utilisateurs</a>
 </nav>
 </aside>
@@ -594,11 +714,34 @@ const configTpl = `{{define "body"}}
 </form>
 {{end}}`
 
+const metricsTpl = `{{define "body"}}
+{{if not .Report}}<div class="warnbox">Aucun scan n'a encore eu lieu.</div>{{else}}
+<div class="grid">
+<div class="card"><div class="label">Dernier scan</div><div class="value" style="font-size:18px">{{tsv .Report.FinishedAt}}</div></div>
+<div class="card"><div class="label">Fetched</div><div class="value">{{.Report.Fetched}}</div></div>
+<div class="card"><div class="label">Accepted</div><div class="value">{{.Report.Accepted}}</div></div>
+<div class="card"><div class="label">Rejected</div><div class="value">{{.Report.Rejected}}</div></div>
+</div>
+<div class="section grid">
+<div class="card"><div class="label">Matched</div><div class="value">{{.Report.Matched}}</div></div>
+<div class="card"><div class="label">Notified</div><div class="value">{{.Report.Notified}}</div></div>
+<div class="card"><div class="label">Errors</div><div class="value">{{len .Report.Errors}}</div></div>
+<div class="card"><div class="label">Breaker skips</div><div class="value">{{len .Report.BreakerSkips}}</div></div>
+</div>
+{{end}}
+<section class="section panel"><div class="panel-head"><h2>Sante des sources</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Etat</th><th>Action</th></tr></thead><tbody>
+{{range $name, $state := .Breakers}}<tr><td>{{$name}}</td><td>{{if eq $state "closed"}}<span class="badge good">closed</span>{{else if eq $state "half-open"}}<span class="badge warn">half-open</span>{{else}}<span class="badge bad">open</span>{{end}}</td><td><form class="inline" method="post" action="/api/sources/breaker/reset"><input type="hidden" name="name" value="{{$name}}"><button class="secondary" type="submit">Reinitialiser</button></form></td></tr>{{else}}<tr><td colspan="3" class="empty">Aucun breaker.</td></tr>{{end}}
+</tbody></table></div></section>
+<section class="section panel"><div class="panel-head"><h2>Metriques par source (dernier scan)</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Deals</th><th>Breaker</th><th>Erreur</th></tr></thead><tbody>
+{{if .Report}}{{range .Report.SourceMetrics}}<tr><td>{{.Name}}</td><td>{{.DealsFetched}}</td><td>{{.BreakerState}}</td><td>{{.Error}}</td></tr>{{else}}<tr><td colspan="4" class="empty">Aucune metrique.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="empty">Aucun scan.</td></tr>{{end}}
+</tbody></table></div></section>
+{{end}}`
+
 const usersTpl = `{{define "body"}}
 {{if .Saved}}<div class="notice">Utilisateurs mis a jour.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label for="add_user_id">Identifiant Telegram</label><input id="add_user_id" type="number" name="telegram_user_id" required></div><div><label for="add_user_label">Nom</label><input id="add_user_label" type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Utilisateurs autorises</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
+{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button class="secondary" type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`

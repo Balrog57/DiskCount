@@ -50,6 +50,12 @@ func main() {
 	cfg.DatabaseURL = bootstrap.DatabaseURL
 	cfg.WebAdminAddr = bootstrap.WebAdminAddr
 
+	if errs := cfg.Validate(); len(errs) > 0 {
+		for _, err := range errs {
+			slog.Warn("config validation", "err", err.Error())
+		}
+	}
+
 	reg := sources.NewRegistry(cfg)
 	srcs := sources.BuildAll(reg)
 	slog.Info("sources loaded", "count", len(srcs))

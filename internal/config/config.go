@@ -2,6 +2,8 @@ package config
 
 import (
 	"bufio"
+	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -47,6 +49,17 @@ var AppSettings = []SettingMeta{
 	{"GEIZHALS_ENABLED", "Geizhals enabled", false, true, "true"},
 	{"RDC_ENABLED", "Rue du Commerce enabled", false, true, "true"},
 	{"PCPART_ENABLED", "PCPartPicker enabled", false, true, "true"},
+	{"RETRY_MAX_ATTEMPTS", "Retry max attempts", false, false, "3"},
+	{"RETRY_BASE_DELAY_SECONDS", "Retry base delay seconds", false, false, "0.5"},
+	{"RETRY_MAX_DELAY_SECONDS", "Retry max delay seconds", false, false, "30"},
+	{"ENABLED_SOURCES", "Enabled sources (comma-separated)", false, true, ""},
+	{"HEADERS_EXTRA", "Extra HTTP headers (JSON)", false, true, ""},
+	{"USER_AGENT_POOL", "User agent pool (comma-separated)", false, true, ""},
+	{"BLOCKED_DETECTION_KEYWORDS", "Blocked detection keywords", false, false, "cf-browser-verification,Just a moment...,Checking your browser,Enable JavaScript,Access Denied,captcha,403 Forbidden"},
+	{"CIRCUIT_BREAKER_ENABLED", "Circuit breaker enabled", false, false, "true"},
+	{"CIRCUIT_BREAKER_THRESHOLD", "Circuit breaker failure threshold", false, false, "5"},
+	{"CIRCUIT_BREAKER_TIMEOUT_SECONDS", "Circuit breaker open timeout seconds", false, false, "60"},
+	{"PER_REQUEST_TIMEOUT_SECONDS", "Per-request timeout seconds", false, false, "10"},
 }
 
 type Config struct {
@@ -83,6 +96,17 @@ type Config struct {
 	GeizhalsEnabled          bool
 	RDCEnabled               bool
 	PCPartEnabled            bool
+	RetryMaxAttempts         int
+	RetryBaseDelaySeconds    float64
+	RetryMaxDelaySeconds     float64
+	EnabledSources           []string
+	HeadersExtra             string
+	UserAgentPool            []string
+	BlockedDetectionKeywords []string
+	CircuitBreakerEnabled    bool
+	CircuitBreakerThreshold  int
+	CircuitBreakerTimeoutS   float64
+	PerRequestTimeoutSeconds float64
 }
 
 func LoadBootstrap() *Config {
@@ -140,8 +164,19 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		LDLCEnabled:        parseBool(values["LDLC_ENABLED"], true),
 		AlternateTLDs:      splitCSV(values["ALTERNATE_TLDS"]),
 		GeizhalsEnabled:    parseBool(values["GEIZHALS_ENABLED"], true),
-		RDCEnabled:         parseBool(values["RDC_ENABLED"], true),
-		PCPartEnabled:      parseBool(values["PCPART_ENABLED"], true),
+		RDCEnabled:                  parseBool(values["RDC_ENABLED"], true),
+		PCPartEnabled:               parseBool(values["PCPART_ENABLED"], true),
+		RetryMaxAttempts:            int(parseFloat(values["RETRY_MAX_ATTEMPTS"], 3)),
+		RetryBaseDelaySeconds:       parseFloat(values["RETRY_BASE_DELAY_SECONDS"], 0.5),
+		RetryMaxDelaySeconds:        parseFloat(values["RETRY_MAX_DELAY_SECONDS"], 30),
+		EnabledSources:              splitCSV(values["ENABLED_SOURCES"]),
+		HeadersExtra:                values["HEADERS_EXTRA"],
+		UserAgentPool:               splitCSV(values["USER_AGENT_POOL"]),
+		BlockedDetectionKeywords:    splitCSV(values["BLOCKED_DETECTION_KEYWORDS"]),
+		CircuitBreakerEnabled:       parseBool(values["CIRCUIT_BREAKER_ENABLED"], true),
+		CircuitBreakerThreshold:     int(parseFloat(values["CIRCUIT_BREAKER_THRESHOLD"], 5)),
+		CircuitBreakerTimeoutS:      parseFloat(values["CIRCUIT_BREAKER_TIMEOUT_SECONDS"], 60),
+		PerRequestTimeoutSeconds:    parseFloat(values["PER_REQUEST_TIMEOUT_SECONDS"], 10),
 	}
 }
 
@@ -257,4 +292,74 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func (c *Config) Validate() []error {
+	var errs []error
+	if c.RequestTimeoutSeconds <= 0 {
+		errs = append(errs, fmt.Errorf("REQUEST_TIMEOUT_SECONDS must be positive"))
+	}
+	if c.PerRequestTimeoutSeconds <= 0 {
+		errs = append(errs, fmt.Errorf("PER_REQUEST_TIMEOUT_SECONDS must be positive"))
+	}
+	if c.PerRequestTimeoutSeconds > c.RequestTimeoutSeconds {
+		errs = append(errs, fmt.Errorf("PER_REQUEST_TIMEOUT_SECONDS (%v) must be <= REQUEST_TIMEOUT_SECONDS (%v)", c.PerRequestTimeoutSeconds, c.RequestTimeoutSeconds))
+	}
+	if c.RetryMaxAttempts < 0 {
+		errs = append(errs, fmt.Errorf("RETRY_MAX_ATTEMPTS must be >= 0"))
+	}
+	if c.RetryBaseDelaySeconds < 0 {
+		errs = append(errs, fmt.Errorf("RETRY_BASE_DELAY_SECONDS must be >= 0"))
+	}
+	if c.RetryMaxDelaySeconds < 0 {
+		errs = append(errs, fmt.Errorf("RETRY_MAX_DELAY_SECONDS must be >= 0"))
+	}
+	if c.ByparrURL != "" && !isValidURL(c.ByparrURL) {
+		errs = append(errs, fmt.Errorf("BYPARR_URL is not a valid URL: %s", c.ByparrURL))
+	}
+	if c.CircuitBreakerThreshold < 1 {
+		errs = append(errs, fmt.Errorf("CIRCUIT_BREAKER_THRESHOLD must be >= 1"))
+	}
+	if c.CircuitBreakerTimeoutS <= 0 {
+		errs = append(errs, fmt.Errorf("CIRCUIT_BREAKER_TIMEOUT_SECONDS must be positive"))
+	}
+	if c.NotificationPriceDropPct < 0 {
+		errs = append(errs, fmt.Errorf("NOTIFICATION_PRICE_DROP_PCT must be >= 0"))
+	}
+	for _, u := range c.DiskPricesURLUrls() {
+		if !isValidURL(u) {
+			errs = append(errs, fmt.Errorf("invalid DISKPRICES_URL: %s", u))
+		}
+	}
+	return errs
+}
+
+func (c *Config) DiskPricesURLUrls() []string {
+	if c.DiskPricesURL == "" {
+		return nil
+	}
+	return []string{c.DiskPricesURL}
+}
+
+// IsSourceEnabled returns true when the source name is allowed by
+// ENABLED_SOURCES. An empty list (the default) means "all sources are
+// enabled" — the feature is opt-in.
+func (c *Config) IsSourceEnabled(name string) bool {
+	if len(c.EnabledSources) == 0 {
+		return true
+	}
+	for _, s := range c.EnabledSources {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidURL(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	_, err := url.Parse(raw)
+	return err == nil
 }

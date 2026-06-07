@@ -73,3 +73,33 @@ func TestLoadWithAppValuesOverridesEnvButKeepsBootstrap(t *testing.T) {
 		t.Fatalf("explicit empty list should disable default URLs: %#v", cfg.PricePerTBURLs)
 	}
 }
+
+func TestValidateRejectsBadConfig(t *testing.T) {
+	cfg := &Config{
+		RequestTimeoutSeconds:    -1,
+		PerRequestTimeoutSeconds: 20,
+		RetryMaxAttempts:         -1,
+		RetryBaseDelaySeconds:    -1,
+		ByparrURL:                "://invalid",
+		CircuitBreakerThreshold:  0,
+		CircuitBreakerTimeoutS:   -1,
+	}
+	errs := cfg.Validate()
+	if len(errs) < 5 {
+		t.Fatalf("expected several validation errors, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestIsSourceEnabled(t *testing.T) {
+	c := &Config{}
+	if !c.IsSourceEnabled("diskprices") {
+		t.Fatal("empty EnabledSources should mean all enabled")
+	}
+	c.EnabledSources = []string{"diskprices", "pricepergig"}
+	if !c.IsSourceEnabled("diskprices") {
+		t.Fatal("explicit list should allow listed source")
+	}
+	if c.IsSourceEnabled("idealo") {
+		t.Fatal("explicit list should reject unlisted source")
+	}
+}

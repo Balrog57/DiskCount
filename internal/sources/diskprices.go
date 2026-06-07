@@ -32,6 +32,16 @@ type DiskPrices struct {
 
 func (s *DiskPrices) Name() string { return "diskprices" }
 
+func (s *DiskPrices) Info() SourceInfo {
+	return SourceInfo{
+		Name:        "diskprices",
+		Description: "Tableau HTML diskprices.com (HDD/SSD agreges)",
+		Categories:  []string{"scraping"},
+		Requires:    []string{"DISKPRICES_URL"},
+		Version:     "1",
+	}
+}
+
 func (s *DiskPrices) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	html, err := s.http.Get(ctx, s.url)
 	if err != nil && s.useFB && s.byparr != nil {

@@ -31,6 +31,16 @@ type PricePerTB struct {
 
 func (s *PricePerTB) Name() string { return "pricepertb" }
 
+func (s *PricePerTB) Info() SourceInfo {
+	return SourceInfo{
+		Name:        "pricepertb",
+		Description: "Tableau HTML pricepertb.com (€/To, multi-pays)",
+		Categories:  []string{"scraping"},
+		Requires:    []string{"PRICEPERTB_URLS"},
+		Version:     "1",
+	}
+}
+
 func (s *PricePerTB) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	var all []domain.Deal
 	for _, u := range s.urls {

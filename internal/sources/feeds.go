@@ -51,6 +51,40 @@ type FeedSource struct {
 
 func (s *FeedSource) Name() string { return s.name }
 
+func (s *FeedSource) Info() SourceInfo {
+	desc := "Flux RSS/Atom"
+	cats := []string{"rss"}
+	switch s.name {
+	case "dealabs":
+		desc = "Flux RSS Dealabs (deals chauds)"
+	case "idealo":
+		desc = "Flux RSS Idealo (prix compares)"
+	case "ledenicheur":
+		desc = "Flux RSS leDenicheur"
+	case "leboncoin":
+		desc = "Flux RSS leboncoin (occasion)"
+	}
+	return SourceInfo{
+		Name:        s.name,
+		Description: desc,
+		Categories:  cats,
+		Requires:    []string{s.nameUpper() + "_FEED_URLS"},
+		Version:     "1",
+	}
+}
+
+func (s *FeedSource) nameUpper() string {
+	out := make([]byte, 0, len(s.name))
+	for i := 0; i < len(s.name); i++ {
+		c := s.name[i]
+		if c >= 'a' && c <= 'z' {
+			c = c - 'a' + 'A'
+		}
+		out = append(out, c)
+	}
+	return string(out)
+}
+
 func (s *FeedSource) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	fp := gofeed.NewParser()
 	var deals []domain.Deal

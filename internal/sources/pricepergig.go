@@ -30,6 +30,16 @@ type PricePerGig struct {
 
 func (s *PricePerGig) Name() string { return "pricepergig" }
 
+func (s *PricePerGig) Info() SourceInfo {
+	return SourceInfo{
+		Name:        "pricepergig",
+		Description: "API JSON pricepergig.com (Amazon marketplace)",
+		Categories:  []string{"api"},
+		Requires:    []string{"PRICEPERGIG_API_URL", "PRICEPERGIG_MARKET"},
+		Version:     "1",
+	}
+}
+
 func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	html, err := s.http.Get(ctx, s.apiURL+"?marketplace=eq."+s.market+"&technology=in.(HDD,SSD)&limit=50")
 	if err != nil {

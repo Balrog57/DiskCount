@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 )
 
@@ -63,31 +64,34 @@ func (c *ByparrClient) GetPage(ctx context.Context, targetURL string) (*ByparrSe
 		return nil, fmt.Errorf("marshaling request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, c.BaseURL+"/v1", bytes.NewReader(body),
-	)
+	reqURL := c.BaseURL + "/v1"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
+		return nil, NewPermanentError(reqURL, 0, "creating request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("executing request: %w", err)
+		return nil, classifyTransportError(reqURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return nil, classifyHTTPStatus(reqURL, resp.StatusCode)
 	}
 
 	var result byparrResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding response: %w", err)
+		return nil, NewParseError(reqURL, "decoding byparr response", err)
 	}
 
 	if result.Status != "ok" {
-		return nil, fmt.Errorf("byparr error: %s", result.Message)
+		msg := result.Message
+		if strings.Contains(strings.ToLower(msg), "timeout") {
+			return nil, NewTransientError(reqURL, 0, fmt.Sprintf("byparr: %s", msg), nil)
+		}
+		return nil, NewPermanentError(reqURL, 0, fmt.Sprintf("byparr: %s", msg), nil)
 	}
 
 	return &ByparrSession{

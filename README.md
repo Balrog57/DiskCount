@@ -54,7 +54,14 @@ Available pages:
 - `/products`: recent best products with source, media, capacity, and price filters.
 - `/alerts`: existing alerts with pause, resume, and delete actions only.
 - `/config`: persisted app configuration.
+- `/metrics/dashboard`: per-source breaker states and last-scan metrics; reset a breaker to force it closed.
 - `/users`: authorized Telegram users.
+
+JSON endpoints (no auth — meant for monitors and load balancers):
+
+- `GET /health` / `/healthz` / `/readyz`: returns `200` with `{"status":"ok", ...}` or `503` with `{"status":"degraded", ...}` when the DB is unreachable. Includes the last scan timestamp and per-source breaker states.
+- `GET /api/metrics`: stable JSON snapshot of the last scan, breaker states, and per-source metrics.
+- `POST /api/sources/breaker/reset`: form-encoded `name=<source>` resets the breaker for that source.
 
 Alert creation and detailed alert editing stay on Telegram. The web admin intentionally does not create alerts.
 
@@ -84,6 +91,36 @@ The scanner is intentionally conservative:
 - Idealo, leDenicheur, and leboncoin configured feeds/pages.
 - Optional Keepa API.
 - Optional eBay Browse API.
+
+### Adding a New Source
+
+1. Create `internal/sources/<name>.go` that implements `sources.Source` (Name + Fetch).
+2. Optionally implement the marker interfaces:
+   - `Describable.Info()` to populate the admin catalog.
+   - `HealthCheckable.HealthCheck(ctx)` so the registry can skip a sick source.
+   - `RateLimitable.RateLimit()` to declare a request rate.
+3. Register the source via `init()`:
+   ```go
+   func init() {
+       sources.Register(func(r *sources.Registry) sources.Source {
+           cfg := r.Config()
+           if cfg.MySourceURL == "" { return nil }
+           return &MySource{http: r.HTTP(), byparr: r.Byparr(), url: cfg.MySourceURL}
+       })
+   }
+   ```
+   Sources are wrapped in a per-source circuit breaker (`sony/gobreaker`)
+   and a `RetryingFetcher` that honours `RETRY_MAX_ATTEMPTS`,
+   `RETRY_BASE_DELAY_SECONDS`, and `RETRY_MAX_DELAY_SECONDS`. You can use
+   `r.HTTP()` for direct fetches, `r.Retry()` for the retry-wrapped
+   version, or call `r.Byparr().GetPage(...)` for headless fallback.
+4. Add fields to `Config`, declare the env keys in `config.AppSettings`,
+   and extend `LoadWithAppValues` to read them.
+5. Add `ENABLED_SOURCES=...` to the web admin's config page to opt in
+   (an empty list enables every registered source).
+6. Write a unit test using `sources.NewTestFetcher` and
+   `httptest.NewServer` to exercise the parsing. The `internal/sources/testutil.go`
+   helpers cover the common patterns.
 
 ## Deployment Notes
 

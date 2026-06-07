@@ -1,6 +1,13 @@
 package sources
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/Balrog57/DiskCount/internal/domain"
+)
 
 func TestParsePricePerTBRequiresTitleAndURL(t *testing.T) {
 	html := `<table>
@@ -36,4 +43,74 @@ func TestParseDiskPricesClassifiesExternal25(t *testing.T) {
 	if deals[0].DriveCategory == nil || *deals[0].DriveCategory != "external_2_5" {
 		t.Fatalf("expected external_2_5, got %#v", deals[0].DriveCategory)
 	}
+}
+
+func TestFeedSourceInfoDescribesSource(t *testing.T) {
+	s := &FeedSource{name: "dealabs", def: domain.ConditionNew}
+	info := s.Info()
+	if info.Name != "dealabs" {
+		t.Fatalf("info.Name = %q", info.Name)
+	}
+	if info.Description == "" {
+		t.Fatal("info.Description should not be empty")
+	}
+	if len(info.Requires) == 0 || info.Requires[0] == "" {
+		t.Fatal("info.Requires should list at least one env key")
+	}
+}
+
+func TestDiskPricesInfo(t *testing.T) {
+	s := &DiskPrices{url: "https://example/"}
+	info := s.Info()
+	if info.Name != "diskprices" {
+		t.Fatalf("info.Name = %q", info.Name)
+	}
+	if len(info.Categories) == 0 {
+		t.Fatal("expected at least one category")
+	}
+}
+
+func TestPricePerGigInfo(t *testing.T) {
+	s := &PricePerGig{apiURL: "https://x"}
+	info := s.Info()
+	if info.Name != "pricepergig" {
+		t.Fatalf("info.Name = %q", info.Name)
+	}
+}
+
+func TestPricePerTBInfo(t *testing.T) {
+	s := &PricePerTB{urls: []string{"https://x"}}
+	info := s.Info()
+	if info.Name != "pricepertb" {
+		t.Fatalf("info.Name = %q", info.Name)
+	}
+}
+
+func TestNewTestFetcher(t *testing.T) {
+	srv := httptest.NewServer(MustStatusHandler(200, "ok"))
+	defer srv.Close()
+	fetcher := NewTestFetcher(t, srv)
+	if fetcher == nil {
+		t.Fatal("nil fetcher")
+	}
+	body := FetchThroughServer(t, srv, fetcher, "/")
+	if body != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+}
+
+func TestNewTestFetcherWithContext(t *testing.T) {
+	// The helper is safe to call without a server when only used to
+	// construct a fetcher; the nil server is accepted via the leading
+	// underscore and is otherwise unused.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+	f := NewTestFetcher(t, srv)
+	if f == nil {
+		t.Fatal("nil fetcher")
+	}
+	// A simple context-canceled call should not panic.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _ = f.Get(ctx, srv.URL+"/")
 }
