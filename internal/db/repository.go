@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS products (id VARCHAR(80) PRIMARY KEY, source VARCHAR(
 CREATE TABLE IF NOT EXISTS price_observations (id SERIAL PRIMARY KEY, product_id VARCHAR(80) REFERENCES products(id), source VARCHAR(40) NOT NULL, observed_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, quality_score INTEGER DEFAULT 0, raw_json JSONB DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS idx_obs_pid ON price_observations(product_id);
 CREATE INDEX IF NOT EXISTS idx_obs_ts ON price_observations(observed_at);
+CREATE INDEX IF NOT EXISTS idx_obs_latest ON price_observations(product_id, observed_at DESC); -- ⚡ Bolt: composite index to avoid costly sort during DISTINCT ON (product_id) in LatestPrices query
 CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, alert_id INTEGER REFERENCES alerts(id), product_id VARCHAR(80) REFERENCES products(id), sent_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, discount_pct NUMERIC(6,2), reason VARCHAR(80) NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_notif_aid ON notifications(alert_id);
 CREATE INDEX IF NOT EXISTS idx_notif_pid ON notifications(product_id);
