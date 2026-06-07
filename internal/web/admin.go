@@ -489,12 +489,12 @@ const layoutTpl = `<!doctype html>
 <aside class="sidebar">
 <div class="brand">DiskCount</div>
 <nav class="nav">
-<a href="/" class="{{if eq .Active "stats"}}active{{end}}"><span class="dot"></span>Vue d'ensemble</a>
-<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}"><span class="dot"></span>Qualite</a>
-<a href="/products" class="{{if eq .Active "products"}}active{{end}}"><span class="dot"></span>Produits</a>
-<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}"><span class="dot"></span>Alertes</a>
-<a href="/config" class="{{if eq .Active "config"}}active{{end}}"><span class="dot"></span>Configuration</a>
-<a href="/users" class="{{if eq .Active "users"}}active{{end}}"><span class="dot"></span>Utilisateurs</a>
+<a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Vue d'ensemble</a>
+<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Qualite</a>
+<a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Produits</a>
+<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Alertes</a>
+<a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Configuration</a>
+<a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Utilisateurs</a>
 </nav>
 </aside>
 <div class="shell">
