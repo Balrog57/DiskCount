@@ -56,22 +56,25 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.cfg != nil && s.cfg.WebAdminPassword != "" {
-			user, pass, ok := r.BasicAuth()
-			if !ok {
-				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		if s.cfg == nil || s.cfg.WebAdminPassword == "" {
+			http.Error(w, "Admin password not configured (set WEB_ADMIN_PASSWORD)", http.StatusForbidden)
+			return
+		}
 
-			userMatch := subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1
-			passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1
+		user, pass, ok := r.BasicAuth()
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-			if !userMatch || !passMatch {
-				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1
+		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1
+
+		if !userMatch || !passMatch {
+			w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -576,8 +579,8 @@ const alertsTpl = `{{define "body"}}
 <div class="warnbox">Creation et edition detaillee via Telegram. Cette page permet uniquement pause, reprise et suppression.</div>
 <section class="panel"><div class="panel-head"><h2>Alertes existantes</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Proprietaire</th><th>Etat</th><th>Capacites</th><th>Media</th><th>Prix max</th><th>Actions</th></tr></thead><tbody>
 {{range .Alerts}}<tr><td>{{.Alert.Name}}</td><td>{{.Owner}}</td><td>{{if .Alert.Enabled}}<span class="badge good">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}</td><td>{{csv .Alert.CapacityPresets}}</td><td>{{csv .Alert.MediaTypes}}</td><td>{{alertPrice .Alert}}</td><td><div class="actions">
-<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}">{{if .Alert.Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit">Reprendre</button>{{end}}</form>
-<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit">Supprimer</button></form>
+<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}">{{if .Alert.Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Mettre en pause l'alerte {{.Alert.Name}}">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reprendre l'alerte {{.Alert.Name}}">Reprendre</button>{{end}}</form>
+<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit" aria-label="Supprimer l'alerte {{.Alert.Name}}">Supprimer</button></form>
 </div></td></tr>{{else}}<tr><td colspan="7" class="empty">Aucune alerte.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
@@ -596,6 +599,6 @@ const usersTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label for="add_user_id">Identifiant Telegram</label><input id="add_user_id" type="number" name="telegram_user_id" required></div><div><label for="add_user_label">Nom</label><input id="add_user_label" type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Utilisateurs autorises</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
+{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
