@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -308,29 +307,16 @@ func (db *DB) RecordRejectedDeal(ctx context.Context, deal domain.Deal, reason, 
 
 func (db *DB) BaselinePricePerTB(ctx context.Context, pid string, before time.Time, days int) (*float64, error) {
 	start := before.Add(-time.Duration(days) * 24 * time.Hour)
-	rows, err := db.Pool.Query(ctx, "SELECT price_per_tb FROM price_observations WHERE product_id=$1 AND observed_at>=$2 AND observed_at<$3", pid, start, before)
+	// ⚡ Bolt optimization: Compute median directly in PostgreSQL instead of loading all rows into Go memory
+	var med *float64
+	err := db.Pool.QueryRow(ctx, "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY price_per_tb)::float8 FROM price_observations WHERE product_id=$1 AND observed_at>=$2 AND observed_at<$3", pid, start, before).Scan(&med)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var vals []float64
-	for rows.Next() {
-		var v float64
-		rows.Scan(&v)
-		vals = append(vals, v)
-	}
-	if len(vals) == 0 {
+	if med == nil {
 		return nil, nil
 	}
-	sort.Float64s(vals)
-	m := len(vals) / 2
-	var med float64
-	if len(vals)%2 == 0 {
-		med = (vals[m-1] + vals[m]) / 2
-	} else {
-		med = vals[m]
-	}
-	r := math.Round(med*100) / 100
+	r := math.Round(*med*100) / 100
 	return &r, nil
 }
 
