@@ -19,33 +19,62 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
+	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
 	var b strings.Builder
-	for _, r := range s {
-		if r < 128 {
-			b.WriteRune(r)
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 128 {
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			b.WriteByte(c)
 		}
 	}
-	return strings.ToLower(b.String())
+	return b.String()
 }
 
 func parseDecimal(text string) (float64, error) {
-	cleaned := strings.TrimSpace(text)
-	cleaned = strings.ReplaceAll(cleaned, "\u00a0", " ")
-	cleaned = strings.ReplaceAll(cleaned, " ", "")
-	if cleaned == "" {
+	// ⚡ Bolt: Single-pass byte iteration to extract digits and decimal separator
+	// avoiding multiple string allocations from strings.ReplaceAll and regex.
+	hasComma := false
+	hasDot := false
+	for i := 0; i < len(text); i++ {
+		if text[i] == ',' {
+			hasComma = true
+		} else if text[i] == '.' {
+			hasDot = true
+		}
+	}
+
+	var b strings.Builder
+	b.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c >= '0' && c <= '9' {
+			b.WriteByte(c)
+		} else if c == ',' {
+			if hasDot {
+				// If both present, comma acts as decimal point in original logic
+				b.WriteByte('.')
+			} else {
+				// If only comma, it acts as decimal point
+				b.WriteByte('.')
+			}
+		} else if c == '.' {
+			if hasComma {
+				// If both present, dot is ignored (thousands separator)
+				continue
+			} else {
+				b.WriteByte('.')
+			}
+		}
+	}
+
+	if b.Len() == 0 {
 		return 0, nil
 	}
-	if strings.Contains(cleaned, ",") && strings.Contains(cleaned, ".") {
-		cleaned = strings.ReplaceAll(cleaned, ".", "")
-		cleaned = strings.ReplaceAll(cleaned, ",", ".")
-	} else {
-		cleaned = strings.ReplaceAll(cleaned, ",", ".")
-	}
-	cleaned = nonDigitDotRE.ReplaceAllString(cleaned, "")
-	if cleaned == "" {
-		return 0, nil
-	}
-	return strconv.ParseFloat(cleaned, 64)
+	return strconv.ParseFloat(b.String(), 64)
 }
 
 func ParsePriceEUR(text string) (float64, error) {
