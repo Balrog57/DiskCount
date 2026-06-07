@@ -18,6 +18,7 @@ build/
 deploy/
 tests/
 *.conf
+bin/
 wg0.conf
 _d*.sh
 _recover*.py
