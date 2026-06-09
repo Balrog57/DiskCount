@@ -102,3 +102,46 @@ func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 		}
 	}
 }
+
+func TestCSRFProtection(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "test"}, nil, false)
+	handler := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without headers", "GET", "", "", "example.com", 200},
+		{"POST missing origin/referer", "POST", "", "", "example.com", 403},
+		{"POST origin matches host", "POST", "https://example.com", "", "example.com", 200},
+		{"POST referer matches host", "POST", "", "https://example.com/path", "example.com", 200},
+		{"POST origin mismatch", "POST", "https://evil.com", "", "example.com", 403},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/", nil)
+			req.Host = tc.host
+			req.SetBasicAuth("admin", "test")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("got status %d, want %d", rec.Code, tc.wantStatus)
+			}
+		})
+	}
+}

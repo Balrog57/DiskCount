@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,6 +78,35 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				origin = r.Header.Get("Referer")
+			}
+
+			if origin == "" {
+				http.Error(w, "CSRF validation failed: missing Origin/Referer", http.StatusForbidden)
+				return
+			}
+
+			u, err := url.Parse(origin)
+			if err != nil {
+				http.Error(w, "CSRF validation failed: invalid Origin/Referer", http.StatusForbidden)
+				return
+			}
+
+			expectedHost := r.Host
+			if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+				expectedHost = xfh
+			}
+
+			if u.Host != expectedHost {
+				http.Error(w, "CSRF validation failed: host mismatch", http.StatusForbidden)
+				return
+			}
+		}
+
 		next.ServeHTTP(w, r)
 	})
 }
