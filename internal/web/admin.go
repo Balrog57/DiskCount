@@ -373,17 +373,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
+			"started_at":    report.StartedAt,
+			"finished_at":   report.FinishedAt,
+			"fetched":       report.Fetched,
+			"accepted":      report.Accepted,
+			"rejected":      report.Rejected,
+			"matched":       report.Matched,
+			"notified":      report.Notified,
+			"dry_run":       report.DryRun,
+			"error_count":   len(report.Errors),
 			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"sources":       report.SourceMetrics,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -405,12 +405,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -708,7 +708,7 @@ const configTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <div class="warnbox">{{.RestartMsg}}</div>
 <form method="post" action="/config/save" class="panel"><div class="panel-head"><h2>Parametres applicatifs</h2><button type="submit">Sauvegarder</button></div>
-{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="{{.InputType}}" placeholder="{{.DisplayValue}}"><div class="hint">Coche remplacer pour enregistrer une nouvelle valeur.</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> Remplacer</label>{{else}}<span class="badge warn">Redemarrage</span>{{end}}</div></div>{{end}}
+{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div id="hint-label-{{.Meta.Key}}" class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="{{.InputType}}" placeholder="{{.DisplayValue}}" aria-describedby="hint-label-{{.Meta.Key}} hint-secret-{{.Meta.Key}}"><div id="hint-secret-{{.Meta.Key}}" class="hint">Coche remplacer pour enregistrer une nouvelle valeur.</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}" aria-describedby="hint-label-{{.Meta.Key}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> Remplacer</label>{{else}}<span class="badge warn">Redemarrage</span>{{end}}</div></div>{{end}}
 </form>
 {{end}}`
 
