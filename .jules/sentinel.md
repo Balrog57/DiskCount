@@ -1,0 +1,4 @@
+## 2024-06-12 - [Missing CSRF Protection on Admin Interface]
+**Vulnerability:** The web admin interface's POST endpoints (`/alerts/toggle`, `/alerts/delete`, `/config/save`, `/users/add`, `/users/toggle`) were missing Cross-Site Request Forgery (CSRF) protection. Even though they are protected by Basic Auth, they could still be exploited if a user is tricked into submitting a malicious form on another site while their browser automatically sends the Basic Auth credentials.
+**Learning:** Basic Auth does not protect against CSRF attacks. State-changing endpoints must always validate the origin of the request.
+**Prevention:** Implement and enforce a CSRF middleware (e.g., verifying `Origin` and `Referer` headers against `r.Host` and `X-Forwarded-Host`) on all state-changing endpoints (POST, PUT, DELETE, PATCH).

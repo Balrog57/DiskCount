@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -110,6 +111,35 @@ func (s *Server) handler() http.Handler {
 	})
 }
 
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				origin = r.Header.Get("Referer")
+			}
+			if origin == "" {
+				http.Error(w, "Forbidden: Missing Origin/Referer header", http.StatusForbidden)
+				return
+			}
+			u, err := url.Parse(origin)
+			if err != nil || u.Host == "" {
+				http.Error(w, "Forbidden: Invalid Origin/Referer header", http.StatusForbidden)
+				return
+			}
+			expectedHost := r.Header.Get("X-Forwarded-Host")
+			if expectedHost == "" {
+				expectedHost = r.Host
+			}
+			if u.Host != expectedHost {
+				http.Error(w, "Forbidden: CSRF origin mismatch", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) routes() http.Handler {
 	// muxAdmin is protected by basic auth (see Server.handler). Public
 	// endpoints like /health, /healthz, /readyz are dispatched in
@@ -129,7 +159,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
-	return muxAdmin
+	return s.withCSRF(muxAdmin)
 }
 
 func (s *Server) base(title, active string) map[string]any {
@@ -373,17 +403,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
+			"started_at":    report.StartedAt,
+			"finished_at":   report.FinishedAt,
+			"fetched":       report.Fetched,
+			"accepted":      report.Accepted,
+			"rejected":      report.Rejected,
+			"matched":       report.Matched,
+			"notified":      report.Notified,
+			"dry_run":       report.DryRun,
+			"error_count":   len(report.Errors),
 			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"sources":       report.SourceMetrics,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -405,12 +435,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
