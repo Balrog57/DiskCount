@@ -47,6 +47,55 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestCSRFProtection(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		xfh        string
+		wantStatus int
+	}{
+		{"GET Request Allowed", http.MethodGet, "", "", "example.com", "", http.StatusOK},
+		{"POST Missing Origin/Referer", http.MethodPost, "", "", "example.com", "", http.StatusForbidden},
+		{"POST Origin Mismatch", http.MethodPost, "http://attacker.com", "", "example.com", "", http.StatusForbidden},
+		{"POST Referer Mismatch", http.MethodPost, "", "http://attacker.com/path", "example.com", "", http.StatusForbidden},
+		{"POST Origin Match", http.MethodPost, "https://example.com", "", "example.com", "", http.StatusOK},
+		{"POST Referer Match", http.MethodPost, "", "https://example.com/path", "example.com", "", http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/", nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			if tt.host != "" {
+				req.Host = tt.host
+			}
+			if tt.xfh != "" {
+				req.Header.Set("X-Forwarded-Host", tt.xfh)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Errorf("got %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
