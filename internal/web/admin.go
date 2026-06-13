@@ -708,7 +708,7 @@ const configTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <div class="warnbox">{{.RestartMsg}}</div>
 <form method="post" action="/config/save" class="panel"><div class="panel-head"><h2>Parametres applicatifs</h2><button type="submit">Sauvegarder</button></div>
-{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="{{.InputType}}" placeholder="{{.DisplayValue}}"><div class="hint">Coche remplacer pour enregistrer une nouvelle valeur.</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> Remplacer</label>{{else}}<span class="badge warn">Redemarrage</span>{{end}}</div></div>{{end}}
+{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div id="hint_label_{{.Meta.Key}}" class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="{{.InputType}}" placeholder="{{.DisplayValue}}" aria-describedby="hint_label_{{.Meta.Key}} hint_secret_{{.Meta.Key}}"><div id="hint_secret_{{.Meta.Key}}" class="hint">Coche remplacer pour enregistrer une nouvelle valeur.</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}" aria-describedby="hint_label_{{.Meta.Key}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> Remplacer</label>{{else}}<span class="badge warn">Redemarrage</span>{{end}}</div></div>{{end}}
 </form>
 {{end}}`
 
