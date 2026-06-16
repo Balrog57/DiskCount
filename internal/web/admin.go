@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,7 +130,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
-	return muxAdmin
+	return s.withCSRF(muxAdmin)
 }
 
 func (s *Server) base(title, active string) map[string]any {
@@ -373,17 +374,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
+			"started_at":    report.StartedAt,
+			"finished_at":   report.FinishedAt,
+			"fetched":       report.Fetched,
+			"accepted":      report.Accepted,
+			"rejected":      report.Rejected,
+			"matched":       report.Matched,
+			"notified":      report.Notified,
+			"dry_run":       report.DryRun,
+			"error_count":   len(report.Errors),
 			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"sources":       report.SourceMetrics,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -405,12 +406,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -743,3 +744,28 @@ const usersTpl = `{{define "body"}}
 {{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button class="secondary" type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
+
+// withCSRF mitigates Cross-Site Request Forgery (CSRF) on state-changing admin
+// endpoints. It validates that the Origin or Referer matches the request Host.
+// This is necessary because browsers automatically send basic auth credentials
+// on cross-origin requests.
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				origin = r.Header.Get("Referer")
+			}
+			if origin == "" {
+				http.Error(w, "Forbidden: missing Origin/Referer for CSRF protection", http.StatusForbidden)
+				return
+			}
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Host != r.Host {
+				http.Error(w, "Forbidden: invalid Origin/Referer for CSRF protection", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
