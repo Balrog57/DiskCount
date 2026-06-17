@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,6 +82,29 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				origin = r.Header.Get("Referer")
+			}
+
+			if origin == "" {
+				http.Error(w, "Forbidden - CSRF origin missing", http.StatusForbidden)
+				return
+			}
+
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Host != r.Host {
+				http.Error(w, "Forbidden - CSRF origin mismatch", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) Run(ctx context.Context, addr string) error {
 	srv := &http.Server{Addr: addr, Handler: s.handler()}
 	go func() {
@@ -106,7 +130,7 @@ func (s *Server) handler() http.Handler {
 			s.health(w, r)
 			return
 		}
-		s.withAuth(s.routes()).ServeHTTP(w, r)
+		s.withAuth(s.withCSRF(s.routes())).ServeHTTP(w, r)
 	})
 }
 

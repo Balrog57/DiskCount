@@ -102,3 +102,76 @@ func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 		}
 	}
 }
+
+func TestCSRFProtection(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "test"}, nil, false)
+	handler := srv.withAuth(srv.withCSRF(srv.routes()))
+
+	testCases := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{
+			name:       "GET requests bypass CSRF",
+			method:     http.MethodGet,
+			host:       "example.com",
+			wantStatus: http.StatusNotFound, // since we hit /not-found and bypass CSRF
+		},
+		{
+			name:       "POST missing Origin and Referer",
+			method:     http.MethodPost,
+			host:       "example.com",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "POST matching Origin",
+			method:     http.MethodPost,
+			origin:     "http://example.com",
+			host:       "example.com",
+			wantStatus: http.StatusBadRequest, // passes CSRF but fails to parse form/missing params
+		},
+		{
+			name:       "POST matching Referer",
+			method:     http.MethodPost,
+			referer:    "http://example.com/alerts/toggle",
+			host:       "example.com",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "POST mismatching Origin",
+			method:     http.MethodPost,
+			origin:     "http://evil.com",
+			host:       "example.com",
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "/not-found" // For GET to avoid nil db panic, which falls back to stats handler in mux if it's "/" but not-found triggers 404 in ServeMux
+			if tc.method == http.MethodPost {
+				path = "/alerts/toggle"
+			}
+			req := httptest.NewRequest(tc.method, path, nil)
+			req.Host = tc.host
+			req.SetBasicAuth("admin", "test")
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("got status %d, want %d", rec.Code, tc.wantStatus)
+			}
+		})
+	}
+}
