@@ -50,3 +50,12 @@ func TestNormalizeDriveCategoryAndInterfaces(t *testing.T) {
 		t.Fatalf("expected NAND/TLC SSD media, got %#v", media)
 	}
 }
+
+func BenchmarkNormalizeDriveCategory(b *testing.B) {
+	text := "SSD M.2 NVMe PCIe 4.0 - 2.5\""
+	mt := domain.MediaTypeSolidState
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		NormalizeDriveCategory(text, &mt)
+	}
+}
