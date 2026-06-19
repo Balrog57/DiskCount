@@ -102,3 +102,44 @@ func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 		}
 	}
 }
+
+func TestWithCSRF(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without headers", http.MethodGet, "", "", "example.com", http.StatusOK},
+		{"POST blocked without headers", http.MethodPost, "", "", "example.com", http.StatusForbidden},
+		{"POST blocked with mismatched Origin", http.MethodPost, "http://evil.com", "", "example.com", http.StatusForbidden},
+		{"POST blocked with mismatched Referer", http.MethodPost, "", "http://evil.com", "example.com", http.StatusForbidden},
+		{"POST allowed with matching Origin", http.MethodPost, "http://example.com", "", "example.com", http.StatusOK},
+		{"POST allowed with matching Referer", http.MethodPost, "", "http://example.com", "example.com", http.StatusOK},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/test", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("expected status %d, got %d", tc.wantStatus, rec.Code)
+			}
+		})
+	}
+}
