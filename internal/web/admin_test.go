@@ -47,6 +47,49 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestCSRFMiddleware(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+
+	// Test POST without Origin/Referer
+	req := httptest.NewRequest(http.MethodPost, "/not-found", nil)
+	req.Host = "example.com"
+	rec := httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden, got %d", rec.Code)
+	}
+
+	// Test POST with incorrect Origin
+	req = httptest.NewRequest(http.MethodPost, "/not-found", nil)
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://evil.com")
+	rec = httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden, got %d", rec.Code)
+	}
+
+	// Test POST with correct Origin
+	req = httptest.NewRequest(http.MethodPost, "/not-found", nil)
+	req.Host = "example.com"
+	req.Header.Set("Origin", "https://example.com")
+	rec = httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	// Because /not-found doesn't exist, mux will return 404
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found, got %d", rec.Code)
+	}
+
+	// Test GET without Origin (should pass CSRF, hit 404)
+	req = httptest.NewRequest(http.MethodGet, "/not-found", nil)
+	req.Host = "example.com"
+	rec = httptest.NewRecorder()
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 Not Found, got %d", rec.Code)
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
