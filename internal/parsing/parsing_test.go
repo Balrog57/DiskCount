@@ -50,3 +50,21 @@ func TestNormalizeDriveCategoryAndInterfaces(t *testing.T) {
 		t.Fatalf("expected NAND/TLC SSD media, got %#v", media)
 	}
 }
+
+func BenchmarkNormalizeDriveCategory(b *testing.B) {
+	texts := []string{
+		"SSD M.2 NVMe PCIe 4.0",
+		"Disque dur externe portable 2,5 pouces USB",
+		"Samsung 990 PRO 2TB PCIe 4.0 (up to 7450 MB/s) NVMe M.2 (2280) Internal Solid State Drive (SSD)",
+		"WD_BLACK 1TB SN850X NVMe Internal Gaming SSD Solid State Drive - Gen4 PCIe, M.2 2280, Up to 7,300 MB/s",
+		"Crucial X8 1TB Portable SSD – Up to 1050MB/s – USB 3.2 – External Solid State Drive",
+		"Seagate BarraCuda 2TB Internal Hard Drive HDD – 3.5 Inch SATA 6Gb/s 7200 RPM 256MB Cache",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, text := range texts {
+			NormalizeDriveCategory(text, nil)
+		}
+	}
+}
