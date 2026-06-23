@@ -54,10 +54,10 @@ func NewRegistry(cfg *config.Config) *Registry {
 	}
 }
 
-func (r *Registry) HTTP() *scraper.HTTPFetcher     { return r.http }
+func (r *Registry) HTTP() *scraper.HTTPFetcher      { return r.http }
 func (r *Registry) Retry() *scraper.RetryingFetcher { return r.retry }
-func (r *Registry) Byparr() *scraper.ByparrClient  { return r.byparr }
-func (r *Registry) Config() *config.Config         { return r.cfg }
+func (r *Registry) Byparr() *scraper.ByparrClient   { return r.byparr }
+func (r *Registry) Config() *config.Config          { return r.cfg }
 
 func Register(fn SourceFactory) { registeredFactories = append(registeredFactories, fn) }
 
