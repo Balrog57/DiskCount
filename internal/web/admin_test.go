@@ -102,3 +102,81 @@ func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 		}
 	}
 }
+
+func TestCSRFMiddleware(t *testing.T) {
+	s := &Server{}
+	handler := s.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		host       string
+		origin     string
+		referer    string
+		wantStatus int
+	}{
+		{
+			name:       "GET request bypasses CSRF",
+			method:     http.MethodGet,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "POST without Origin or Referer fails",
+			method:     http.MethodPost,
+			host:       "localhost:8080",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "POST with valid Origin",
+			method:     http.MethodPost,
+			host:       "localhost:8080",
+			origin:     "http://localhost:8080",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "POST with invalid Origin",
+			method:     http.MethodPost,
+			host:       "localhost:8080",
+			origin:     "http://evil.com",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "POST with valid Referer (no Origin)",
+			method:     http.MethodPost,
+			host:       "example.com",
+			referer:    "https://example.com/some/path",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "POST with invalid Referer (no Origin)",
+			method:     http.MethodPost,
+			host:       "example.com",
+			referer:    "https://evil.com/some/path",
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/", nil)
+			if tc.host != "" {
+				req.Host = tc.host
+			}
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Errorf("got status %d, want %d", rr.Code, tc.wantStatus)
+			}
+		})
+	}
+}
