@@ -68,9 +68,9 @@ func TestRunOnceCountsRejectedDeals(t *testing.T) {
 
 func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	cfg := config.LoadWithAppValues(map[string]string{
-		"REQUEST_TIMEOUT_SECONDS":      "1",
-		"CIRCUIT_BREAKER_ENABLED":      "true",
-		"CIRCUIT_BREAKER_THRESHOLD":    "2",
+		"REQUEST_TIMEOUT_SECONDS":         "1",
+		"CIRCUIT_BREAKER_ENABLED":         "true",
+		"CIRCUIT_BREAKER_THRESHOLD":       "2",
 		"CIRCUIT_BREAKER_TIMEOUT_SECONDS": "60",
 	})
 	scan := New(cfg, nil, []sources.Source{failingSource{}}, nil)
@@ -95,9 +95,9 @@ func TestCircuitBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 
 func TestResetBreaker(t *testing.T) {
 	cfg := config.LoadWithAppValues(map[string]string{
-		"REQUEST_TIMEOUT_SECONDS":      "1",
-		"CIRCUIT_BREAKER_ENABLED":      "true",
-		"CIRCUIT_BREAKER_THRESHOLD":    "1",
+		"REQUEST_TIMEOUT_SECONDS":         "1",
+		"CIRCUIT_BREAKER_ENABLED":         "true",
+		"CIRCUIT_BREAKER_THRESHOLD":       "1",
 		"CIRCUIT_BREAKER_TIMEOUT_SECONDS": "60",
 	})
 	scan := New(cfg, nil, []sources.Source{failingSource{}}, nil)
