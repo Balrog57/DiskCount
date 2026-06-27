@@ -10,6 +10,61 @@ import (
 	"github.com/Balrog57/DiskCount/internal/db"
 )
 
+func TestWithCSRF(t *testing.T) {
+	srv := &Server{}
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
+
+	// Test GET request (allowed without headers)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for GET request, got %d", rec.Code)
+	}
+
+	// Test POST request without headers (blocked)
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "example.com"
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for POST without headers, got %d", rec.Code)
+	}
+
+	// Test POST request with mismatched Origin (blocked)
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://attacker.com")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden for POST with mismatched Origin, got %d", rec.Code)
+	}
+
+	// Test POST request with matching Origin (allowed)
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://example.com")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for POST with matching Origin, got %d", rec.Code)
+	}
+
+	// Test POST request with matching Referer (allowed)
+	req = httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Host = "example.com"
+	req.Header.Set("Referer", "http://example.com/some/path")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for POST with matching Referer, got %d", rec.Code)
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, configTpl, map[string]any{
