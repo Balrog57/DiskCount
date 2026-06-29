@@ -47,6 +47,76 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestWithCSRFMiddleware(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name           string
+		method         string
+		host           string
+		origin         string
+		referer        string
+		expectedStatus int
+	}{
+		{
+			name:           "GET requests allowed without headers",
+			method:         http.MethodGet,
+			host:           "example.com",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "POST request denied without headers",
+			method:         http.MethodPost,
+			host:           "example.com",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "POST request denied with mismatched Origin",
+			method:         http.MethodPost,
+			host:           "example.com",
+			origin:         "http://evil.com",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "POST request allowed with valid Origin",
+			method:         http.MethodPost,
+			host:           "example.com",
+			origin:         "http://example.com",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "POST request allowed with valid Referer when Origin missing",
+			method:         http.MethodPost,
+			host:           "example.com",
+			referer:        "http://example.com/some/path",
+			expectedStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/test", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.expectedStatus {
+				t.Errorf("expected status %d, got %d", tc.expectedStatus, rec.Code)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
