@@ -21,14 +21,14 @@ import (
 
 // SourceMetrics captures per-source statistics for the most recent scan.
 type SourceMetrics struct {
-	Name            string
-	FetchDuration   time.Duration
-	HTTPStatusCodes map[int]int
-	RetryCount      int
-	DealsFetched    int
-	BreakerState    string
+	Name             string
+	FetchDuration    time.Duration
+	HTTPStatusCodes  map[int]int
+	RetryCount       int
+	DealsFetched     int
+	BreakerState     string
 	BlockedByKeyword string
-	Error           string
+	Error            string
 }
 
 type ScanReport struct {
@@ -47,9 +47,9 @@ type Scanner struct {
 	srcs []sources.Source
 	ntf  *notifier.TelegramNotifier
 
-	mu       sync.RWMutex
-	last     *ScanReport
-	breakers map[string]*gobreaker.CircuitBreaker
+	mu        sync.RWMutex
+	last      *ScanReport
+	breakers  map[string]*gobreaker.CircuitBreaker
 	breakerMu sync.Mutex
 }
 

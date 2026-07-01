@@ -175,10 +175,10 @@ func NewHTTPFetcherWithOptions(opts Options) *HTTPFetcher {
 // already wrap calls in a per-source context.
 func NewHTTPFetcherWithHeaders(userAgent string, timeoutSeconds float64, headers map[string]string, userAgents []string) *HTTPFetcher {
 	return NewHTTPFetcherWithOptions(Options{
-		UserAgent:          userAgent,
-		PerRequestTimeout:  time.Duration(timeoutSeconds * float64(time.Second)),
-		ExtraHeaders:       headers,
-		UserAgents:         userAgents,
+		UserAgent:             userAgent,
+		PerRequestTimeout:     time.Duration(timeoutSeconds * float64(time.Second)),
+		ExtraHeaders:          headers,
+		UserAgents:            userAgents,
 		DisableBrowserHeaders: false,
 	})
 }
