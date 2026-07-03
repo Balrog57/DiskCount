@@ -47,6 +47,50 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestWithCSRF(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without headers", http.MethodGet, "", "", "localhost:8080", http.StatusOK},
+		{"POST allowed without headers (API client)", http.MethodPost, "", "", "localhost:8080", http.StatusOK},
+		{"POST allowed with matching Origin", http.MethodPost, "http://localhost:8080", "", "localhost:8080", http.StatusOK},
+		{"POST allowed with matching Referer", http.MethodPost, "", "http://localhost:8080/path", "localhost:8080", http.StatusOK},
+		{"POST rejected with mismatched Origin", http.MethodPost, "http://evil.com", "", "localhost:8080", http.StatusForbidden},
+		{"POST rejected with mismatched Referer", http.MethodPost, "", "http://evil.com/path", "localhost:8080", http.StatusForbidden},
+		{"POST rejected if Origin parse fails", http.MethodPost, "://bad-url", "", "localhost:8080", http.StatusForbidden},
+		{"POST rejected with null Origin", http.MethodPost, "null", "", "localhost:8080", http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Errorf("got status %d, want %d", rec.Code, tc.wantStatus)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
