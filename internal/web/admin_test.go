@@ -47,6 +47,47 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestCSRFProtection(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "test"}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	cases := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without headers", http.MethodGet, "", "", "example.com", http.StatusOK},
+		{"POST blocked without headers", http.MethodPost, "", "", "example.com", http.StatusForbidden},
+		{"POST blocked with null origin", http.MethodPost, "null", "", "example.com", http.StatusForbidden},
+		{"POST blocked with mismatched origin", http.MethodPost, "http://evil.com", "", "example.com", http.StatusForbidden},
+		{"POST allowed with matching origin", http.MethodPost, "http://example.com", "", "example.com", http.StatusOK},
+		{"POST allowed with matching referer", http.MethodPost, "", "http://example.com/path", "example.com", http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Errorf("got status %d, want %d", rec.Code, tc.wantStatus)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
