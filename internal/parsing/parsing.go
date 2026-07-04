@@ -170,9 +170,29 @@ func NormalizeMediaType(text string) *domain.MediaType {
 
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
 	folded := asciiFold(text)
-	folded = strings.ReplaceAll(folded, "\"", "")
-	compact := strings.ReplaceAll(folded, ".", "")
-	compact = strings.ReplaceAll(compact, "-", " ")
+
+	// ⚡ Bolt: Single-pass byte iteration using strings.Builder and IndexAny as a fast-path
+	// to avoid multiple intermediate string allocations from strings.ReplaceAll.
+	idx := strings.IndexAny(folded, "\".-")
+	var compact string
+	if idx == -1 {
+		compact = folded
+	} else {
+		var builder strings.Builder
+		builder.Grow(len(folded))
+		builder.WriteString(folded[:idx])
+		for i := idx; i < len(folded); i++ {
+			c := folded[i]
+			if c == '"' || c == '.' {
+				continue
+			} else if c == '-' {
+				builder.WriteByte(' ')
+			} else {
+				builder.WriteByte(c)
+			}
+		}
+		compact = builder.String()
+	}
 
 	isExternal := false
 	for _, w := range []string{"external", "externe", "portable", "usb", "boitier"} {
