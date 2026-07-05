@@ -55,6 +55,27 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	}
 }
 
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				if origin == "null" || (origin != "http://"+r.Host && origin != "https://"+r.Host) {
+					http.Error(w, "Forbidden - CSRF origin mismatch", http.StatusForbidden)
+					return
+				}
+			} else {
+				referer := r.Header.Get("Referer")
+				if referer != "" && !strings.HasPrefix(referer, "http://"+r.Host+"/") && !strings.HasPrefix(referer, "https://"+r.Host+"/") && referer != "http://"+r.Host && referer != "https://"+r.Host {
+					http.Error(w, "Forbidden - CSRF referer mismatch", http.StatusForbidden)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg == nil || s.cfg.WebAdminPassword == "" {
@@ -106,7 +127,7 @@ func (s *Server) handler() http.Handler {
 			s.health(w, r)
 			return
 		}
-		s.withAuth(s.routes()).ServeHTTP(w, r)
+		s.withAuth(s.withCSRF(s.routes())).ServeHTTP(w, r)
 	})
 }
 
@@ -373,17 +394,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
+			"started_at":    report.StartedAt,
+			"finished_at":   report.FinishedAt,
+			"fetched":       report.Fetched,
+			"accepted":      report.Accepted,
+			"rejected":      report.Rejected,
+			"matched":       report.Matched,
+			"notified":      report.Notified,
+			"dry_run":       report.DryRun,
+			"error_count":   len(report.Errors),
 			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"sources":       report.SourceMetrics,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -405,12 +426,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
