@@ -47,6 +47,50 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestCSRFMiddleware(t *testing.T) {
+	srv := &Server{}
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET Request bypasses CSRF", "GET", "", "", "example.com", 200},
+		{"POST without Origin/Referer is blocked", "POST", "", "", "example.com", 403},
+		{"POST with null Origin is blocked", "POST", "null", "", "example.com", 403},
+		{"POST with valid Origin", "POST", "https://example.com", "", "example.com", 200},
+		{"POST with valid Referer", "POST", "", "https://example.com/path", "example.com", 200},
+		{"POST with mismatched Origin", "POST", "https://evil.com", "", "example.com", 403},
+		{"POST with malicious suffix Origin", "POST", "https://evilgood.com", "", "good.com", 403},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "/not-found", nil)
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.referer != "" {
+				req.Header.Set("Referer", tc.referer)
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d", tc.wantStatus, rec.Code)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
