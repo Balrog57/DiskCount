@@ -47,6 +47,49 @@ func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
 	}
 }
 
+func TestCSRFMiddlewareRejectsMissingOrInvalidOrigin(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without origin", http.MethodGet, "", "", "example.com", http.StatusOK},
+		{"POST missing origin/referer allowed for api clients", http.MethodPost, "", "", "example.com", http.StatusOK},
+		{"POST null origin", http.MethodPost, "null", "", "example.com", http.StatusForbidden},
+		{"POST invalid origin", http.MethodPost, "http://evil.com", "", "example.com", http.StatusForbidden},
+		{"POST valid origin", http.MethodPost, "http://example.com", "", "example.com", http.StatusOK},
+		{"POST valid referer", http.MethodPost, "", "http://example.com/path", "example.com", http.StatusOK},
+		{"POST suffix bypass attempt", http.MethodPost, "http://badexample.com", "", "example.com", http.StatusForbidden},
+		{"POST domain prefix bypass attempt", http.MethodPost, "http://example.com.evil.com", "", "example.com", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/test", nil)
+			req.Host = tt.host
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Errorf("got %d, want %d", rec.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
