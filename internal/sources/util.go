@@ -21,9 +21,27 @@ func strPtr(s string) *string {
 
 func parseFloatClean(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	return strconv.ParseFloat(s, 64)
+	// ⚡ Bolt: Single-pass rune iteration to eliminate intermediate string allocations.
+	// Uses IndexAny for a fast path to avoid allocating when no replacements are needed.
+	idx := strings.IndexAny(s, "€\u00a0 ,")
+	var clean string
+	if idx < 0 {
+		clean = s
+	} else {
+		var b strings.Builder
+		b.Grow(len(s))
+		b.WriteString(s[:idx])
+		for _, r := range s[idx:] {
+			switch r {
+			case '€', ' ', '\u00a0':
+				// skip
+			case ',':
+				b.WriteByte('.')
+			default:
+				b.WriteRune(r)
+			}
+		}
+		clean = b.String()
+	}
+	return strconv.ParseFloat(clean, 64)
 }
