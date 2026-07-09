@@ -2,12 +2,16 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +20,11 @@ import (
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/scanner"
+)
+
+const (
+	sessionCookieName = "diskcount_session"
+	sessionTTL        = 12 * time.Hour
 )
 
 type Server struct {
@@ -62,23 +71,99 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		user, pass, ok := r.BasicAuth()
-		if !ok {
+		if s.validSession(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if user, pass, ok := r.BasicAuth(); ok {
+			if subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1 &&
+				subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		if isHTMX(r) || acceptsJSON(r) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		userMatch := subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1
-		passMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1
-
-		if !userMatch || !passMatch {
-			w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+		nextURL := r.URL.RequestURI()
+		if nextURL == "" {
+			nextURL = "/"
 		}
-		next.ServeHTTP(w, r)
+		http.Redirect(w, r, "/login?next="+url.QueryEscape(nextURL), http.StatusSeeOther)
 	})
+}
+
+func (s *Server) sessionSecret() []byte {
+	return []byte(s.cfg.WebAdminPassword)
+}
+
+func (s *Server) signSession(issued time.Time) string {
+	mac := hmac.New(sha256.New, s.sessionSecret())
+	fmt.Fprintf(mac, "session:%d", issued.UnixNano())
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func (s *Server) validSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	parts := strings.SplitN(c.Value, ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	issued, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return false
+	}
+	ts := time.Unix(0, issued)
+	if time.Since(ts) > sessionTTL {
+		return false
+	}
+	want := s.signSession(ts)
+	got := parts[1]
+	if len(want) != len(got) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
+}
+
+func (s *Server) setSessionCookie(w http.ResponseWriter) {
+	issued := time.Now()
+	value := fmt.Sprintf("%d:%s", issued.UnixNano(), s.signSession(issued))
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  issued.Add(sessionTTL),
+	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+}
+
+func isHTMX(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
+}
+
+func acceptsJSON(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/html")
 }
 
 func (s *Server) Run(ctx context.Context, addr string) error {
@@ -98,12 +183,20 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 }
 
 // handler composes the public health endpoints with the authenticated
-// admin endpoints. Anything not matching /health, /healthz or /readyz
-// goes through the basic-auth middleware.
+// admin endpoints. Anything not matching the public paths goes through
+// the session-based auth middleware, which redirects browsers to /login
+// when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/health" || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		switch r.URL.Path {
+		case "/health", "/healthz", "/readyz":
 			s.health(w, r)
+			return
+		case "/login":
+			s.login(w, r)
+			return
+		case "/logout":
+			s.logout(w, r)
 			return
 		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
@@ -111,9 +204,9 @@ func (s *Server) handler() http.Handler {
 }
 
 func (s *Server) routes() http.Handler {
-	// muxAdmin is protected by basic auth (see Server.handler). Public
-	// endpoints like /health, /healthz, /readyz are dispatched in
-	// Server.handler before this mux sees the request.
+	// muxAdmin is protected by session auth (see Server.handler). Public
+	// endpoints like /health, /healthz, /readyz, /login and /logout are
+	// dispatched in Server.handler before this mux sees the request.
 	muxAdmin := http.NewServeMux()
 	muxAdmin.HandleFunc("/", s.stats)
 	muxAdmin.HandleFunc("/quality", s.quality)
@@ -130,6 +223,66 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
 	return muxAdmin
+}
+
+func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if s.cfg == nil || s.cfg.WebAdminPassword == "" {
+		http.Error(w, "Admin password not configured (set WEB_ADMIN_PASSWORD)", http.StatusForbidden)
+		return
+	}
+
+	if s.validSession(r) {
+		http.Redirect(w, r, sanitizeNext(r.URL.Query().Get("next")), http.StatusSeeOther)
+		return
+	}
+
+	data := map[string]any{
+		"Title":  "Connexion",
+		"Active": "",
+		"Next":   sanitizeNext(r.URL.Query().Get("next")),
+		"Error":  "",
+		"Status": appStatus{},
+	}
+
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		pass := r.Form.Get("password")
+		if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
+			s.setSessionCookie(w)
+			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
+			return
+		}
+		data["Error"] = "Mot de passe incorrect."
+	}
+
+	render(w, loginTpl, data)
+}
+
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.clearSessionCookie(w)
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func sanitizeNext(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "/"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" {
+		return "/"
+	}
+	if !strings.HasPrefix(u.Path, "/") {
+		return "/"
+	}
+	return u.RequestURI()
 }
 
 func (s *Server) base(title, active string) map[string]any {
@@ -635,12 +788,43 @@ const layoutTpl = `<!doctype html>
 <span class="badge {{stateClass .Status.TelegramRunning}}">Telegram {{if .Status.TelegramRunning}}actif{{else}}inactif{{end}}</span>
 <span class="badge {{stateClass .Status.ConfigComplete}}">Config {{if .Status.ConfigComplete}}complete{{else}}incomplete{{end}}</span>
 <span class="badge">{{.Status.SourceCount}} sources</span>
+<form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">Deconnexion</button></form>
 </div>
 </header>
 <main>{{template "body" .}}</main>
 </div>
 </div>
 </body></html>`
+
+const loginTpl = `{{define "body"}}
+<style>
+.login-shell{min-height:calc(100vh - 0px);display:grid;place-items:center;padding:40px 20px}
+.login-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;width:100%;max-width:380px;box-shadow:0 12px 32px rgba(16,37,50,.12)}
+.login-card h1{margin:0 0 6px;font-size:22px}
+.login-card p.hint{margin:0 0 18px}
+.login-card label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.login-card input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;background:#fff;color:var(--ink)}
+.login-card input[type=password]:focus{outline:2px solid var(--brand);outline-offset:1px;border-color:var(--brand)}
+.login-card .actions{margin-top:18px;display:flex;align-items:center;gap:10px}
+.login-card button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:10px 16px;font-weight:600;cursor:pointer}
+.login-card button:hover{background:var(--brand2)}
+.login-card .error{background:#fff1f0;border:1px solid #f5b5b0;color:var(--bad);border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px}
+</style>
+<div class="login-shell">
+<form class="login-card" method="post" action="/login" autocomplete="on">
+<h1>Connexion DiskCount</h1>
+<p class="hint">Saisissez le mot de passe administrateur pour acceder au tableau de bord.</p>
+{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+<input type="hidden" name="next" value="{{.Next}}">
+<label for="password">Mot de passe</label>
+<input id="password" name="password" type="password" required autocomplete="current-password" autofocus>
+<div class="actions">
+<button type="submit">Se connecter</button>
+<span class="hint" style="margin-left:auto">Acces restreint</span>
+</div>
+</form>
+</div>
+{{end}}`
 
 const statsTpl = `{{define "body"}}
 {{if .StatsError}}<div class="warnbox">Erreur DB: {{.StatsError}}</div>{{end}}
