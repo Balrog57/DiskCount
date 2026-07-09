@@ -287,6 +287,67 @@ func (f *HTTPFetcher) PostJSON(ctx context.Context, url string, body io.Reader) 
 	return string(respBody), nil
 }
 
+// PostWithHeaders sends a POST with the given body string and custom headers.
+// Used for OAuth2 token endpoints that require form-encoded bodies and an
+// Authorization header (e.g. eBay client-credentials grant).
+func (f *HTTPFetcher) PostWithHeaders(ctx context.Context, url, body string, headers map[string]string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		return "", NewPermanentError(url, 0, "creating request", err)
+	}
+	f.mu.Lock()
+	for k, v := range f.Headers {
+		req.Header.Set(k, v)
+	}
+	f.mu.Unlock()
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := f.Client.Do(req)
+	if err != nil {
+		return "", classifyTransportError(url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", classifyHTTPStatusDetail(url, resp.StatusCode, string(rbody))
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return "", NewTransientError(url, resp.StatusCode, "reading body", err)
+	}
+	return string(respBody), nil
+}
+
+// GetWithAuth performs a GET request with a Bearer authorization token.
+// Used for authenticated API calls (e.g. eBay Browse API).
+func (f *HTTPFetcher) GetWithAuth(ctx context.Context, url, bearer string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", NewPermanentError(url, 0, "creating request", err)
+	}
+	f.mu.Lock()
+	for k, v := range f.Headers {
+		req.Header.Set(k, v)
+	}
+	f.mu.Unlock()
+	req.Header.Set("Authorization", bearer)
+	resp, err := f.Client.Do(req)
+	if err != nil {
+		return "", classifyTransportError(url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		rbody, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", classifyHTTPStatusDetail(url, resp.StatusCode, string(rbody))
+	}
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return "", NewTransientError(url, resp.StatusCode, "reading body", err)
+	}
+	return string(respBody), nil
+}
+
 func (f *HTTPFetcher) isBlocked(body string) (bool, string) {
 	if len(f.BlockedWords) == 0 {
 		return false, ""
@@ -365,6 +426,29 @@ func (rf *RetryingFetcher) backoffDuration(attempt int) time.Duration {
 
 func classifyHTTPStatus(url string, status int) error {
 	msg := fmt.Sprintf("HTTP %d %s", status, http.StatusText(status))
+	switch {
+	case status == 429:
+		return NewTransientError(url, status, msg, nil)
+	case status == 401 || status == 403:
+		return NewAuthError(url, status, msg, nil)
+	case status >= 500:
+		return NewTransientError(url, status, msg, nil)
+	default:
+		return NewPermanentError(url, status, msg, nil)
+	}
+}
+
+// classifyHTTPStatusDetail is like classifyHTTPStatus but includes a response
+// body excerpt in the message, which is useful for API calls that return
+// structured error details (e.g. eBay, Keepa).
+func classifyHTTPStatusDetail(url string, status int, bodyExcerpt string) error {
+	msg := fmt.Sprintf("HTTP %d %s", status, http.StatusText(status))
+	if bodyExcerpt != "" {
+		if len(bodyExcerpt) > 200 {
+			bodyExcerpt = bodyExcerpt[:200]
+		}
+		msg += ": " + bodyExcerpt
+	}
 	switch {
 	case status == 429:
 		return NewTransientError(url, status, msg, nil)

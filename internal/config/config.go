@@ -29,12 +29,11 @@ var AppSettings = []SettingMeta{
 	{"PRICEPERTB_URLS", "PricePerTB URLs", false, true, "https://pricepertb.com/fr"},
 	{"DEALABS_RSS_URLS", "Dealabs RSS URLs", false, true, ""},
 	{"IDEALO_FEED_URLS", "Idealo feed URLs", false, true, ""},
-	{"IDEALO_PAGE_URLS", "Idealo page URLs", false, true, ""},
 	{"LEDENICHEUR_FEED_URLS", "leDenicheur feed URLs", false, true, ""},
-	{"LEDENICHEUR_PAGE_URLS", "leDenicheur page URLs", false, true, ""},
 	{"LEBONCOIN_FEED_URLS", "leboncoin feed URLs", false, true, ""},
 	{"KEEPA_API_KEY", "Keepa API key", true, true, ""},
 	{"KEEPA_ASINS", "Keepa ASINs", false, true, ""},
+	{"KEEPA_DOMAIN", "Keepa Amazon domain (1=com,2=uk,3=de,4=fr)", false, true, "4"},
 	{"EBAY_CLIENT_ID", "eBay client ID", false, true, ""},
 	{"EBAY_CLIENT_SECRET", "eBay client secret", true, true, ""},
 	{"EBAY_SEARCH_QUERIES", "eBay search queries", false, true, ""},
@@ -43,12 +42,6 @@ var AppSettings = []SettingMeta{
 	{"NOTIFICATION_PRICE_DROP_PCT", "Notification price drop percent", false, true, "2.0"},
 	{"TELEGRAM_MESSAGE_DELAY_SECONDS", "Telegram message delay seconds", false, true, "0.5"},
 	{"SCRAPE_INTERVAL_CRON", "Scan interval", false, true, "@every 4h"},
-	{"AMAZON_TLDS", "Amazon TLDs", false, true, "fr,de"},
-	{"LDLC_ENABLED", "LDLC enabled", false, true, "true"},
-	{"ALTERNATE_TLDS", "Alternate TLDs", false, true, "fr,de"},
-	{"GEIZHALS_ENABLED", "Geizhals enabled", false, true, "true"},
-	{"RDC_ENABLED", "Rue du Commerce enabled", false, true, "true"},
-	{"PCPART_ENABLED", "PCPartPicker enabled", false, true, "true"},
 	{"RETRY_MAX_ATTEMPTS", "Retry max attempts", false, false, "3"},
 	{"RETRY_BASE_DELAY_SECONDS", "Retry base delay seconds", false, false, "0.5"},
 	{"RETRY_MAX_DELAY_SECONDS", "Retry max delay seconds", false, false, "30"},
@@ -60,6 +53,10 @@ var AppSettings = []SettingMeta{
 	{"CIRCUIT_BREAKER_THRESHOLD", "Circuit breaker failure threshold", false, false, "5"},
 	{"CIRCUIT_BREAKER_TIMEOUT_SECONDS", "Circuit breaker open timeout seconds", false, false, "60"},
 	{"PER_REQUEST_TIMEOUT_SECONDS", "Per-request timeout seconds", false, false, "10"},
+	{"TELEGRAM_ADMIN_CHAT_ID", "Telegram admin chat ID for source health alerts", false, false, ""},
+	{"SOURCE_HEALTH_STREAK_THRESHOLD", "Consecutive zero-deal scans before a source is flagged", false, false, "3"},
+	{"SOURCE_HEALTH_NOTIFY", "Notify admin via Telegram when a source is flagged", false, false, "true"},
+	{"ADMIN_LOCALE", "Locale for admin-facing notifications (fr|en)", false, false, "fr"},
 }
 
 type Config struct {
@@ -76,12 +73,11 @@ type Config struct {
 	PricePerTBURLs           []string
 	DealabsRSSURLs           []string
 	IdealoFeedURLs           []string
-	IdealoPageURLs           []string
 	LeDenicheurFeedURLs      []string
-	LeDenicheurPageURLs      []string
 	LeBonCoinFeedURLs        []string
 	KeepaAPIKey              string
 	KeepaASINs               []string
+	KeepaDomain              int
 	EbayClientID             string
 	EbayClientSecret         string
 	EbaySearchQueries        []string
@@ -90,12 +86,6 @@ type Config struct {
 	NotificationPriceDropPct float64
 	TelegramMessageDelayS    float64
 	ScrapeIntervalCron       string
-	AmazonTLDs               []string
-	LDLCEnabled              bool
-	AlternateTLDs            []string
-	GeizhalsEnabled          bool
-	RDCEnabled               bool
-	PCPartEnabled            bool
 	RetryMaxAttempts         int
 	RetryBaseDelaySeconds    float64
 	RetryMaxDelaySeconds     float64
@@ -107,6 +97,10 @@ type Config struct {
 	CircuitBreakerThreshold  int
 	CircuitBreakerTimeoutS   float64
 	PerRequestTimeoutSeconds float64
+	TelegramAdminChatID      string
+	SourceHealthThreshold    int
+	SourceHealthNotify       bool
+	AdminLocale              string
 }
 
 func LoadBootstrap() *Config {
@@ -142,12 +136,11 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		PricePerTBURLs:        splitCSV(values["PRICEPERTB_URLS"]),
 		DealabsRSSURLs:        splitCSV(values["DEALABS_RSS_URLS"]),
 		IdealoFeedURLs:        splitCSV(values["IDEALO_FEED_URLS"]),
-		IdealoPageURLs:        splitCSV(values["IDEALO_PAGE_URLS"]),
 		LeDenicheurFeedURLs:   splitCSV(values["LEDENICHEUR_FEED_URLS"]),
-		LeDenicheurPageURLs:   splitCSV(values["LEDENICHEUR_PAGE_URLS"]),
 		LeBonCoinFeedURLs:     splitCSV(values["LEBONCOIN_FEED_URLS"]),
 		KeepaAPIKey:           values["KEEPA_API_KEY"],
 		KeepaASINs:            splitCSV(values["KEEPA_ASINS"]),
+		KeepaDomain:           int(parseFloat(values["KEEPA_DOMAIN"], 4)),
 		EbayClientID:          values["EBAY_CLIENT_ID"],
 		EbayClientSecret:      values["EBAY_CLIENT_SECRET"],
 		EbaySearchQueries:     splitCSV(values["EBAY_SEARCH_QUERIES"]),
@@ -160,12 +153,6 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 			values["TELEGRAM_MESSAGE_DELAY_SECONDS"], 0.5,
 		),
 		ScrapeIntervalCron: value(values, "SCRAPE_INTERVAL_CRON", "@every 4h"),
-		AmazonTLDs:         splitCSV(values["AMAZON_TLDS"]),
-		LDLCEnabled:        parseBool(values["LDLC_ENABLED"], true),
-		AlternateTLDs:      splitCSV(values["ALTERNATE_TLDS"]),
-		GeizhalsEnabled:    parseBool(values["GEIZHALS_ENABLED"], true),
-		RDCEnabled:                  parseBool(values["RDC_ENABLED"], true),
-		PCPartEnabled:               parseBool(values["PCPART_ENABLED"], true),
 		RetryMaxAttempts:            int(parseFloat(values["RETRY_MAX_ATTEMPTS"], 3)),
 		RetryBaseDelaySeconds:       parseFloat(values["RETRY_BASE_DELAY_SECONDS"], 0.5),
 		RetryMaxDelaySeconds:        parseFloat(values["RETRY_MAX_DELAY_SECONDS"], 30),
@@ -177,6 +164,10 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		CircuitBreakerThreshold:     int(parseFloat(values["CIRCUIT_BREAKER_THRESHOLD"], 5)),
 		CircuitBreakerTimeoutS:      parseFloat(values["CIRCUIT_BREAKER_TIMEOUT_SECONDS"], 60),
 		PerRequestTimeoutSeconds:    parseFloat(values["PER_REQUEST_TIMEOUT_SECONDS"], 10),
+		TelegramAdminChatID:         values["TELEGRAM_ADMIN_CHAT_ID"],
+		SourceHealthThreshold:       int(parseFloat(values["SOURCE_HEALTH_STREAK_THRESHOLD"], 3)),
+		SourceHealthNotify:          parseBool(values["SOURCE_HEALTH_NOTIFY"], true),
+		AdminLocale:                 values["ADMIN_LOCALE"],
 	}
 }
 

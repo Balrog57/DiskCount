@@ -105,6 +105,9 @@ func enrich(d domain.Deal) domain.Deal {
 	if len(d.Interfaces) == 0 && d.DriveCategory != nil {
 		d.Interfaces = inferInterfaces(*d.DriveCategory)
 	}
+	if d.RecordingMethod == nil {
+		d.RecordingMethod = parsing.NormalizeRecordingMethod(classText, d.MediaType)
+	}
 	if d.ClassificationSource == "" {
 		if d.MediaType != nil || d.DriveCategory != nil || len(d.Interfaces) > 0 {
 			d.ClassificationSource = "heuristic"
@@ -152,6 +155,9 @@ func qualityScore(d domain.Deal) int {
 		score += 10
 	}
 	if len(d.Interfaces) > 0 {
+		score += 5
+	}
+	if d.RecordingMethod != nil {
 		score += 5
 	}
 	if score > 100 {

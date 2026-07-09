@@ -3,9 +3,11 @@ package scanner
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/Balrog57/DiskCount/internal/config"
+	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
@@ -112,4 +114,159 @@ func TestResetBreaker(t *testing.T) {
 	if _, present := scan.BreakerSnapshot()["failing"]; present {
 		t.Fatal("breaker should be cleared after reset")
 	}
+}
+
+// recordScanResult must bump the streak on a zero-deal scan, flag the
+// source in SourceHealth() once the threshold is reached, and reset the
+// counter the first time the source returns a deal again.
+func TestRecordScanResultZeroStreak(t *testing.T) {
+	cfg := config.LoadWithAppValues(map[string]string{
+		"SOURCE_HEALTH_STREAK_THRESHOLD": "3",
+		"SOURCE_HEALTH_NOTIFY":           "false",
+	})
+	scan := New(cfg, nil, nil, nil)
+
+	// First two zero-deal scans: under threshold, no warning.
+	for i := 0; i < 2; i++ {
+		scan.recordScanResult("alpha", 0, &ScanReport{})
+	}
+	health := scan.SourceHealth()
+	if len(health) != 0 {
+		// Source is not registered in s.srcs, so SourceHealth returns
+		// nothing for it. Verify the streak directly instead.
+	}
+	scan.zeroStreakMu.RLock()
+	streak := scan.zeroStreak["alpha"]
+	scan.zeroStreakMu.RUnlock()
+	if streak != 2 {
+		t.Fatalf("streak should be 2, got %d", streak)
+	}
+
+	// Third zero-deal scan crosses the threshold and emits a warning.
+	r := &ScanReport{}
+	scan.recordScanResult("alpha", 0, r)
+	if len(r.SourceWarnings) != 1 {
+		t.Fatalf("expected one warning, got %d: %#v", len(r.SourceWarnings), r.SourceWarnings)
+	}
+	if r.SourceWarnings[0].ConsecutiveZeros != 3 {
+		t.Fatalf("warning streak = %d, want 3", r.SourceWarnings[0].ConsecutiveZeros)
+	}
+
+	// A successful scan clears the streak.
+	scan.recordScanResult("alpha", 5, &ScanReport{})
+	scan.zeroStreakMu.RLock()
+	streak = scan.zeroStreak["alpha"]
+	scan.zeroStreakMu.RUnlock()
+	if streak != 0 {
+		t.Fatalf("streak should be 0 after a deal, got %d", streak)
+	}
+}
+
+// TestRecordScanResultNotifiesAdminOnce verifies that the admin ping fires
+// only on the first scan that crosses the threshold for a given source, and
+// not on subsequent zero-deal scans in the same streak.
+func TestRecordScanResultNotifiesAdminOnce(t *testing.T) {
+	cfg := config.LoadWithAppValues(map[string]string{
+		"SOURCE_HEALTH_STREAK_THRESHOLD": "2",
+		"SOURCE_HEALTH_NOTIFY":           "true",
+		"TELEGRAM_ADMIN_CHAT_ID":         "12345",
+	})
+	mock := &mockAdminNotifier{}
+	scan := New(cfg, nil, nil, mock.notifier())
+
+	// First zero-deal: streak=1, below threshold (2), no notify.
+	scan.recordScanResult("alpha", 0, &ScanReport{})
+	if mock.calls != 0 {
+		t.Fatalf("should not notify below threshold, got %d calls", mock.calls)
+	}
+	// Second zero-deal: streak=2, threshold reached, expect 1 notify.
+	scan.recordScanResult("alpha", 0, &ScanReport{})
+	if mock.calls != 1 {
+		t.Fatalf("expected 1 admin notification, got %d", mock.calls)
+	}
+	// Third zero-deal: still flagged, but already notified for this streak.
+	scan.recordScanResult("alpha", 0, &ScanReport{})
+	if mock.calls != 1 {
+		t.Fatalf("admin notification should not repeat within the same streak, got %d", mock.calls)
+	}
+	// Successful scan resets the "already notified" flag.
+	scan.recordScanResult("alpha", 1, &ScanReport{})
+	scan.recordScanResult("alpha", 0, &ScanReport{})
+	scan.recordScanResult("alpha", 0, &ScanReport{})
+	if mock.calls != 2 {
+		t.Fatalf("expected a second admin notification after recovery + new streak, got %d", mock.calls)
+	}
+}
+
+// TestRecordScanResultNotifyDisabled checks the kill switch.
+func TestRecordScanResultNotifyDisabled(t *testing.T) {
+	cfg := config.LoadWithAppValues(map[string]string{
+		"SOURCE_HEALTH_STREAK_THRESHOLD": "1",
+		"SOURCE_HEALTH_NOTIFY":           "false",
+		"TELEGRAM_ADMIN_CHAT_ID":         "12345",
+	})
+	mock := &mockAdminNotifier{}
+	scan := New(cfg, nil, nil, mock.notifier())
+	for i := 0; i < 5; i++ {
+		scan.recordScanResult("alpha", 0, &ScanReport{})
+	}
+	if mock.calls != 0 {
+		t.Fatalf("notifications should be disabled, got %d", mock.calls)
+	}
+}
+
+// TestSourceHealthExposesRegisteredSources builds a real Scanner with one
+// source and verifies that SourceHealth() returns an entry for it (with
+// the correct streak) before the first scan runs.
+func TestSourceHealthExposesRegisteredSources(t *testing.T) {
+	cfg := config.LoadWithAppValues(map[string]string{
+		"SOURCE_HEALTH_STREAK_THRESHOLD": "2",
+		"SOURCE_HEALTH_NOTIFY":           "false",
+	})
+	scan := New(cfg, nil, []sources.Source{emptySource{}}, nil)
+	scan.recordScanResult("empty", 0, &ScanReport{})
+	health := scan.SourceHealth()
+	if len(health) != 1 {
+		t.Fatalf("expected 1 entry, got %d: %#v", len(health), health)
+	}
+	if health[0].Name != "empty" || health[0].ConsecutiveZeros != 1 || health[0].Flagged {
+		t.Fatalf("unexpected entry: %#v", health[0])
+	}
+	// Cross the threshold.
+	scan.recordScanResult("empty", 0, &ScanReport{})
+	health = scan.SourceHealth()
+	if !health[0].Flagged {
+		t.Fatalf("source should be flagged at streak=2: %#v", health[0])
+	}
+}
+
+type mockAdminNotifier struct {
+	mu    sync.Mutex
+	calls int
+}
+
+// notifier returns a thin wrapper exposing the SendAdminMessage counter.
+// We avoid constructing a real telebot.Bot here; the notifier is wired
+// through a tiny shim that records the call count.
+func (m *mockAdminNotifier) notifier() *notifierRecorder { return &notifierRecorder{m: m} }
+
+// notifierRecorder is a no-op TelegramNotifier-equivalent for the
+// admin-only path. The scanner only calls n.SendAdminMessage and
+// n.SendDeal; the latter is unreachable in these tests so we leave it
+// as a panic sentinel.
+type notifierRecorder struct {
+	m *mockAdminNotifier
+}
+
+func (r *notifierRecorder) SendAdminMessage(chatID int64, text string) error {
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	r.m.calls++
+	return nil
+}
+
+// SendDeal is required to satisfy scanner.Notifier but is never called in
+// the source-health tests; the panic sentinel makes accidental use obvious.
+func (r *notifierRecorder) SendDeal(chatID int64, alert *db.Alert, deal domain.Deal, dec domain.NotificationDecision) error {
+	panic("notifierRecorder.SendDeal should not be called from source-health tests")
 }

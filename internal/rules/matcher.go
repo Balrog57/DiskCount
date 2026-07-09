@@ -1,9 +1,11 @@
 package rules
 
 import (
+	"strings"
+	"time"
+
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
-	"time"
 )
 
 type Preset struct {
@@ -65,7 +67,72 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if alert.MaxPricePerTB != nil && deal.PricePerTB > *alert.MaxPricePerTB {
 		return false
 	}
+	if !brandMatch(alert, deal) {
+		return false
+	}
+	if !recordingMethodMatch(alert, deal) {
+		return false
+	}
+	if !keywordMatch(alert, deal) {
+		return false
+	}
 	return true
+}
+
+// brandMatch returns false when the alert restricts brands and the deal's brand
+// is not among them. Deals with no detected brand are allowed through an empty
+// brand restriction only.
+func brandMatch(alert *db.Alert, deal domain.Deal) bool {
+	if len(alert.Brands) == 0 {
+		return true
+	}
+	if deal.Brand == nil {
+		return false
+	}
+	return contIns(alert.Brands, *deal.Brand)
+}
+
+// recordingMethodMatch returns false when the alert restricts recording methods
+// (e.g. CMR-only) and the deal's method is not among them. A deal whose method
+// could not be determined is allowed through, since excluding all unknowns
+// would be too aggressive.
+func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
+	if len(alert.RecordingMethods) == 0 {
+		return true
+	}
+	if deal.RecordingMethod == nil {
+		return true
+	}
+	return cont(alert.RecordingMethods, string(*deal.RecordingMethod))
+}
+
+// keywordMatch checks inclusion and exclusion keywords against the deal title
+// (and raw title). All include-keywords must be present; any exclude-keyword
+// present rejects the deal.
+func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
+	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
+	for _, kw := range alert.Keywords {
+		if !strings.Contains(hay, strings.ToLower(kw)) {
+			return false
+		}
+	}
+	for _, kw := range alert.ExcludeKeywords {
+		if strings.Contains(hay, strings.ToLower(kw)) {
+			return false
+		}
+	}
+	return true
+}
+
+// contIns is a case-insensitive variant of cont for brand comparison.
+func contIns(s []string, v string) bool {
+	lv := strings.ToLower(v)
+	for _, x := range s {
+		if strings.ToLower(x) == lv {
+			return true
+		}
+	}
+	return false
 }
 
 func capMatch(a *db.Alert, tb float64) bool {

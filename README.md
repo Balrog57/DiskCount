@@ -37,7 +37,7 @@ App settings can be imported from environment variables and then managed from th
 - `DISKPRICES_URL`: DiskPrices URL.
 - `PRICEPERGIG_ENABLED`, `PRICEPERGIG_API_URL`, `PRICEPERGIG_MARKET`: PricePerGig settings.
 - `PRICEPERTB_URLS`: comma-separated PricePerTB URLs.
-- `DEALABS_RSS_URLS`, `IDEALO_FEED_URLS`, `IDEALO_PAGE_URLS`, `LEDENICHEUR_FEED_URLS`, `LEDENICHEUR_PAGE_URLS`, `LEBONCOIN_FEED_URLS`: optional configured feeds or pages.
+- `DEALABS_RSS_URLS`, `IDEALO_FEED_URLS`, `LEDENICHEUR_FEED_URLS`, `LEBONCOIN_FEED_URLS`: optional configured RSS feeds.
 - `SOURCE_HEADLESS_FALLBACK`, `BYPARR_URL`: optional headless fallback settings.
 - `KEEPA_API_KEY`, `KEEPA_ASINS`: optional Keepa settings.
 - `EBAY_CLIENT_ID`, `EBAY_CLIENT_SECRET`, `EBAY_SEARCH_QUERIES`: optional eBay settings.
@@ -88,7 +88,7 @@ The scanner is intentionally conservative:
 - PricePerGig public API.
 - PricePerTB public table.
 - Dealabs RSS feeds.
-- Idealo, leDenicheur, and leboncoin configured feeds/pages.
+- Idealo, leDenicheur, and leboncoin configured RSS feeds.
 - Optional Keepa API.
 - Optional eBay Browse API.
 

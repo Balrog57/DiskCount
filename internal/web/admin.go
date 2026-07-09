@@ -1,4 +1,4 @@
-package web
+﻿package web
 
 import (
 	"context"
@@ -19,13 +19,42 @@ import (
 
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
+	"github.com/Balrog57/DiskCount/internal/i18n"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 )
 
 const (
 	sessionCookieName = "diskcount_session"
 	sessionTTL        = 12 * time.Hour
+	langCookieName    = "diskcount_lang"
 )
+
+// localeForRequest resolves the active UI locale from (in order): the
+// "lang" cookie set by the language switcher, the Accept-Language header
+// on first visit, and finally the i18n default. The result is also
+// persisted to a cookie so subsequent requests are stable.
+func (s *Server) localeForRequest(w http.ResponseWriter, r *http.Request) i18n.Locale {
+	if c, err := r.Cookie(langCookieName); err == nil && c.Value != "" {
+		return i18n.ParseLocale(c.Value)
+	}
+	if al := r.Header.Get("Accept-Language"); al != "" {
+		return i18n.ParseLocale(al)
+	}
+	return i18n.Default
+}
+
+// setLangCookie pins the locale to a cookie. It is called by the language
+// switcher endpoint and on login so the choice survives a logout.
+func setLangCookie(w http.ResponseWriter, loc i18n.Locale) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     langCookieName,
+		Value:    string(loc),
+		Path:     "/",
+		MaxAge:   365 * 24 * 3600,
+		HttpOnly: false, // readable by client-side code if we ever add JS
+		SameSite: http.SameSiteLaxMode,
+	})
+}
 
 type Server struct {
 	db              *db.DB
@@ -198,7 +227,13 @@ func (s *Server) handler() http.Handler {
 		case "/logout":
 			s.logout(w, r)
 			return
-		}
+		case "/lang":
+			s.setLang(w, r)
+			return
+		case "/feed.xml", "/feed":
+			s.feed(w, r)
+			return
+			}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
 }
@@ -211,6 +246,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/", s.stats)
 	muxAdmin.HandleFunc("/quality", s.quality)
 	muxAdmin.HandleFunc("/products", s.products)
+	muxAdmin.HandleFunc("/product", s.productDetail)
 	muxAdmin.HandleFunc("/alerts", s.alerts)
 	muxAdmin.HandleFunc("/alerts/toggle", s.toggleAlert)
 	muxAdmin.HandleFunc("/alerts/delete", s.deleteAlert)
@@ -222,12 +258,15 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
+	muxAdmin.HandleFunc("/api/sources/health", s.apiSourcesHealth)
+	muxAdmin.HandleFunc("/lang", s.setLang)
 	return muxAdmin
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	if s.cfg == nil || s.cfg.WebAdminPassword == "" {
-		http.Error(w, "Admin password not configured (set WEB_ADMIN_PASSWORD)", http.StatusForbidden)
+		loc := s.localeForRequest(w, r)
+		http.Error(w, i18n.T("web.login.no_pwd", loc), http.StatusForbidden)
 		return
 	}
 
@@ -236,12 +275,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	loc := s.localeForRequest(w, r)
 	data := map[string]any{
-		"Title":  "Connexion",
-		"Active": "",
-		"Next":   sanitizeNext(r.URL.Query().Get("next")),
-		"Error":  "",
-		"Status": appStatus{},
+		"Title":      i18n.T("web.login.title", loc),
+		"Active":     "",
+		"Next":       sanitizeNext(r.URL.Query().Get("next")),
+		"Error":      "",
+		"Locale":     string(loc),
+		"T":          func(key string) string { return i18n.T(key, loc) },
+		"KnownLangs": i18n.KnownLocales(),
+		"Status":     appStatus{},
 	}
 
 	if r.Method == http.MethodPost {
@@ -255,7 +298,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
-		data["Error"] = "Mot de passe incorrect."
+		loc := s.localeForRequest(w, r)
+		data["Error"] = i18n.T("web.login.error", loc)
 	}
 
 	render(w, loginTpl, data)
@@ -287,8 +331,11 @@ func sanitizeNext(raw string) string {
 
 func (s *Server) base(title, active string) map[string]any {
 	return map[string]any{
-		"Title":  title,
-		"Active": active,
+		"Title":      title,
+		"Active":     active,
+		"Locale":     string(i18n.Default),
+		"T":          func(key string) string { return i18n.T(key, i18n.Default) },
+		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
 			TelegramRunning: s.telegramRunning,
 			ConfigComplete:  s.cfg != nil && s.cfg.TelegramBotToken != "",
@@ -297,13 +344,53 @@ func (s *Server) base(title, active string) map[string]any {
 	}
 }
 
+// baseWithRequest is the request-aware version of base(). Templates that
+// render a localised UI should always go through this so the chosen
+// locale is honoured. Falls back to base() (default locale) when the
+// request is nil so unit tests can keep using base().
+func (s *Server) baseWithRequest(r *http.Request, title, active string) map[string]any {
+	if r == nil {
+		return s.base(title, active)
+	}
+	loc := s.localeForRequest(nil, r)
+	return map[string]any{
+		"Title":      title,
+		"Active":     active,
+		"Locale":     string(loc),
+		"T":          func(key string) string { return i18n.T(key, loc) },
+		"KnownLangs": i18n.KnownLocales(),
+		"Status": appStatus{
+			TelegramRunning: s.telegramRunning,
+			ConfigComplete:  s.cfg != nil && s.cfg.TelegramBotToken != "",
+			SourceCount:     len(s.sourceNames),
+		},
+	}
+}
+
+// setLang handles POST /lang?lang=fr|en. It pins the chosen locale to a
+// cookie and bounces the user back to the page they were on.
+func (s *Server) setLang(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	loc := i18n.ParseLocale(r.Form.Get("lang"))
+	setLangCookie(w, loc)
+	redirect := sanitizeNext(r.Form.Get("next"))
+	http.Redirect(w, r, redirect, http.StatusSeeOther)
+}
+
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
 		return
 	}
 	st, err := s.db.Stats(r.Context())
-	data := s.base("Vue d'ensemble", "stats")
+	data := s.baseWithRequest(r, i18n.T("web.nav.dashboard", s.localeForRequest(nil, r)), "stats")
 	data["Stats"] = st
 	data["StatsError"] = err
 	data["Sources"] = s.sourceNames
@@ -314,7 +401,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 	qs, err := s.db.QualityStats(r.Context())
-	data := s.base("Qualite donnees", "quality")
+	data := s.baseWithRequest(r, "Qualite donnees", "quality")
 	data["Quality"] = qs
 	data["Error"] = err
 	render(w, qualityTpl, data)
@@ -323,7 +410,7 @@ func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 func (s *Server) products(w http.ResponseWriter, r *http.Request) {
 	prices, err := s.db.LatestPrices(r.Context(), 300)
 	filtered := filterPrices(prices, r)
-	data := s.base("Produits", "products")
+	data := s.baseWithRequest(r, "Produits", "products")
 	data["Prices"] = filtered
 	data["Error"] = err
 	data["Sources"] = uniqueSources(prices)
@@ -333,6 +420,154 @@ func (s *Server) products(w http.ResponseWriter, r *http.Request) {
 	data["MaxTB"] = r.URL.Query().Get("max_tb")
 	data["MaxPrice"] = r.URL.Query().Get("max_eur_tb")
 	render(w, productsTpl, data)
+}
+
+func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
+	productID := strings.TrimSpace(r.URL.Query().Get("id"))
+	if productID == "" {
+		http.Redirect(w, r, "/products", http.StatusSeeOther)
+		return
+	}
+	product, err := s.db.GetProduct(r.Context(), productID)
+	if err != nil {
+		data := s.baseWithRequest(r, "Produit", "products")
+		data["Error"] = err
+		render(w, productDetailTpl, data)
+		return
+	}
+	if product == nil {
+		http.Redirect(w, r, "/products", http.StatusSeeOther)
+		return
+	}
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 365 {
+			days = v
+		}
+	}
+	history, histErr := s.db.PriceHistory(r.Context(), productID, days)
+
+	// Compute stats.
+	var minPT, maxPT, avgPT float64
+	if len(history) > 0 {
+		minPT = history[0].PricePerTB
+		maxPT = history[0].PricePerTB
+		sum := 0.0
+		for _, pt := range history {
+			if pt.PricePerTB < minPT {
+				minPT = pt.PricePerTB
+			}
+			if pt.PricePerTB > maxPT {
+				maxPT = pt.PricePerTB
+			}
+			sum += pt.PricePerTB
+		}
+		avgPT = sum / float64(len(history))
+	}
+
+	data := s.baseWithRequest(r, "Produit", "products")
+	data["Product"] = product
+	data["History"] = history
+	data["Days"] = days
+	data["MinPT"] = minPT
+	data["MaxPT"] = maxPT
+	data["AvgPT"] = avgPT
+	data["ChartPoints"] = computeChartPoints(history, minPT, maxPT)
+	data["Error"] = histErr
+	render(w, productDetailTpl, data)
+}
+
+// computeChartPoints converts price history into SVG polyline coordinate
+// strings for the detail page chart. The chart is 800x200 with 10px padding.
+// Returns an empty string if there are fewer than 2 points.
+func computeChartPoints(history []db.PriceHistoryPoint, minPT, maxPT float64) string {
+	if len(history) < 2 {
+		return ""
+	}
+	rng := maxPT - minPT
+	if rng <= 0 {
+		rng = 1
+	}
+	const (
+		w = 800.0
+		h = 200.0
+		p = 10.0
+	)
+	var sb strings.Builder
+	for i, pt := range history {
+		x := p + float64(i)*(w-2*p)/float64(len(history)-1)
+		normalized := (pt.PricePerTB - minPT) / rng
+		y := h - p - normalized*(h-2*p)
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		fmt.Fprintf(&sb, "%.1f,%.1f", x, y)
+	}
+	return sb.String()
+}
+
+// feed serves a public RSS 2.0 feed of the latest best prices. It is
+// unauthenticated so users can subscribe via RSS readers, Home Assistant,
+// or automation tools like n8n.
+func (s *Server) feed(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, "database not available", http.StatusServiceUnavailable)
+		return
+	}
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= 100 {
+			limit = v
+		}
+	}
+	prices, err := s.db.LatestPrices(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "failed to load prices", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	sb.WriteString(`<rss version="2.0"><channel>`)
+	sb.WriteString("<title>DiskCount - Meilleurs prix</title>")
+	sb.WriteString("<link>https://diskcount.local</link>")
+	sb.WriteString("<description>Meilleurs prix HDD/SSD suivus par DiskCount</description>")
+	sb.WriteString("<language>fr</language>")
+	for _, p := range prices {
+		title := p.Title
+		if title == "" {
+			title = p.ProductID
+		}
+		media := "HDD"
+		if p.MediaType != nil && *p.MediaType == "solid_state" {
+			media = "SSD"
+		}
+		desc := fmt.Sprintf("%.2f EUR | %.2f EUR/To | %.1f To | %s | %s",
+			p.PriceEUR, p.PricePerTB, p.CapacityTB, media, p.Source)
+		sb.WriteString("<item>")
+		sb.WriteString("<title>" + xmlEscape(title) + "</title>")
+		sb.WriteString("<link>" + xmlEscape(p.URL) + "</link>")
+		sb.WriteString("<description>" + xmlEscape(desc) + "</description>")
+		sb.WriteString("<guid isPermaLink=\"false\">" + xmlEscape(p.ProductID) + "</guid>")
+		if !p.ObservedAt.IsZero() {
+			sb.WriteString("<pubDate>" + p.ObservedAt.UTC().Format(time.RFC1123Z) + "</pubDate>")
+		}
+		sb.WriteString("</item>")
+	}
+	sb.WriteString("</channel></rss>")
+	w.Write([]byte(sb.String()))
+}
+
+func xmlEscape(s string) string {
+	r := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&apos;",
+	)
+	return r.Replace(s)
 }
 
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
@@ -350,7 +585,7 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 		}
 		rows = append(rows, alertRow{Alert: a, Owner: owner})
 	}
-	data := s.base("Alertes", "alerts")
+	data := s.baseWithRequest(r, "Alertes", "alerts")
 	data["Alerts"] = rows
 	data["Error"] = firstErr(err, userErr)
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
@@ -414,7 +649,7 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	for _, meta := range config.AppSettings {
 		rows = append(rows, configRow{Meta: meta, Value: effective[meta.Key]})
 	}
-	data := s.base("Configuration", "config")
+	data := s.baseWithRequest(r, "Configuration", "config")
 	data["Rows"] = rows
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
@@ -453,7 +688,7 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	users, err := s.db.ListAuthorizedUsers(r.Context(), true)
-	data := s.base("Utilisateurs", "users")
+	data := s.baseWithRequest(r, "Utilisateurs", "users")
 	data["Users"] = users
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
@@ -537,6 +772,7 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 			"error_count":  len(report.Errors),
 			"breaker_skips": report.BreakerSkips,
 			"sources":      report.SourceMetrics,
+			"source_warnings": report.SourceWarnings,
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -593,9 +829,32 @@ func (s *Server) apiResetBreaker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "reset": name})
 }
 
+// apiSourcesHealth returns a JSON snapshot of every configured source's
+// health (consecutive zero-deal scans + flagged status). Intended for
+// external monitoring (Prometheus exporter, uptime checks, dashboards).
+func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	entries := s.scanner.SourceHealth()
+	flagged := 0
+	for _, e := range entries {
+		if e.Flagged {
+			flagged++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total":          len(entries),
+		"flagged":        flagged,
+		"threshold":      s.scanner.ZeroStreakThreshold(),
+		"sources":        entries,
+	})
+}
+
 func (s *Server) metricsDashboard(w http.ResponseWriter, r *http.Request) {
 	report := s.scanner.LastReport()
-	data := s.base("Sante & metriques", "metrics")
+	data := s.baseWithRequest(r, "Sante & metriques", "metrics")
 	data["Report"] = report
 	data["Breakers"] = s.scanner.BreakerSnapshot()
 	render(w, metricsTpl, data)
@@ -700,6 +959,20 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 	if _, ok := data["Status"]; !ok {
 		data["Status"] = appStatus{}
 	}
+	if _, ok := data["Locale"]; !ok {
+		data["Locale"] = string(i18n.Default)
+	}
+	if _, ok := data["T"]; !ok {
+		// Fallback translator so legacy callers (and a couple of unit
+		// tests that render bodies in isolation) still get a working
+		// `{{call .T "key"}}` instead of a nil-call panic. The default
+		// locale matches the rendered locale above.
+		loc := i18n.Locale(data["Locale"].(string))
+		data["T"] = func(key string) string { return i18n.T(key, loc) }
+	}
+	if _, ok := data["KnownLangs"]; !ok {
+		data["KnownLangs"] = i18n.KnownLocales()
+	}
 	tpl := template.Must(template.New("page").Funcs(template.FuncMap{
 		"join": strings.Join,
 		"ts": func(t *time.Time) string {
@@ -746,6 +1019,22 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 			}
 			return "warn"
 		},
+		// T is the i18n helper exposed to templates. When the caller did
+		// not populate .T (e.g. some unit tests that render a body in
+		// isolation) we fall back to a passthrough that returns the key
+		// itself, so `{{call .T "any.key"}}` still renders something
+		// instead of panicking.
+		"call": func(f any, args ...any) (string, error) {
+			if fn, ok := f.(func(string) string); ok {
+				if len(args) == 0 {
+					return "", nil
+				}
+				if s, ok := args[0].(string); ok {
+					return fn(s), nil
+				}
+			}
+			return "", nil
+		},
 	}).Parse(layoutTpl + body))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tpl.Execute(w, data); err != nil {
@@ -754,7 +1043,7 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 }
 
 const layoutTpl = `<!doctype html>
-<html lang="fr">
+<html lang="{{.Locale}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -762,7 +1051,8 @@ const layoutTpl = `<!doctype html>
 <style>
 :root{color-scheme:light;--bg:#f3f6f8;--panel:#fff;--ink:#15202b;--muted:#667085;--line:#d8e0e7;--line2:#edf1f4;--nav:#102532;--nav2:#183847;--brand:#167c80;--brand2:#255f78;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eef7f7}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}a{color:inherit}
-.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px;background:#7ba7b4}.active .dot{background:#59d7c9}.shell{min-width:0}.topbar{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:#fff;color:var(--muted);font-size:12px}.badge.good{border-color:#b7dec9;background:#edf9f2;color:var(--good)}.badge.warn{border-color:#ffd99d;background:#fff8eb;color:var(--warn)}.badge.bad{border-color:#f5b5b0;background:#fff1f0;color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}.card{padding:16px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.panel-body{padding:16px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;white-space:nowrap}th,td{text-align:left;padding:11px 12px;border-bottom:1px solid var(--line2);vertical-align:top}th{background:#f7fafb;color:#41505d;font-size:12px;text-transform:uppercase;letter-spacing:.04em}tr:last-child td{border-bottom:0}.muted{color:var(--muted)}.notice{border:1px solid #c7e7d4;background:#f0faf4;color:#176640;border-radius:8px;padding:10px 12px;margin-bottom:14px}.warnbox{border:1px solid #ffd99d;background:#fff8eb;color:#7a4500;border-radius:8px;padding:10px 12px;margin-bottom:14px}.filters{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.config-row{display:grid;grid-template-columns:260px 1fr 150px;gap:12px;align-items:center;padding:13px 16px;border-bottom:1px solid var(--line2)}label{font-weight:700;display:block;margin-bottom:5px}input,select{transition:border-color .15s ease,box-shadow .15s ease;width:100%;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);padding:9px 10px}input:focus,select:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 2px var(--soft)}button{transition:background-color .15s ease;border:0;border-radius:7px;background:var(--brand);color:#fff;font-weight:700;padding:9px 12px;cursor:pointer}button:hover{background-color:var(--brand2)}button:focus-visible,a:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:4px}.secondary{background:#5f6b7a}.secondary:hover{background:#4b5563}.danger{background:var(--bad)}.danger:hover{background:#991b1b}.ghost{background:#eef2f5;color:#243443}.ghost:hover{background:#e2e8f0}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.inline{display:inline}.source-list{display:flex;gap:8px;flex-wrap:wrap}.empty{padding:22px;color:var(--muted);text-align:center}.truncate{max-width:460px;overflow:hidden;text-overflow:ellipsis}.mobile-title{display:none}
+.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px;background:#7ba7b4}.active .dot{background:#59d7c9}.shell{min-width:0}.topbar{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:#fff;color:var(--muted);font-size:12px}.badge.good{border-color:#b7dec9;background:#edf9f2;color:var(--good)}.badge.warn{border-color:#ffd99d;background:#fff8eb;color:var(--warn)}.badge.bad{border-color:#f5b5b0;background:#fff1f0;color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}.card{padding:16px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.panel-body{padding:16px}.table-wrap{overflow:auto}table{width:100%;border-colla
+.lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#59d7c9;border-color:#59d7c9;color:#0a1a21;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#1c3a45}
 @media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto;gap:12px}.nav{grid-template-columns:repeat(3,minmax(0,1fr))}.topbar{position:relative;height:auto;align-items:flex-start;gap:10px;flex-direction:column;padding:16px}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
 @media (max-width:560px){.nav{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.status{display:grid;width:100%}.truncate{max-width:240px}}
 </style>
@@ -772,14 +1062,15 @@ const layoutTpl = `<!doctype html>
 <aside class="sidebar">
 <div class="brand">DiskCount</div>
 <nav class="nav">
-<a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Vue d'ensemble</a>
-<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Qualite</a>
-<a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Produits</a>
-<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Alertes</a>
-<a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Configuration</a>
-<a href="/metrics/dashboard" class="{{if eq .Active "metrics"}}active{{end}}" {{if eq .Active "metrics"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Sante</a>
-<a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Utilisateurs</a>
+<a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.dashboard"}}</a>
+<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.quality"}}</a>
+<a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.products"}}</a>
+<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.alerts"}}</a>
+<a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.config"}}</a>
+<a href="/metrics/dashboard" class="{{if eq .Active "metrics"}}active{{end}}" {{if eq .Active "metrics"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.metrics"}}</a>
+<a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.users"}}</a>
 </nav>
+<div class="lang-switch">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
 </aside>
 <div class="shell">
 <header class="topbar">
@@ -788,7 +1079,7 @@ const layoutTpl = `<!doctype html>
 <span class="badge {{stateClass .Status.TelegramRunning}}">Telegram {{if .Status.TelegramRunning}}actif{{else}}inactif{{end}}</span>
 <span class="badge {{stateClass .Status.ConfigComplete}}">Config {{if .Status.ConfigComplete}}complete{{else}}incomplete{{end}}</span>
 <span class="badge">{{.Status.SourceCount}} sources</span>
-<form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">Deconnexion</button></form>
+<form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">{{call .T "web.nav.logout"}}</button></form>
 </div>
 </header>
 <main>{{template "body" .}}</main>
@@ -812,17 +1103,18 @@ const loginTpl = `{{define "body"}}
 </style>
 <div class="login-shell">
 <form class="login-card" method="post" action="/login" autocomplete="on">
-<h1>Connexion DiskCount</h1>
-<p class="hint">Saisissez le mot de passe administrateur pour acceder au tableau de bord.</p>
+<h1>{{call .T "web.login.title"}}</h1>
+<p class="hint">{{call .T "web.login.intro"}}</p>
 {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 <input type="hidden" name="next" value="{{.Next}}">
-<label for="password">Mot de passe</label>
+<label for="password">{{call .T "web.login.password"}}</label>
 <input id="password" name="password" type="password" required autocomplete="current-password" autofocus>
 <div class="actions">
-<button type="submit">Se connecter</button>
-<span class="hint" style="margin-left:auto">Acces restreint</span>
+<button type="submit">{{call .T "web.login.submit"}}</button>
+<span class="hint" style="margin-left:auto">{{call .T "web.login.restricted"}}</span>
 </div>
 </form>
+<div class="lang-switch" style="margin:14px auto 0;justify-content:center">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
 </div>
 {{end}}`
 
@@ -847,6 +1139,7 @@ const statsTpl = `{{define "body"}}
 <tr><th>Derniere notification</th><td>{{if .Stats}}{{ts .Stats.LastNotificationAt}}{{else}}-{{end}}</td></tr>
 {{if .LastReport}}<tr><th>Dernier scan</th><td>{{tsv .LastReport.FinishedAt}} - fetched={{.LastReport.Fetched}}, accepted={{.LastReport.Accepted}}, rejected={{.LastReport.Rejected}}, matched={{.LastReport.Matched}}, notified={{.LastReport.Notified}}, errors={{len .LastReport.Errors}}</td></tr>{{else}}<tr><th>Dernier scan</th><td>-</td></tr>{{end}}
 </tbody></table></div></section>
+{{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>âš  Sources en alerte</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Scans vides consecutifs</th><th>Message</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
 {{end}}`
 
 const qualityTpl = `{{define "body"}}
@@ -871,8 +1164,37 @@ const productsTpl = `{{define "body"}}
 <div class="actions"><button type="submit">Filtrer</button><a class="badge" href="/products">Reinitialiser</a></div>
 </form></div></section>
 <section class="section panel"><div class="panel-head"><h2>Meilleures offres recentes</h2><span class="hint">Creation d'alertes uniquement via Telegram.</span></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Source</th><th>Media</th><th>Capacite</th><th>Prix</th><th>EUR/To</th><th>Observe</th></tr></thead><tbody>
-{{range .Prices}}<tr><td class="truncate"><a href="{{.URL}}" target="_blank" rel="noreferrer">{{.Title}}</a></td><td>{{.Source}}</td><td>{{ptr .MediaType}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{tsv .ObservedAt}}</td></tr>{{else}}<tr><td colspan="7" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
+{{range .Prices}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td>{{.Source}}</td><td>{{ptr .MediaType}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{tsv .ObservedAt}}</td></tr>{{else}}<tr><td colspan="7" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
 </tbody></table></div></section>
+{{end}}`
+
+const productDetailTpl = `{{define "body"}}
+{{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
+{{if .Product}}
+<section class="panel"><div class="panel-head"><h2>{{.Product.Title}}</h2></div><div class="table-wrap"><table><tbody>
+<tr><th>Source</th><td>{{.Product.Source}}</td></tr>
+<tr><th>Capacite</th><td>{{cap .Product.CapacityTB}}</td></tr>
+<tr><th>Media</th><td>{{ptr .Product.MediaType}}</td></tr>
+<tr><th>Marque</th><td>{{ptr .Product.Brand}}</td></tr>
+{{if .Product.RecordingMethod}}<tr><th>Enregistrement</th><td>{{ptr .Product.RecordingMethod}}</td></tr>{{end}}
+{{if .Product.DriveCategory}}<tr><th>Categorie</th><td>{{ptr .Product.DriveCategory}}</td></tr>{{end}}
+<tr><th>Qualite</th><td>{{.Product.QualityScore}}/100</td></tr>
+<tr><th>Premiere observation</th><td>{{tsv .Product.FirstSeenAt}}</td></tr>
+<tr><th>Derniere observation</th><td>{{tsv .Product.LastSeenAt}}</td></tr>
+<tr><th>Lien</th><td><a href="{{.Product.URL}}" target="_blank" rel="noreferrer">Ouvrir l'offre</a></td></tr>
+</tbody></table></div></section>
+
+<section class="panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a> <a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a> <a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a> <a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1an</a></div></div>
+{{if .History}}
+<div class="stats-row"><div class="stat"><span class="label">Min EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moy EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Max EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div>
+<div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none"><polyline fill="none" stroke="#4a9" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de donnees pour un graphique.</p>{{end}}</div>
+<div class="table-wrap"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>
+{{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}
+</tbody></table></div>
+{{else}}<p class="empty">Aucune observation sur cette periode.</p>{{end}}
+</section>
+{{else}}<p class="empty">Produit introuvable. <a href="/products">Retour aux produits</a></p>{{end}}
+<p><a href="/products">&larr; Retour aux produits</a></p>
 {{end}}`
 
 const alertsTpl = `{{define "body"}}

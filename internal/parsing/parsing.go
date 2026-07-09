@@ -274,6 +274,62 @@ func NormalizeInterfaces(text string) []domain.DriveInterface {
 	return ifaces
 }
 
+// NormalizeRecordingMethod infers whether a rotational drive uses CMR or SMR.
+// This only applies to HDDs; SSDs return nil. Detection priority:
+//  1. Explicit "CMR"/"conventional" or "SMR"/"shingled" in the title/tech text.
+//  2. Known CMR model families (Exos, IronWolf, WD Red Plus, Ultrastar, Gold,
+//     Toshiba MG/MN enterprise series).
+//  3. Known SMR model families (WD Red base, Seagate Barracuda/Archive,
+//     Toshiba L200/MD3004).
+//  4. nil when undetermined (the alert matcher treats nil as "unknown").
+func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.RecordingMethod {
+	if mediaType != nil && *mediaType == domain.MediaTypeSolidState {
+		return nil
+	}
+	folded := asciiFold(text)
+	compact := strings.ReplaceAll(strings.ReplaceAll(folded, "-", ""), "_", "")
+
+	// Explicit declaration wins.
+	if strings.Contains(folded, "conventional") || strings.Contains(compact, "cmr") {
+		c := domain.RecordingMethodCMR
+		return &c
+	}
+	if strings.Contains(folded, "shingled") || strings.Contains(compact, "smr") {
+		c := domain.RecordingMethodSMR
+		return &c
+	}
+
+	// Known CMR families.
+	cmrFamilies := []string{
+		"exos", "ironwolf", "wd red plus", "red plus", "ultrastar",
+		"wd gold", "wdgold", "seagate skyhawk", "skyhawk",
+		"toshiba mg", "toshiba mn", "mg07", "mg08", "mg09", "mg10",
+		"hgst", "enterprise capacity",
+	}
+	for _, f := range cmrFamilies {
+		if strings.Contains(folded, f) {
+			c := domain.RecordingMethodCMR
+			return &c
+		}
+	}
+
+	// Known SMR families.
+	smrFamilies := []string{
+		"wd red ", " wd red,", " wd red-", // base WD Red (not "Plus")
+		"barracuda", "archive", "smrdata",
+		"toshiba l200", "toshiba md3004", "l200",
+		"seagate enterprise smr",
+	}
+	for _, f := range smrFamilies {
+		if strings.Contains(folded, f) {
+			c := domain.RecordingMethodSMR
+			return &c
+		}
+	}
+
+	return nil
+}
+
 func ExtractASIN(rawURL string) *string {
 	if rawURL == "" {
 		return nil

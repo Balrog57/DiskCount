@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
+	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/scanner"
+	"github.com/Balrog57/DiskCount/internal/sources"
 )
 
 func TestConfigTemplateMasksSecret(t *testing.T) {
@@ -91,6 +95,69 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	}
 }
 
+func TestFeedEndpointIsPublic(t *testing.T) {
+	// /feed.xml should be accessible without auth (no redirect to /login).
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
+	req.Header.Set("Accept", "text/html")
+	srv.handler().ServeHTTP(rec, req)
+	// With nil DB, the feed handler returns 500 (no DB), but critically it
+	// does NOT redirect to /login — that proves it is public.
+	if rec.Code == http.StatusFound {
+		t.Fatalf("/feed.xml redirected to login — should be public. Location: %s", rec.Header().Get("Location"))
+	}
+}
+
+func TestFeedEndpointAliasWorks(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/feed", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusFound {
+		t.Fatalf("/feed redirected to login — should be public")
+	}
+}
+
+func TestXmlEscape(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"normal text", "normal text"},
+		{"a & b", "a &amp; b"},
+		{"<script>", "&lt;script&gt;"},
+		{`"quoted"`, "&quot;quoted&quot;"},
+		{"it's", "it&apos;s"},
+	}
+	for _, c := range cases {
+		if got := xmlEscape(c.in); got != c.want {
+			t.Errorf("xmlEscape(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestComputeChartPointsEmpty(t *testing.T) {
+	if got := computeChartPoints(nil, 0, 0); got != "" {
+		t.Fatalf("empty history should produce empty string, got %q", got)
+	}
+	if got := computeChartPoints([]db.PriceHistoryPoint{{}}, 0, 0); got != "" {
+		t.Fatalf("single point should produce empty string, got %q", got)
+	}
+}
+
+func TestComputeChartPointsMultiple(t *testing.T) {
+	pts := []db.PriceHistoryPoint{
+		{PricePerTB: 10},
+		{PricePerTB: 20},
+		{PricePerTB: 15},
+	}
+	got := computeChartPoints(pts, 10, 20)
+	if got == "" {
+		t.Fatal("expected non-empty chart points for 3 observations")
+	}
+	if strings.Count(got, " ") != 2 {
+		t.Fatalf("expected 3 coordinate pairs (2 spaces), got %d in %q", strings.Count(got, " "), got)
+	}
+}
+
 func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 	srv := New(nil, nil, &config.Config{}, nil, false)
 	for _, path := range []string{"/alerts/toggle", "/alerts/delete", "/config/save", "/users/add", "/users/toggle"} {
@@ -100,6 +167,87 @@ func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s: expected 405, got %d", path, rec.Code)
 		}
+	}
+}
+
+// fakeSource is a minimal source used to register a name in SourceHealth.
+type fakeSource struct{ n string }
+
+func (f fakeSource) Name() string { return f.n }
+func (f fakeSource) Fetch(_ context.Context) ([]domain.Deal, error) {
+	return nil, nil
+}
+
+// TestApiSourcesHealthJSON verifies the JSON shape used by external
+// monitoring (Prometheus, uptime checks). With a scanner wired up and two
+// registered sources, the endpoint must return the expected envelope.
+func TestApiSourcesHealthJSON(t *testing.T) {
+	cfg := &config.Config{
+		WebAdminPassword:      "secret",
+		SourceHealthThreshold: 2,
+		SourceHealthNotify:    false,
+	}
+	scan := scanner.New(cfg, nil, []sources.Source{
+		fakeSource{n: "alpha"},
+		fakeSource{n: "beta"},
+	}, nil)
+	// Drive one source past the threshold to ensure Flagged flips.
+	scan.RecordSourceScanResult("alpha", 0)
+	scan.RecordSourceScanResult("alpha", 0)
+	scan.RecordSourceScanResult("beta", 3)
+
+	srv := New(nil, scan, cfg, nil, false)
+	// Mint a valid session by going through the login flow.
+	mux := srv.handler()
+	loginRec := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusSeeOther {
+		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
+	}
+	// Pull the session cookie out of the response.
+	var sessionCookie *http.Cookie
+	for _, c := range loginRec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("no %q cookie set after login; Set-Cookie=%q", sessionCookieName, loginRec.Header().Get("Set-Cookie"))
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sources/health", nil)
+	req.AddCookie(sessionCookie)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"name":"alpha"`,
+		`"name":"beta"`,
+		`"flagged":true`,
+		`"flagged":false`,
+		`"threshold":2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("response missing %q: %s", want, body)
+		}
+	}
+}
+
+// TestApiSourcesHealthRejectsPOST enforces the GET-only contract.
+func TestApiSourcesHealthRejectsPOST(t *testing.T) {
+	cfg := &config.Config{WebAdminPassword: "secret"}
+	srv := New(nil, nil, cfg, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sources/health", nil)
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
 	}
 }
 
@@ -180,11 +328,70 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login POST bad pass: expected 200, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Mot de passe incorrect") {
-		t.Fatalf("expected error message in body")
+	if !strings.Contains(rec.Body.String(), "Mot de passe invalide") {
+		t.Fatalf("expected error message in body, got: %s", rec.Body.String())
 	}
 	if rec.Header().Get("Set-Cookie") != "" {
 		t.Fatalf("failed login should not set a session cookie")
+	}
+}
+
+// TestLoginPageRendersInEnglish verifies the language switcher: setting the
+// lang cookie to "en" must surface the English strings in the login page.
+func TestLoginPageRendersInEnglish(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	req.AddCookie(&http.Cookie{Name: langCookieName, Value: "en"})
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "DiskCount login") {
+		t.Fatalf("English login title missing: %s", body)
+	}
+	if !strings.Contains(body, "Sign in") {
+		t.Fatalf("English submit button missing: %s", body)
+	}
+	if strings.Contains(body, "Connexion DiskCount") {
+		t.Fatalf("French title leaked despite en cookie: %s", body)
+	}
+}
+
+// TestSetLangSwitchesLocaleAndPinsCookie exercises the /lang endpoint:
+// posting lang=en must set the cookie and redirect (303), and the next
+// request must see the cookie honoured.
+func TestSetLangSwitchesLocaleAndPinsCookie(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	mux := srv.handler()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/lang", strings.NewReader("lang=en&next=/login"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d", rec.Code)
+	}
+	var found bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == langCookieName && c.Value == "en" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("lang cookie not set: %q", rec.Header().Get("Set-Cookie"))
+	}
+}
+
+// TestSetLangRejectsBadMethod enforces the POST-only contract.
+func TestSetLangRejectsBadMethod(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/lang", nil)
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
 	}
 }
 

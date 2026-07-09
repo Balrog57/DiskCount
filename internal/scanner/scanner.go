@@ -3,8 +3,10 @@ package scanner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -12,12 +14,22 @@ import (
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/i18n"
 	"github.com/Balrog57/DiskCount/internal/normalize"
 	"github.com/Balrog57/DiskCount/internal/notifier"
 	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/sources"
 	"github.com/sony/gobreaker"
 )
+
+// Notifier is the subset of notifier.TelegramNotifier that the scanner
+// needs. Defining it here breaks the import cycle that would otherwise
+// exist between scanner and notifier if we used the concrete type, and
+// makes the scanner trivially mockable in tests.
+type Notifier interface {
+	SendDeal(chatID int64, alert *db.Alert, deal domain.Deal, dec domain.NotificationDecision) error
+	SendAdminMessage(chatID int64, text string) error
+}
 
 // SourceMetrics captures per-source statistics for the most recent scan.
 type SourceMetrics struct {
@@ -39,28 +51,106 @@ type ScanReport struct {
 	DryRun                                                         bool
 	SourceMetrics                                                  []SourceMetrics
 	BreakerSkips                                                   map[string]string
+	// SourceWarnings lists sources that returned zero deals for several
+	// consecutive scans, hinting at broken selectors or a dead feed.
+	SourceWarnings []SourceWarning
+}
+
+// SourceWarning flags a source whose reliability is in question.
+type SourceWarning struct {
+	Name             string
+	ConsecutiveZeros int
+	Message          string
+}
+
+// SourceHealthEntry is a snapshot of the current health state for a single
+// source. It is exposed via Scanner.SourceHealth and the /api/sources/health
+// web endpoint so operators can poll monitoring without scraping the HTML
+// dashboard.
+type SourceHealthEntry struct {
+	Name             string `json:"name"`
+	ConsecutiveZeros int    `json:"consecutive_zeros"`
+	Flagged          bool   `json:"flagged"`
+	LastDeals        int    `json:"last_deals_count"`
 }
 
 type Scanner struct {
 	cfg  *config.Config
 	db   *db.DB
 	srcs []sources.Source
-	ntf  *notifier.TelegramNotifier
+	ntf  Notifier
 
 	mu       sync.RWMutex
 	last     *ScanReport
 	breakers map[string]*gobreaker.CircuitBreaker
 	breakerMu sync.Mutex
+
+	// zeroStreak tracks consecutive scans that returned zero deals per source.
+	// A source that has returned nothing for ZeroStreakThreshold scans is
+	// flagged in the report so the admin knows its selectors may be broken.
+	zeroStreak          map[string]int
+	zeroStreakThreshold int
+	// lastDealsCount caches the most recent deal count for each source so
+	// the health endpoint can report it without re-running a scan.
+	lastDealsCount map[string]int
+	// notifiedSources remembers whether we already paged the admin for a
+	// given source's current streak, so a source that stays broken across
+	// many scans does not flood Telegram. The flag is cleared as soon as
+	// the source returns at least one deal.
+	notifiedSources   map[string]bool
+	zeroStreakMu      sync.RWMutex
 }
 
-func New(cfg *config.Config, dbase *db.DB, srcs []sources.Source, n *notifier.TelegramNotifier) *Scanner {
-	return &Scanner{
-		cfg:      cfg,
-		db:       dbase,
-		srcs:     srcs,
-		ntf:      n,
-		breakers: make(map[string]*gobreaker.CircuitBreaker),
+func New(cfg *config.Config, dbase *db.DB, srcs []sources.Source, n Notifier) *Scanner {
+	threshold := cfg.SourceHealthThreshold
+	if threshold < 1 {
+		threshold = 3
 	}
+	return &Scanner{
+		cfg:                 cfg,
+		db:                  dbase,
+		srcs:                srcs,
+		ntf:                 n,
+		breakers:            make(map[string]*gobreaker.CircuitBreaker),
+		zeroStreak:          make(map[string]int),
+		zeroStreakThreshold: threshold,
+		lastDealsCount:      make(map[string]int),
+		notifiedSources:     make(map[string]bool),
+	}
+}
+
+// ZeroStreakThreshold returns the current alerting threshold. It is exposed
+// so the web admin can render the same value the scanner uses internally.
+func (s *Scanner) ZeroStreakThreshold() int {
+	if s.zeroStreakThreshold < 1 {
+		return 3
+	}
+	return s.zeroStreakThreshold
+}
+
+// SourceHealth returns the current health snapshot for every configured
+// source. Sources that have never been scanned yet appear with zero counts
+// and ConsecutiveZeros=0.
+func (s *Scanner) SourceHealth() []SourceHealthEntry {
+	threshold := s.zeroStreakThreshold
+	if threshold < 1 {
+		threshold = 3
+	}
+	s.zeroStreakMu.RLock()
+	defer s.zeroStreakMu.RUnlock()
+	out := make([]SourceHealthEntry, 0, len(s.srcs))
+	for _, src := range s.srcs {
+		name := src.Name()
+		streak := s.zeroStreak[name]
+		last := s.lastDealsCount[name]
+		out = append(out, SourceHealthEntry{
+			Name:             name,
+			ConsecutiveZeros: streak,
+			Flagged:          streak >= threshold,
+			LastDeals:        last,
+		})
+	}
+	return out
 }
 
 func (s *Scanner) Sources() []sources.Source { return s.srcs }
@@ -76,6 +166,7 @@ func (s *Scanner) LastReport() *ScanReport {
 	for k, v := range s.last.RejectReasons {
 		cp.RejectReasons[k] = v
 	}
+	cp.SourceWarnings = append([]SourceWarning(nil), s.last.SourceWarnings...)
 	return &cp
 }
 
@@ -177,6 +268,11 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		}
 		slog.Info("fetched", "src", src.Name(), "n", len(deals))
 		r.Fetched += len(deals)
+
+		// Track consecutive zero-deal scans to detect broken selectors.
+		s.recordScanResult(src.Name(), len(deals), r)
+
+
 		if len(deals) > 0 {
 			s.proc(ctx, deals, now, dryRun, r)
 		}
@@ -207,6 +303,71 @@ func (s *Scanner) jitterBefore(ctx context.Context) {
 	case <-ctx.Done():
 	case <-time.After(delay):
 	}
+}
+
+// recordScanResult updates the zero-deal streak counters for a single source
+// and, when the threshold is crossed for the first time in a streak, pushes
+// an administrative Telegram message and appends a SourceWarning to the
+// report. The mutex guards both maps so SourceHealth() can read them
+// concurrently from the web layer.
+func (s *Scanner) recordScanResult(name string, deals int, r *ScanReport) {
+	s.zeroStreakMu.Lock()
+	s.lastDealsCount[name] = deals
+	if deals > 0 {
+		s.zeroStreak[name] = 0
+		s.notifiedSources[name] = false
+		s.zeroStreakMu.Unlock()
+		return
+	}
+	s.zeroStreak[name]++
+	streak := s.zeroStreak[name]
+	threshold := s.zeroStreakThreshold
+	alreadyNotified := s.notifiedSources[name]
+	s.zeroStreakMu.Unlock()
+
+	if streak < threshold {
+		return
+	}
+	msg := fmt.Sprintf("aucun deal depuis %d scans consecutifs (selecteurs possiblement casses)", streak)
+	r.SourceWarnings = append(r.SourceWarnings, SourceWarning{
+		Name:             name,
+		ConsecutiveZeros: streak,
+		Message:          msg,
+	})
+	slog.Warn("source health", "src", name, "consecutive_zeros", streak)
+
+	if s.cfg.SourceHealthNotify && !alreadyNotified {
+		s.notifyAdminSourceHealth(name, streak)
+	}
+}
+
+// RecordSourceScanResult is the exported wrapper around recordScanResult.
+// Tests outside the scanner package use it to seed the streak counters
+// without going through a full RunOnce cycle.
+func (s *Scanner) RecordSourceScanResult(name string, deals int) {
+	s.recordScanResult(name, deals, &ScanReport{})
+}
+
+// notifyAdminSourceHealth sends a one-shot Telegram ping to the configured
+// admin chat ID and marks the source as notified so the next scans in the
+// same streak do not flood the channel. It is a no-op when the admin chat
+// ID is unset, the notifier is nil, or delivery fails (we still log).
+func (s *Scanner) notifyAdminSourceHealth(name string, streak int) {
+	if s.ntf == nil {
+		return
+	}
+	chatID, err := strconv.ParseInt(s.cfg.TelegramAdminChatID, 10, 64)
+	if err != nil || chatID <= 0 {
+		return
+	}
+	loc := i18n.ParseLocale(s.cfg.AdminLocale)
+	if err := s.ntf.SendAdminMessage(chatID, notifier.FormatSourceHealthAlert(name, streak, loc)); err != nil {
+		slog.Warn("admin notify", "src", name, "err", err)
+		return
+	}
+	s.zeroStreakMu.Lock()
+	s.notifiedSources[name] = true
+	s.zeroStreakMu.Unlock()
 }
 
 func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (SourceMetrics, []domain.Deal, error) {

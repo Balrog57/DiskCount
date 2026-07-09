@@ -47,6 +47,21 @@ const (
 	DriveInterfaceUSB  DriveInterface = "usb"
 )
 
+// RecordingMethod describes the magnetic recording technology of a rotational
+// drive. It matters for NAS/server use: CMR (Conventional Magnetic Recording)
+// handles sustained random writes well, while SMR (Shingled Magnetic Recording)
+// can suffer severe performance degradation in such workloads. Users who build
+// NAS arrays often want to filter out SMR drives entirely.
+type RecordingMethod string
+
+const (
+	// RecordingMethodCMR is conventional (perpendicular) recording — the safe
+	// choice for RAID/NAS/ZFS.
+	RecordingMethodCMR RecordingMethod = "cmr"
+	// RecordingMethodSMR is shingled recording (drive-managed unless noted).
+	RecordingMethodSMR RecordingMethod = "smr"
+)
+
 type Deal struct {
 	Source               string
 	Title                string
@@ -61,6 +76,7 @@ type Deal struct {
 	FormFactor           *string
 	Technology           *string
 	DriveCategory        *DriveCategory
+	RecordingMethod      *RecordingMethod
 	Interfaces           []DriveInterface
 	ObservedAt           time.Time
 	Raw                  map[string]interface{}

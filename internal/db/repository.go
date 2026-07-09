@@ -56,10 +56,15 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS classification_source VARCHAR(40);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS canonical_url TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant VARCHAR(120);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(120);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS model VARCHAR(180);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS raw_title TEXT;
-ALTER TABLE price_observations ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
+	ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(120);
+	ALTER TABLE products ADD COLUMN IF NOT EXISTS model VARCHAR(180);
+	ALTER TABLE products ADD COLUMN IF NOT EXISTS raw_title TEXT;
+	ALTER TABLE products ADD COLUMN IF NOT EXISTS recording_method VARCHAR(20);
+	ALTER TABLE price_observations ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
+	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS brands JSONB DEFAULT '[]';
+	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS keywords JSONB DEFAULT '[]';
+	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exclude_keywords JSONB DEFAULT '[]';
+	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS recording_methods JSONB DEFAULT '[]';
 `)
 	return err
 }
@@ -69,6 +74,7 @@ type Alert struct {
 	Name                                                                          string
 	MinCapacityTB, MaxCapacityTB, MaxPricePerTB                                   *float64
 	CapacityPresets, Conditions, MediaTypes, DriveCategories, Interfaces, Sources []string
+	Brands, Keywords, ExcludeKeywords, RecordingMethods                           []string
 	MinDiscountPct                                                                float64
 	CooldownHours                                                                 int
 	Enabled                                                                       bool
@@ -78,6 +84,7 @@ type Product struct {
 	ID, Source, Title, URL                                                  string
 	ExternalID, Condition, MediaType, FormFactor, Technology, DriveCategory *string
 	ClassificationSource, CanonicalURL, Merchant, Brand, Model, RawTitle    *string
+	RecordingMethod                                                         *string
 	CapacityTB                                                              float64
 	Interfaces                                                              []string
 	QualityScore                                                            int
@@ -215,15 +222,25 @@ func (db *DB) SetAuthorizedUserEnabled(ctx context.Context, uid int64, enabled b
 	return err
 }
 
-func (db *DB) CreateAlert(ctx context.Context, chatID, ownerID int64, name string, maxPrice *float64, minDisc float64, cooldown int, caps, conds, medias, cats, ifaces, srcs []string) (*Alert, error) {
-	a := &Alert{ChatID: chatID, OwnerUserID: ownerID, Name: name, MaxPricePerTB: maxPrice, MinDiscountPct: minDisc, CooldownHours: cooldown, CapacityPresets: caps, Conditions: conds, MediaTypes: medias, DriveCategories: cats, Interfaces: ifaces, Sources: srcs, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (chat_id,owner_user_id,name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,max_price_per_tb,min_discount_pct,cooldown_hours) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
-		chatID, ownerID, name, ja(caps), ja(conds), ja(medias), ja(cats), ja(ifaces), ja(srcs), maxPrice, minDisc, cooldown).Scan(&a.ID)
+// AlertDraft carries all filter slices for alert creation in a single value,
+// keeping the CreateAlert signature readable as new filter dimensions are added.
+type AlertDraft struct {
+	CapacityPresets, Conditions, MediaTypes, DriveCategories, Interfaces, Sources []string
+	Brands, Keywords, ExcludeKeywords, RecordingMethods                           []string
+	MaxPricePerTB                                                                  *float64
+	MinDiscountPct                                                                 float64
+	CooldownHours                                                                  int
+}
+
+func (db *DB) CreateAlert(ctx context.Context, chatID, ownerID int64, name string, d AlertDraft) (*Alert, error) {
+	a := &Alert{ChatID: chatID, OwnerUserID: ownerID, Name: name, MaxPricePerTB: d.MaxPricePerTB, MinDiscountPct: d.MinDiscountPct, CooldownHours: d.CooldownHours, CapacityPresets: d.CapacityPresets, Conditions: d.Conditions, MediaTypes: d.MediaTypes, DriveCategories: d.DriveCategories, Interfaces: d.Interfaces, Sources: d.Sources, Brands: d.Brands, Keywords: d.Keywords, ExcludeKeywords: d.ExcludeKeywords, RecordingMethods: d.RecordingMethods, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (chat_id,owner_user_id,name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+		chatID, ownerID, name, ja(d.CapacityPresets), ja(d.Conditions), ja(d.MediaTypes), ja(d.DriveCategories), ja(d.Interfaces), ja(d.Sources), ja(d.Brands), ja(d.Keywords), ja(d.ExcludeKeywords), ja(d.RecordingMethods), d.MaxPricePerTB, d.MinDiscountPct, d.CooldownHours).Scan(&a.ID)
 	return a, err
 }
 
 func (db *DB) ListAlerts(ctx context.Context, onlyEnabled bool) ([]Alert, error) {
-	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts"
+	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts"
 	if onlyEnabled {
 		q += " WHERE enabled=TRUE"
 	}
@@ -232,7 +249,7 @@ func (db *DB) ListAlerts(ctx context.Context, onlyEnabled bool) ([]Alert, error)
 }
 
 func (db *DB) GetAlertsByOwner(ctx context.Context, ownerID int64, onlyEnabled bool) ([]Alert, error) {
-	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1"
+	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1"
 	if onlyEnabled {
 		q += " AND enabled=TRUE"
 	}
@@ -242,8 +259,8 @@ func (db *DB) GetAlertsByOwner(ctx context.Context, ownerID int64, onlyEnabled b
 
 func (db *DB) GetAlert(ctx context.Context, ownerID, aID int64) (*Alert, error) {
 	a := &Alert{}
-	err := db.Pool.QueryRow(ctx, "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1 AND id=$2", ownerID, aID).Scan(
-		&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+	err := db.Pool.QueryRow(ctx, "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1 AND id=$2", ownerID, aID).Scan(
+		&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), jsonScan(&a.Brands), jsonScan(&a.Keywords), jsonScan(&a.ExcludeKeywords), jsonScan(&a.RecordingMethods), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -262,8 +279,8 @@ func (db *DB) DeleteAlert(ctx context.Context, ownerID, aID int64) error {
 
 func (db *DB) UpsertProduct(ctx context.Context, deal domain.Deal) error {
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := db.Pool.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
+	_, err := db.Pool.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
 	return err
 }
 
@@ -277,8 +294,8 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
+	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
 	if err != nil {
 		return err
 	}
@@ -339,8 +356,8 @@ func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle))
+	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
 	if err != nil {
 		return err
 	}
@@ -352,7 +369,7 @@ func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.
 }
 
 func (db *DB) ToggleAlertFilter(ctx context.Context, ownerID, aID int64, field, value string) error {
-	m := map[string][]string{"condition": nil, "media": nil, "category": nil, "interface": nil, "source": nil}
+	m := map[string][]string{"condition": nil, "media": nil, "category": nil, "interface": nil, "source": nil, "brand": nil, "recording_method": nil}
 	a, err := db.GetAlert(ctx, ownerID, aID)
 	if err != nil || a == nil {
 		return err
@@ -368,6 +385,10 @@ func (db *DB) ToggleAlertFilter(ctx context.Context, ownerID, aID int64, field, 
 		m[field] = a.Interfaces
 	case "source":
 		m[field] = a.Sources
+	case "brand":
+		m[field] = a.Brands
+	case "recording_method":
+		m[field] = a.RecordingMethods
 	default:
 		return fmt.Errorf("invalid field")
 	}
@@ -384,8 +405,15 @@ func (db *DB) ToggleAlertFilter(ctx context.Context, ownerID, aID int64, field, 
 	} else {
 		vals = append(vals, value)
 	}
-	cols := map[string]string{"condition": "conditions", "media": "media_types", "category": "drive_categories", "interface": "interfaces", "source": "sources"}
+	cols := map[string]string{"condition": "conditions", "media": "media_types", "category": "drive_categories", "interface": "interfaces", "source": "sources", "brand": "brands", "recording_method": "recording_methods"}
 	_, err = db.Pool.Exec(ctx, fmt.Sprintf("UPDATE alerts SET %s=$1, updated_at=NOW() WHERE owner_user_id=$2 AND id=$3", cols[field]), ja(vals), ownerID, aID)
+	return err
+}
+
+// SetAlertKeywords replaces the keyword and exclude-keyword lists of an alert.
+// Either slice may be nil to clear that list.
+func (db *DB) SetAlertKeywords(ctx context.Context, ownerID, aID int64, keywords, excludeKeywords []string) error {
+	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET keywords=$1, exclude_keywords=$2, updated_at=NOW() WHERE owner_user_id=$3 AND id=$4", ja(keywords), ja(excludeKeywords), ownerID, aID)
 	return err
 }
 
@@ -428,6 +456,47 @@ LIMIT $1`, limit)
 			return nil, err
 		}
 		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// GetProduct fetches a single product by its ID for the detail page.
+func (db *DB) GetProduct(ctx context.Context, productID string) (*Product, error) {
+	p := &Product{}
+	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
+		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.FirstSeenAt, &p.LastSeenAt)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return p, err
+}
+
+// PriceHistoryPoint is a single price observation for charting.
+type PriceHistoryPoint struct {
+	ObservedAt           time.Time
+	PriceEUR, PricePerTB float64
+	Source               string
+}
+
+// PriceHistory returns price observations for a product within the given
+// number of days, ordered chronologically for charting.
+func (db *DB) PriceHistory(ctx context.Context, productID string, days int) ([]PriceHistoryPoint, error) {
+	if days <= 0 {
+		days = 30
+	}
+	start := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	rows, err := db.Pool.Query(ctx, `SELECT observed_at, price_eur, price_per_tb, source FROM price_observations WHERE product_id=$1 AND observed_at >= $2 ORDER BY observed_at ASC`, productID, start)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PriceHistoryPoint
+	for rows.Next() {
+		var pt PriceHistoryPoint
+		if err := rows.Scan(&pt.ObservedAt, &pt.PriceEUR, &pt.PricePerTB, &pt.Source); err != nil {
+			return nil, err
+		}
+		out = append(out, pt)
 	}
 	return out, rows.Err()
 }
@@ -555,7 +624,7 @@ func scanAlerts(rows pgx.Rows, err error) ([]Alert, error) {
 	var out []Alert
 	for rows.Next() {
 		var a Alert
-		rows.Scan(&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+		rows.Scan(&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), jsonScan(&a.Brands), jsonScan(&a.Keywords), jsonScan(&a.ExcludeKeywords), jsonScan(&a.RecordingMethods), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
 		out = append(out, a)
 	}
 	return out, nil

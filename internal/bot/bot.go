@@ -16,19 +16,21 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
-var wizardSteps = []string{"media", "condition", "capacity", "price", "categories", "interfaces", "confirm"}
+var wizardSteps = []string{"media", "condition", "capacity", "price", "categories", "interfaces", "brand", "recording", "confirm"}
 
 type alertDraft struct {
-	step            string
-	name            string
-	capacityPresets []string
-	maxPricePerTB   *float64
-	conditions      []string
-	mediaTypes      []string
-	driveCategories []string
-	interfaces      []string
-	sources         []string
-	updatedAt       time.Time
+	step             string
+	name             string
+	capacityPresets  []string
+	maxPricePerTB    *float64
+	conditions       []string
+	mediaTypes       []string
+	driveCategories  []string
+	interfaces       []string
+	sources          []string
+	brands           []string
+	recordingMethods []string
+	updatedAt        time.Time
 }
 
 type Bot struct {
@@ -75,6 +77,21 @@ var catPairs = [][2]string{
 }
 var ifacePairs = [][2]string{{"SATA", "sata"}, {"SAS", "sas"}, {"NVMe", "nvme"}, {"USB", "usb"}}
 
+var brandPairs = [][2]string{
+	{"Seagate", "Seagate"}, {"Western Digital", "Western Digital"}, {"WD", "WD"},
+	{"Toshiba", "Toshiba"}, {"Samsung", "Samsung"}, {"Crucial", "Crucial"},
+	{"Kingston", "Kingston"}, {"HGST", "HGST"}, {"Micron", "Micron"},
+}
+
+var recordingPairs = [][2]string{{"CMR", "cmr"}, {"SMR", "smr"}}
+
+var sourcePairs = [][2]string{
+	{"diskprices", "diskprices"}, {"pricepergig", "pricepergig"},
+	{"pricepertb", "pricepertb"}, {"dealabs", "dealabs"},
+	{"idealo", "idealo"}, {"ledenicheur", "ledenicheur"},
+	{"leboncoin", "leboncoin"},
+}
+
 func pf(f float64) *float64 { return &f }
 
 func New(cfg *config.Config, dbase *db.DB, scan *scanner.Scanner) (*Bot, error) {
@@ -99,6 +116,7 @@ func (b *Bot) setup() {
 	b.TB.Handle("/delete", b.auth(b.deleteCmd))
 	b.TB.Handle("/set_max_price", b.auth(b.setMaxPriceCmd))
 	b.TB.Handle("/set_capacity", b.auth(b.setCapacityCmd))
+	b.TB.Handle("/set_keywords", b.auth(b.setKeywordsCmd))
 	b.TB.Handle("/prices", b.auth(b.pricesCmd))
 	b.TB.Handle(tele.OnCallback, b.callback)
 
@@ -112,7 +130,7 @@ func botCommands() []tele.Command {
 		{Text: "add", Description: "Ajouter une alerte (texte)"}, {Text: "alerts", Description: "Lister tes alertes"},
 		{Text: "pause", Description: "Mettre en pause"}, {Text: "resume", Description: "Reactiver"},
 		{Text: "delete", Description: "Supprimer"}, {Text: "set_max_price", Description: "Modifier seuil EUR/To"},
-		{Text: "set_capacity", Description: "Modifier capacite"}, {Text: "prices", Description: "Voir les meilleurs prix actuels"},
+		{Text: "set_capacity", Description: "Modifier capacite"}, {Text: "set_keywords", Description: "Modifier mots-cles"}, {Text: "prices", Description: "Voir les meilleurs prix actuels"},
 	}
 }
 
@@ -183,7 +201,14 @@ func (b *Bot) addCmd(c tele.Context) error {
 	caps := flds(m["capacity"])
 	conds := flds(m["condition"])
 	meds := flds(m["media"])
-	a, err := b.db.CreateAlert(context.Background(), c.Chat().ID, c.Sender().ID, name, mx, 5.0, 24, caps, conds, meds, nil, nil, nil)
+	a, err := b.db.CreateAlert(context.Background(), c.Chat().ID, c.Sender().ID, name, db.AlertDraft{
+		MaxPricePerTB:  mx,
+		MinDiscountPct: 5.0,
+		CooldownHours:  24,
+		CapacityPresets: caps,
+		Conditions:     conds,
+		MediaTypes:     meds,
+	})
 	if err != nil {
 		return c.Send("Erreur: " + err.Error())
 	}
@@ -227,7 +252,68 @@ func (b *Bot) setMaxPriceCmd(c tele.Context) error {
 	b.db.SetAlertMaxPrice(context.Background(), c.Sender().ID, id, p)
 	return c.Send("Prix mis a jour.")
 }
-func (b *Bot) setCapacityCmd(c tele.Context) error { return c.Send("Capacite mise a jour.") }
+func (b *Bot) setCapacityCmd(c tele.Context) error {
+	parts := strings.Fields(c.Message().Payload)
+	if len(parts) < 2 {
+		return c.Send("Usage: /set_capacity ID hdd_16_20,hdd_20_24  (ou ID none pour toute capacite)")
+	}
+	id, _ := strconv.ParseInt(parts[0], 10, 64)
+	if id == 0 {
+		return c.Send("ID invalide.")
+	}
+	var presets []string
+	if parts[1] != "none" {
+		presets = strings.Split(parts[1], ",")
+		for i := range presets {
+			presets[i] = strings.TrimSpace(presets[i])
+		}
+		// Validate that presets exist.
+		for _, k := range presets {
+			if _, ok := rules.CapacityPresets[k]; !ok {
+				return c.Send("Preset inconnu: " + k)
+			}
+		}
+	}
+	if err := b.db.UpdateAlertCaps(context.Background(), c.Sender().ID, id, presets); err != nil {
+		return c.Send("Erreur: " + err.Error())
+	}
+	return c.Send(fmt.Sprintf("Capacite de l'alerte #%d mise a jour.", id))
+}
+func (b *Bot) setKeywordsCmd(c tele.Context) error {
+	parts := strings.Fields(c.Message().Payload)
+	if len(parts) < 2 {
+		return c.Send("Usage: /set_keywords ID include:Exos,IronWolf exclude:archive\nOu: /set_keywords ID none")
+	}
+	id, _ := strconv.ParseInt(parts[0], 10, 64)
+	if id == 0 {
+		return c.Send("ID invalide.")
+	}
+	var include, exclude []string
+	for _, p := range parts[1:] {
+		kv := strings.SplitN(p, ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		vals := strings.Split(kv[1], ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		switch strings.ToLower(kv[0]) {
+		case "include":
+			include = vals
+		case "exclude":
+			exclude = vals
+		}
+	}
+	if strings.ToLower(parts[1]) == "none" {
+		include = nil
+		exclude = nil
+	}
+	if err := b.db.SetAlertKeywords(context.Background(), c.Sender().ID, id, include, exclude); err != nil {
+		return c.Send("Erreur: " + err.Error())
+	}
+	return c.Send(fmt.Sprintf("Mots-cles de l'alerte #%d mis a jour.", id))
+}
 func (b *Bot) createCmd(c tele.Context) error {
 	uid := c.Sender().ID
 	b.mu.Lock()
@@ -311,15 +397,21 @@ func (b *Bot) draftCB(c tele.Context, d string) error {
 			break
 		}
 		switch ps[2] {
-		case "media":
-			dr.mediaTypes = tglV(dr.mediaTypes, ps[3])
-		case "condition":
-			dr.conditions = tglV(dr.conditions, ps[3])
-		case "category":
-			dr.driveCategories = tglV(dr.driveCategories, ps[3])
-		case "interface":
-			dr.interfaces = tglV(dr.interfaces, ps[3])
-		}
+			case "media":
+				dr.mediaTypes = tglV(dr.mediaTypes, ps[3])
+			case "condition":
+				dr.conditions = tglV(dr.conditions, ps[3])
+			case "category":
+				dr.driveCategories = tglV(dr.driveCategories, ps[3])
+			case "interface":
+				dr.interfaces = tglV(dr.interfaces, ps[3])
+			case "brand":
+				dr.brands = tglV(dr.brands, ps[3])
+			case "recording":
+				dr.recordingMethods = tglV(dr.recordingMethods, ps[3])
+			case "source":
+				dr.sources = tglV(dr.sources, ps[3])
+			}
 		return c.Edit(fDraft(dr), draftKB(dr))
 	case strings.HasPrefix(d, "draft:cap:"):
 		k := d[strings.LastIndex(d, ":")+1:]
@@ -356,7 +448,19 @@ func (b *Bot) draftCB(c tele.Context, d string) error {
 		if nm == "" {
 			nm = "Alerte DiskCount"
 		}
-		a, err := b.db.CreateAlert(context.Background(), c.Chat().ID, uid, nm, dr.maxPricePerTB, 5.0, 24, dr.capacityPresets, dr.conditions, dr.mediaTypes, dr.driveCategories, dr.interfaces, dr.sources)
+		a, err := b.db.CreateAlert(context.Background(), c.Chat().ID, uid, nm, db.AlertDraft{
+			MaxPricePerTB:    dr.maxPricePerTB,
+			MinDiscountPct:   5.0,
+			CooldownHours:    24,
+			CapacityPresets:  dr.capacityPresets,
+			Conditions:       dr.conditions,
+			MediaTypes:       dr.mediaTypes,
+			DriveCategories:  dr.driveCategories,
+			Interfaces:       dr.interfaces,
+			Sources:          dr.sources,
+			Brands:           dr.brands,
+			RecordingMethods: dr.recordingMethods,
+		})
 		if err != nil {
 			return c.Edit("Erreur: "+err.Error(), draftKB(dr))
 		}
@@ -409,6 +513,12 @@ func (b *Bot) alertCB(c tele.Context, d string) error {
 		return c.Edit("Categories\n\n"+as(), alTglKB("category", aID, catPairs, a.DriveCategories))
 	case "interfaces":
 		return c.Edit("Connexions\n\n"+as(), alTglKB("interface", aID, ifacePairs, a.Interfaces))
+	case "brand":
+		return c.Edit("Marque\n\n"+as(), alTglKB("brand", aID, brandPairs, a.Brands))
+	case "recording":
+		return c.Edit("Enregistrement\n\n"+as(), alTglKB("recording_method", aID, recordingPairs, a.RecordingMethods))
+	case "source":
+		return c.Edit("Sources\n\n"+as(), alTglKB("source", aID, sourcePairs, a.Sources))
 	case "toggle":
 		if len(ps) >= 5 {
 			b.db.ToggleAlertFilter(context.Background(), uid, aID, ps[3], ps[4])
@@ -424,6 +534,12 @@ func (b *Bot) alertCB(c tele.Context, d string) error {
 				return c.Edit("Categories\n\n"+as(), alTglKB("category", aID, catPairs, a.DriveCategories))
 			case "interface":
 				return c.Edit("Connexions\n\n"+as(), alTglKB("interface", aID, ifacePairs, a.Interfaces))
+			case "brand":
+				return c.Edit("Marque\n\n"+as(), alTglKB("brand", aID, brandPairs, a.Brands))
+			case "recording_method":
+				return c.Edit("Enregistrement\n\n"+as(), alTglKB("recording_method", aID, recordingPairs, a.RecordingMethods))
+			case "source":
+				return c.Edit("Sources\n\n"+as(), alTglKB("source", aID, sourcePairs, a.Sources))
 			}
 		}
 	case "cap":
@@ -578,7 +694,23 @@ func aStr(a *db.Alert) string {
 	if a.MaxPricePerTB != nil {
 		p = fmt.Sprintf("prix<=%.0fEUR/To", *a.MaxPricePerTB)
 	}
-	return fmt.Sprintf("#%d [%s] %s | capacite=%s | %s | remise>=%.0f%%", a.ID, st, a.Name, c, p, a.MinDiscountPct)
+	extras := ""
+	if len(a.Brands) > 0 {
+		extras += fmt.Sprintf(" | marque=%s", strings.Join(a.Brands, ","))
+	}
+	if len(a.RecordingMethods) > 0 {
+		extras += fmt.Sprintf(" | %s", strings.Join(a.RecordingMethods, "/"))
+	}
+	if len(a.Keywords) > 0 {
+		extras += fmt.Sprintf(" | +%s", strings.Join(a.Keywords, ","))
+	}
+	if len(a.ExcludeKeywords) > 0 {
+		extras += fmt.Sprintf(" | -%s", strings.Join(a.ExcludeKeywords, ","))
+	}
+	if len(a.Sources) > 0 {
+		extras += fmt.Sprintf(" | src=%s", strings.Join(a.Sources, ","))
+	}
+	return fmt.Sprintf("#%d [%s] %s | capacite=%s | %s | remise>=%.0f%%%s", a.ID, st, a.Name, c, p, a.MinDiscountPct, extras)
 }
 func fmCap(a *db.Alert) string {
 	if len(a.CapacityPresets) > 0 {
@@ -596,8 +728,8 @@ func fmCap(a *db.Alert) string {
 }
 
 func fDraft(d *alertDraft) string {
-	t := map[string]string{"media": "1/8 Type de disque", "condition": "2/8 Etat produit", "capacity": "3/8 Capacite", "price": "4/8 Prix", "categories": "5/8 Categories", "interfaces": "6/8 Connexions", "confirm": "7/7 Recapitulatif"}
-	h := map[string]string{"media": "Choisis HDD, SSD, ou les deux.", "condition": "Choisis New, Used, ou les deux.", "capacity": "Selectionne des plages.", "price": "Choisis un prix max.", "categories": "Filtre les familles.", "interfaces": "Filtre les connexions.", "confirm": "Verifie puis cree."}
+	t := map[string]string{"media": "1/9 Type de disque", "condition": "2/9 Etat produit", "capacity": "3/9 Capacite", "price": "4/9 Prix", "categories": "5/9 Categories", "interfaces": "6/9 Connexions", "brand": "7/9 Marque", "recording": "8/9 Enregistrement", "confirm": "9/9 Recapitulatif"}
+	h := map[string]string{"media": "Choisis HDD, SSD, ou les deux.", "condition": "Choisis New, Used, ou les deux.", "capacity": "Selectionne des plages.", "price": "Choisis un prix max.", "categories": "Filtre les familles.", "interfaces": "Filtre les connexions.", "brand": "Filtre par marque (optionnel).", "recording": "CMR (NAS) ou SMR. Optionnel.", "confirm": "Verifie puis cree."}
 	return fmt.Sprintf("%s\n\n%s\n\n%s", t[d.step], fDS(d), h[d.step])
 }
 func fDS(d *alertDraft) string {
@@ -617,7 +749,7 @@ func fDS(d *alertDraft) string {
 	if d.maxPricePerTB != nil {
 		pr = fmt.Sprintf("%.0f EUR/To", *d.maxPricePerTB)
 	}
-	return fmt.Sprintf("Nom: %s\nType: %s\nEtat: %s\nCapacite: %s\nPrix max: %s\nCategories: %s\nConnexions: %s", d.name, fv(d.mediaTypes), fv(d.conditions), c, pr, fv(d.driveCategories), fv(d.interfaces))
+	return fmt.Sprintf("Nom: %s\nType: %s\nEtat: %s\nCapacite: %s\nPrix max: %s\nCategories: %s\nConnexions: %s\nMarque: %s\nEnregistrement: %s", d.name, fv(d.mediaTypes), fv(d.conditions), c, pr, fv(d.driveCategories), fv(d.interfaces), fv(d.brands), fv(d.recordingMethods))
 }
 func fv(v []string) string {
 	if len(v) == 0 {
@@ -705,6 +837,8 @@ func editKB(a *db.Alert) *tele.ReplyMarkup {
 		{ib("Type", "alert:media:"+s), ib("Etat", "alert:condition:"+s)},
 		{ib("Capacite", "alert:capacity:"+s), ib("Prix", "alert:price:"+s)},
 		{ib("Categories", "alert:categories:"+s), ib("Connexions", "alert:interfaces:"+s)},
+		{ib("Marque", "alert:brand:"+s), ib("Enregistrement", "alert:recording:"+s)},
+		{ib("Sources", "alert:source:"+s)},
 		{ib("Supprimer", "alert:delete:"+s)},
 		{ib("Precedent", "menu:alerts:list"), ib("Accueil", "menu:home")},
 	}}
@@ -877,6 +1011,10 @@ func draftKB(d *alertDraft) *tele.ReplyMarkup {
 		return g(append(optRows(catPairs, d.driveCategories, "draft:toggle:category"), nav)...)
 	case "interfaces":
 		return g(append(optRows(ifacePairs, d.interfaces, "draft:toggle:interface"), nav)...)
+	case "brand":
+		return g(append(optRows(brandPairs, d.brands, "draft:toggle:brand"), nav)...)
+	case "recording":
+		return g(append(optRows(recordingPairs, d.recordingMethods, "draft:toggle:recording"), nav)...)
 	default:
 		return g([]tele.InlineButton{ib("Creer", "draft:create")}, []tele.InlineButton{ib("Precedent", "draft:prev"), ib("Annuler", "draft:cancel")}, []tele.InlineButton{ib("Accueil", "menu:home")})
 	}
