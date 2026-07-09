@@ -57,6 +57,7 @@ var AppSettings = []SettingMeta{
 	{"SOURCE_HEALTH_STREAK_THRESHOLD", "Consecutive zero-deal scans before a source is flagged", false, false, "3"},
 	{"SOURCE_HEALTH_NOTIFY", "Notify admin via Telegram when a source is flagged", false, false, "true"},
 	{"ADMIN_LOCALE", "Locale for admin-facing notifications (fr|en)", false, false, "fr"},
+	{"BACK_IN_STOCK_HOURS", "Hours of absence after which a returning deal is flagged as back-in-stock", false, false, "48"},
 }
 
 type Config struct {
@@ -101,6 +102,7 @@ type Config struct {
 	SourceHealthThreshold    int
 	SourceHealthNotify       bool
 	AdminLocale              string
+	BackInStockHours         float64
 }
 
 func LoadBootstrap() *Config {
@@ -168,6 +170,7 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		SourceHealthThreshold:       int(parseFloat(values["SOURCE_HEALTH_STREAK_THRESHOLD"], 3)),
 		SourceHealthNotify:          parseBool(values["SOURCE_HEALTH_NOTIFY"], true),
 		AdminLocale:                 values["ADMIN_LOCALE"],
+		BackInStockHours:            parseFloat(values["BACK_IN_STOCK_HOURS"], 48),
 	}
 }
 

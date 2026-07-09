@@ -471,6 +471,31 @@ func (db *DB) GetProduct(ctx context.Context, productID string) (*Product, error
 	return p, err
 }
 
+// LastSeenMap returns the most recent observation timestamp for every
+// product ID in the input slice. Missing products are absent from the
+// map. The function is a single round-trip so callers that need to
+// detect "back in stock" across many products stay fast.
+func (db *DB) LastSeenMap(ctx context.Context, productIDs []string) (map[string]time.Time, error) {
+	if len(productIDs) == 0 {
+		return map[string]time.Time{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, `SELECT id, last_seen_at FROM products WHERE id = ANY($1)`, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]time.Time, len(productIDs))
+	for rows.Next() {
+		var id string
+		var t time.Time
+		if err := rows.Scan(&id, &t); err != nil {
+			return nil, err
+		}
+		out[id] = t
+	}
+	return out, rows.Err()
+}
+
 // PriceHistoryPoint is a single price observation for charting.
 type PriceHistoryPoint struct {
 	ObservedAt           time.Time
@@ -497,6 +522,60 @@ func (db *DB) PriceHistory(ctx context.Context, productID string, days int) ([]P
 			return nil, err
 		}
 		out = append(out, pt)
+	}
+	return out, rows.Err()
+}
+
+// SparklinePoint is a single point on a product's 7-day sparkline. The
+// goal is to be cheap enough to render for every row on the products
+// page: one query, one row per product, at most 50 observations.
+type SparklinePoint struct {
+	ObservedAt  time.Time
+	PricePerTB  float64
+}
+
+// Sparklines returns a small 7-day history per product, capped at
+// `maxPoints` observations each. The result is keyed by product ID so
+// the rendering layer can do a single map lookup per row. Empty
+// products are absent from the map.
+//
+// The query picks the most recent `maxPoints` observations per product
+// using DISTINCT ON, which keeps the response size bounded even when
+// the database has been collecting data for months.
+func (db *DB) Sparklines(ctx context.Context, productIDs []string, days int, maxPoints int) (map[string][]SparklinePoint, error) {
+	if len(productIDs) == 0 {
+		return map[string][]SparklinePoint{}, nil
+	}
+	if days <= 0 {
+		days = 7
+	}
+	if maxPoints <= 0 || maxPoints > 50 {
+		maxPoints = 30
+	}
+	start := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	rows, err := db.Pool.Query(ctx, `
+		SELECT DISTINCT ON (product_id) product_id, observed_at, price_per_tb
+		FROM (
+			SELECT product_id, observed_at, price_per_tb
+			FROM price_observations
+			WHERE product_id = ANY($1) AND observed_at >= $2
+			ORDER BY product_id, observed_at DESC
+			LIMIT $3
+		) recent
+		ORDER BY product_id, observed_at ASC
+	`, productIDs, start, len(productIDs)*maxPoints)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string][]SparklinePoint, len(productIDs))
+	for rows.Next() {
+		var pid string
+		var pt SparklinePoint
+		if err := rows.Scan(&pid, &pt.ObservedAt, &pt.PricePerTB); err != nil {
+			return nil, err
+		}
+		out[pid] = append(out[pid], pt)
 	}
 	return out, rows.Err()
 }

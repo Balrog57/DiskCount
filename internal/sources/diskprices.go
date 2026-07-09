@@ -48,18 +48,39 @@ func (s *DiskPrices) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		if ses, e2 := s.byparr.GetPage(ctx, s.url); e2 == nil {
 			html = ses.HTML
 			err = nil
+		} else {
+			// The byparr fallback also failed: keep the original
+			// transient error so the breaker can count it, but log
+			// the headless attempt for the admin.
+			slog.Warn("diskprices byparr fallback failed", "err", e2)
 		}
 	}
 	if err != nil {
+		// Wrap the network failure as a typed transient error so
+		// the scanner / health endpoint can distinguish a real
+		// upstream outage from a broken selector.
+		return nil, Transient(s.Name(), err)
+	}
+	deals, err := parseDiskPrices(html)
+	if err != nil {
 		return nil, err
 	}
-	return parseDiskPrices(html)
+	return deals, nil
 }
 
 func parseDiskPrices(html string) ([]domain.Deal, error) {
+	if strings.TrimSpace(html) == "" {
+		return nil, Selector("diskprices", errEmptyHTML, "page returned empty body — possible WAF block or layout change")
+	}
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
-		return nil, err
+		return nil, Transient("diskprices", err)
+	}
+	// Quick sanity: we expect at least one <tr> with a price cell.
+	// If not, the page is probably not a deal table any more.
+	rowCount := doc.Find("tr").Length()
+	if rowCount == 0 {
+		return nil, Selector("diskprices", errEmptyTable, "no <tr> rows found — diskprices.com may have changed its layout")
 	}
 	var deals []domain.Deal
 	doc.Find("tr").Each(func(_ int, row *goquery.Selection) {
@@ -116,6 +137,7 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 			c := domain.ConditionNew
 			cond = &c
 		}
+		recording := parsing.NormalizeRecordingMethod(strings.Join([]string{title, tech, texts[5]}, " "), media)
 		pricePT := priceEUR / capacityTB
 		deals = append(deals, domain.Deal{
 			Source: "diskprices", Title: title, URL: href,
@@ -124,9 +146,21 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 			ExternalID: parsing.ExtractASIN(href),
 			FormFactor: strPtr(texts[5]), Technology: strPtr(tech),
 			DriveCategory: dc, Interfaces: ifaces,
+			RecordingMethod: recording,
 			ObservedAt: domain.UTCNow(),
 		})
 	})
 	slog.Debug("diskprices", "deals", len(deals))
 	return deals, nil
 }
+
+// Internal sentinel errors so parseDiskPrices can wrap a meaningful
+// message without re-importing errors just to call errors.New.
+var (
+	errEmptyHTML   = stringError("empty HTML body")
+	errEmptyTable  = stringError("no <tr> rows in diskprices.com table")
+)
+
+type stringError string
+
+func (s stringError) Error() string { return string(s) }

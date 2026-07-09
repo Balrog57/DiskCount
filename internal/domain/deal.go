@@ -93,6 +93,10 @@ type NotificationDecision struct {
 	Reason             string
 	DiscountPct        *float64
 	BaselinePricePerTB *float64
+	// BackInStockHours is set when this notification was triggered
+	// because the product returned after an absence longer than the
+	// configured threshold. Zero means "normal price drop" notification.
+	BackInStockHours float64
 }
 
 func UTCNow() time.Time {

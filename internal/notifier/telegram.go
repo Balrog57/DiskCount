@@ -67,6 +67,16 @@ func fmtMsg(alert *db.Alert, deal domain.Deal, dec domain.NotificationDecision, 
 	b.WriteString(fmt.Sprintf("*%s*\n", esc(deal.Title)))
 	b.WriteString(fmt.Sprintf("💰 *%.2f€* \\(%.2f€/To\\)\n", deal.PriceEUR, deal.PricePerTB))
 	b.WriteString(fmt.Sprintf("💾 %.1f To", deal.CapacityTB))
+	if dec.BackInStockHours > 0 {
+		days := dec.BackInStockHours / 24
+		var absence string
+		if days >= 1 {
+			absence = fmt.Sprintf("%.0fj", days)
+		} else {
+			absence = fmt.Sprintf("%.0fh", dec.BackInStockHours)
+		}
+		b.WriteString(fmt.Sprintf(" \\| 🔁 de retour apres %s", absence))
+	}
 	if deal.Condition != nil {
 		c := i18n.T("notifier.condition_new", loc)
 		if *deal.Condition == "used" {

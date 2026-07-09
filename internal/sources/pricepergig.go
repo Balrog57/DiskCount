@@ -43,7 +43,7 @@ func (s *PricePerGig) Info() SourceInfo {
 func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	html, err := s.http.Get(ctx, s.apiURL+"?marketplace=eq."+s.market+"&technology=in.(HDD,SSD)&limit=50")
 	if err != nil {
-		return nil, err
+		return nil, Transient(s.Name(), err)
 	}
 
 	var drives []struct {
@@ -64,7 +64,7 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		Condition  string      `json:"condition"`
 	}
 	if err := json.Unmarshal([]byte(html), &drives); err != nil {
-		return nil, err
+		return nil, Schema(s.Name(), err, "response is not valid JSON — pricepergig.com API may have changed")
 	}
 
 	var deals []domain.Deal
@@ -74,15 +74,8 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 			continue
 		}
 		pt := d.Price / tb
-		cond := domain.ConditionNew
-		if strings.Contains(strings.ToLower(d.Condition), "used") {
-			cond = domain.ConditionUsed
-		}
-		var extID *string
-		if d.ASIN != "" {
-			extID = &d.ASIN
-		} else if id := d.ID.String(); id != "" {
-			extID = &id
+		if d.PricePerTB > 0 {
+			pt = d.PricePerTB
 		}
 		title := strings.TrimSpace(firstNonEmpty(d.Name, d.Title))
 		if title == "" {
@@ -92,27 +85,44 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		if url == "" && d.ASIN != "" {
 			url = "https://www.amazon.fr/dp/" + d.ASIN
 		}
-		classText := strings.Join([]string{title, d.Technology, d.FormFactor, d.Interface}, " ")
-		media := normalMedia(classText)
-		dc := parsing.NormalizeDriveCategory(classText, media)
-		ifaces := parsing.NormalizeInterfaces(classText)
-		if d.PricePerTB > 0 {
-			pt = d.PricePerTB
-		}
-		deals = append(deals, domain.Deal{
-			Source: "pricepergig", Title: title, URL: url,
-			PriceEUR: round2(d.Price), PricePerTB: round2(pt), CapacityTB: round2(tb),
-			Condition:  &cond,
-			MediaType:  media,
-			ExternalID: extID,
-			FormFactor: strPtr(d.FormFactor), Technology: strPtr(d.Technology),
-			DriveCategory: dc, Interfaces: ifaces,
-			Brand: strPtr(d.Brand), Model: strPtr(d.Model),
-			ObservedAt: domain.UTCNow(),
+		// Normalise through the shared pipeline so the matcher, the
+		// notifier and the DB all see the same fields. pricepergig is
+		// the first source migrated; diskprices and the RSS feeds are
+		// still using their inline code path.
+		price := d.Price
+		capacityGB := d.CapacityGB
+		deal, rej := Normalize(RawDeal{
+			Source:     s.Name(),
+			Title:      title,
+			URL:        url,
+			PriceEUR:   &price,
+			CapacityGB: &capacityGB,
+			Condition:  d.Condition,
+			MediaHint:  d.Technology,
+			FormFactor: d.FormFactor,
+			Interface:  d.Interface,
+			Brand:      d.Brand,
+			Model:      d.Model,
+			ExternalID: d.ASIN,
 		})
+		_ = pt // already used inside Normalize; kept for clarity above
+		if rej != nil {
+			// pricepergig has loose fields; silently skip instead of
+			// failing the whole batch.
+			slog.Debug("pricepergig skipped", "title", title, "reason", rej.Reason)
+			continue
+		}
+		deals = append(deals, deal)
 	}
 	slog.Debug("pricepergig", "deals", len(deals))
 	return deals, nil
+}
+
+// Schema is a small wrapper used by sources that receive structured
+// responses (JSON or JSON-LD) and need to flag "the API changed" in a
+// way the admin can recognise at a glance.
+func Schema(source string, cause error, hint string) error {
+	return Wrap(SeveritySchema, "parse", source, cause, hint)
 }
 
 func firstNonEmpty(values ...string) string {

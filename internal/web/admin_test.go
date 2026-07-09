@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
@@ -158,6 +159,96 @@ func TestComputeChartPointsMultiple(t *testing.T) {
 	}
 }
 
+func TestComputeSparklineEmptyOrShort(t *testing.T) {
+	if got := computeSparklinePoints(nil); got.Coords != "" || got.Trend != "" {
+		t.Fatalf("empty series should produce empty result, got %+v", got)
+	}
+	if got := computeSparklinePoints([]db.SparklinePoint{{PricePerTB: 10}}); got.Coords != "" {
+		t.Fatalf("single-point series should produce empty result, got %+v", got)
+	}
+}
+
+func TestComputeSparklineTrendDirection(t *testing.T) {
+	now := time.Now()
+	// Series that ends below the median → down (green).
+	down := []db.SparklinePoint{
+		{ObservedAt: now.Add(-72 * time.Hour), PricePerTB: 30},
+		{ObservedAt: now.Add(-48 * time.Hour), PricePerTB: 32},
+		{ObservedAt: now.Add(-24 * time.Hour), PricePerTB: 31},
+		{ObservedAt: now, PricePerTB: 20},
+	}
+	got := computeSparklinePoints(down)
+	if got.Trend != "down" {
+		t.Fatalf("expected down trend, got %+v", got)
+	}
+	if got.Coords == "" {
+		t.Fatal("down series should produce non-empty coords")
+	}
+
+	// Series that ends above the median → up (red).
+	up := []db.SparklinePoint{
+		{ObservedAt: now.Add(-72 * time.Hour), PricePerTB: 20},
+		{ObservedAt: now.Add(-48 * time.Hour), PricePerTB: 21},
+		{ObservedAt: now.Add(-24 * time.Hour), PricePerTB: 19},
+		{ObservedAt: now, PricePerTB: 30},
+	}
+	if got := computeSparklinePoints(up); got.Trend != "up" {
+		t.Fatalf("expected up trend, got %+v", got)
+	}
+}
+
+func TestComputeSparklineFlat(t *testing.T) {
+	now := time.Now()
+	flat := []db.SparklinePoint{
+		{ObservedAt: now.Add(-2 * time.Hour), PricePerTB: 25},
+		{ObservedAt: now, PricePerTB: 25},
+	}
+	if got := computeSparklinePoints(flat); got.Trend != "flat" {
+		t.Fatalf("expected flat trend, got %+v", got)
+	}
+}
+
+func TestDurationHuman(t *testing.T) {
+	cases := map[time.Duration]string{
+		30 * time.Second:                  "30s",
+		90 * time.Second:                  "1m 30s",
+		2*time.Hour + 14*time.Minute:      "2h 14m",
+		26 * time.Hour:                    "1j 2h",
+		-5 * time.Second:                  "0s", // overdue → clamp
+	}
+	for d, want := range cases {
+		if got := durationHuman(d); got != want {
+			t.Errorf("durationHuman(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestParseCronInterval(t *testing.T) {
+	cases := map[string]struct {
+		want time.Duration
+		ok   bool
+	}{
+		"@every 4h":      {4 * time.Hour, true},
+		"@every 30m":     {30 * time.Minute, true},
+		"@every  1h30m":  {90 * time.Minute, true},
+		"@every 1h ":     {time.Hour, true},
+		"":               {0, false},
+		"0 0 * * *":      {0, false}, // real cron → not supported here
+		"@every bogus":   {0, false},
+		"@every -5m":     {0, false}, // negative → rejected
+	}
+	for in, want := range cases {
+		got, ok := parseCronInterval(in)
+		if ok != want.ok {
+			t.Errorf("parseCronInterval(%q) ok = %v, want %v", in, ok, want.ok)
+			continue
+		}
+		if ok && got != want.want {
+			t.Errorf("parseCronInterval(%q) = %v, want %v", in, got, want.want)
+		}
+	}
+}
+
 func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 	srv := New(nil, nil, &config.Config{}, nil, false)
 	for _, path := range []string{"/alerts/toggle", "/alerts/delete", "/config/save", "/users/add", "/users/toggle"} {
@@ -245,6 +336,46 @@ func TestApiSourcesHealthRejectsPOST(t *testing.T) {
 	srv := New(nil, nil, cfg, nil, false)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sources/health", nil)
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestApiSourcePreviewUnknownName returns 404 when the requested
+// source is not registered. We build a real scanner with a fake
+// source so the route can iterate over Sources().
+func TestApiSourcePreviewUnknownName(t *testing.T) {
+	cfg := &config.Config{WebAdminPassword: "secret"}
+	scan := scanner.New(cfg, nil, []sources.Source{fakeSource{n: "alpha"}}, nil)
+	srv := New(nil, scan, cfg, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sources/preview?name=nope", nil)
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestApiSourcePreviewRequiresName validates the missing-param
+// contract.
+func TestApiSourcePreviewRequiresName(t *testing.T) {
+	cfg := &config.Config{WebAdminPassword: "secret"}
+	srv := New(nil, nil, cfg, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sources/preview", nil)
+	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestApiSourcePreviewRejectsPOST enforces the GET-only contract.
+func TestApiSourcePreviewRejectsPOST(t *testing.T) {
+	cfg := &config.Config{WebAdminPassword: "secret"}
+	srv := New(nil, nil, cfg, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/sources/preview", nil)
 	srv.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
@@ -390,6 +521,55 @@ func TestSetLangRejectsBadMethod(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/lang", nil)
 	srv.routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d", rec.Code)
+	}
+}
+
+// TestSetThemePinsCookieAndRenders verifies POST /theme: the cookie is
+// set, the redirect goes back, and the next render shows the active
+// "dark" state in the layout attribute.
+func TestSetThemePinsCookieAndRenders(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	mux := srv.handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=dark&next=/"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var found bool
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == themeCookieName && c.Value == themeDark {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("theme cookie not set: %q", rec.Header().Get("Set-Cookie"))
+	}
+}
+
+// TestSetThemeRejectsBadValue enforces the light|dark|auto contract.
+func TestSetThemeRejectsBadValue(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=neon"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestSetThemeRejectsBadMethod enforces the POST-only contract on
+// the public handler (/theme lives outside the auth-guarded routes
+// mux so the switcher works on the login page).
+func TestSetThemeRejectsBadMethod(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/theme", nil)
+	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
 	}

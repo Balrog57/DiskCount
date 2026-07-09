@@ -394,6 +394,31 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 	if s.db != nil {
 		alerts, _ = s.db.ListAlerts(ctx, true)
 	}
+	// Snapshot every product's last_seen_at *before* we record new
+	// observations. This is the baseline the back-in-stock heuristic
+	// compares against: if a deal matches and the product has not been
+	// seen for more than the configured threshold, the notification
+	// gets a BackInStockHours hint so the user can tell the deal is a
+	// return, not a regular price drop.
+	backInStockThreshold := time.Duration(s.cfg.BackInStockHours * float64(time.Hour))
+	lastSeenSnapshot := map[string]time.Time{}
+	if s.db != nil && backInStockThreshold > 0 && len(deals) > 0 {
+		ids := make([]string, 0, len(deals))
+		seen := make(map[string]struct{}, len(deals))
+		for _, d := range deals {
+			pid := d.ProductID()
+			if _, ok := seen[pid]; ok {
+				continue
+			}
+			seen[pid] = struct{}{}
+			ids = append(ids, pid)
+		}
+		if m, err := s.db.LastSeenMap(ctx, ids); err == nil {
+			lastSeenSnapshot = m
+		} else {
+			slog.Warn("lastseen snapshot", "err", err)
+		}
+	}
 	for _, raw := range deals {
 		res := normalize.Deal(raw)
 		if res.Reject != nil {
@@ -419,6 +444,15 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			}
 			continue
 		}
+		// Compute the absence duration *before* we record the new
+		// observation. lastSeenSnapshot is taken at the start of the
+		// batch so all candidates see the same baseline.
+		var absence time.Duration
+		if backInStockThreshold > 0 {
+			if last, ok := lastSeenSnapshot[deal.ProductID()]; ok && !last.IsZero() {
+				absence = now.Sub(last)
+			}
+		}
 		for i := range alerts {
 			a := &alerts[i]
 			if !rules.AlertMatches(a, deal) {
@@ -429,6 +463,12 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			dec := rules.ShouldNotify(a, deal, base, last, now, s.cfg.NotificationPriceDropPct)
 			if !dec.ShouldNotify {
 				continue
+			}
+			if absence >= backInStockThreshold {
+				dec.BackInStockHours = absence.Hours()
+				// Override the reason so the user-facing message
+				// makes it obvious this is a restock, not a discount.
+				dec.Reason = "back_in_stock"
 			}
 			if dryRun {
 				r.DryRunNotified++

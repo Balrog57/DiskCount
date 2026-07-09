@@ -21,12 +21,23 @@ import (
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/i18n"
 	"github.com/Balrog57/DiskCount/internal/scanner"
+	"github.com/Balrog57/DiskCount/internal/sources"
 )
 
 const (
 	sessionCookieName = "diskcount_session"
 	sessionTTL        = 12 * time.Hour
 	langCookieName    = "diskcount_lang"
+	themeCookieName   = "diskcount_theme"
+)
+
+// Theme preference values. "auto" means "follow the OS preference";
+// the inline bootstrap script in the layout applies the real
+// light/dark attribute before paint so the user does not see a flash.
+const (
+	themeAuto  = "auto"
+	themeLight = "light"
+	themeDark  = "dark"
 )
 
 // localeForRequest resolves the active UI locale from (in order): the
@@ -43,17 +54,52 @@ func (s *Server) localeForRequest(w http.ResponseWriter, r *http.Request) i18n.L
 	return i18n.Default
 }
 
-// setLangCookie pins the locale to a cookie. It is called by the language
-// switcher endpoint and on login so the choice survives a logout.
-func setLangCookie(w http.ResponseWriter, loc i18n.Locale) {
+// themeForRequest resolves the user's theme preference. Default is
+// "auto" which the inline script in the layout translates to either
+// light or dark based on the OS preference.
+func (s *Server) themeForRequest(r *http.Request) string {
+	if c, err := r.Cookie(themeCookieName); err == nil {
+		switch c.Value {
+		case themeLight, themeDark, themeAuto:
+			return c.Value
+		}
+	}
+	return themeAuto
+}
+
+// setThemeCookie pins the theme preference to a cookie so the choice
+// survives reloads and propagates to the inline bootstrap script.
+func setThemeCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     langCookieName,
-		Value:    string(loc),
+		Name:     themeCookieName,
+		Value:    value,
 		Path:     "/",
 		MaxAge:   365 * 24 * 3600,
-		HttpOnly: false, // readable by client-side code if we ever add JS
+		HttpOnly: false, // readable by the inline bootstrap script
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// setTheme handles POST /theme?theme=light|dark|auto. It is a public
+// endpoint so the switcher works on the login page too.
+func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	v := r.Form.Get("theme")
+	switch v {
+	case themeLight, themeDark, themeAuto:
+		setThemeCookie(w, v)
+	default:
+		http.Error(w, "invalid theme", http.StatusBadRequest)
+		return
+	}
+	http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 }
 
 type Server struct {
@@ -230,6 +276,9 @@ func (s *Server) handler() http.Handler {
 		case "/lang":
 			s.setLang(w, r)
 			return
+		case "/theme":
+			s.setTheme(w, r)
+			return
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
@@ -259,6 +308,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
 	muxAdmin.HandleFunc("/api/sources/health", s.apiSourcesHealth)
+	muxAdmin.HandleFunc("/api/sources/preview", s.apiSourcePreview)
 	muxAdmin.HandleFunc("/lang", s.setLang)
 	return muxAdmin
 }
@@ -334,6 +384,7 @@ func (s *Server) base(title, active string) map[string]any {
 		"Title":      title,
 		"Active":     active,
 		"Locale":     string(i18n.Default),
+		"Theme":      themeAuto,
 		"T":          func(key string) string { return i18n.T(key, i18n.Default) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
@@ -353,10 +404,12 @@ func (s *Server) baseWithRequest(r *http.Request, title, active string) map[stri
 		return s.base(title, active)
 	}
 	loc := s.localeForRequest(nil, r)
+	theme := s.themeForRequest(r)
 	return map[string]any{
 		"Title":      title,
 		"Active":     active,
 		"Locale":     string(loc),
+		"Theme":      theme,
 		"T":          func(key string) string { return i18n.T(key, loc) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
@@ -369,6 +422,20 @@ func (s *Server) baseWithRequest(r *http.Request, title, active string) map[stri
 
 // setLang handles POST /lang?lang=fr|en. It pins the chosen locale to a
 // cookie and bounces the user back to the page they were on.
+// setLangCookie pins the locale to a cookie. It is called by the
+// language switcher endpoint and on login so the choice survives a
+// logout.
+func setLangCookie(w http.ResponseWriter, loc i18n.Locale) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     langCookieName,
+		Value:    string(loc),
+		Path:     "/",
+		MaxAge:   365 * 24 * 3600,
+		HttpOnly: false, // readable by client-side code if we ever add JS
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func (s *Server) setLang(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -390,13 +457,73 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.db.Stats(r.Context())
-	data := s.baseWithRequest(r, i18n.T("web.nav.dashboard", s.localeForRequest(nil, r)), "stats")
+	loc := s.localeForRequest(nil, r)
+	data := s.baseWithRequest(r, i18n.T("web.nav.dashboard", loc), "stats")
 	data["Stats"] = st
 	data["StatsError"] = err
 	data["Sources"] = s.sourceNames
 	data["LastReport"] = lastReport(s.scanner)
 	data["StartedAt"] = s.startedAt
+	// "Prochain scan" countdown: derive from the last finished report
+	// and the configured interval. If the scheduler is not running
+	// (LastReport is nil) or the interval cannot be parsed, NextCheck
+	// stays nil so the template can branch on it.
+	if s.scanner != nil && s.cfg != nil {
+		if interval, ok := parseCronInterval(s.cfg.ScrapeIntervalCron); ok {
+			var lastEnd time.Time
+			if rep := s.scanner.LastReport(); rep != nil && !rep.FinishedAt.IsZero() {
+				lastEnd = rep.FinishedAt
+			} else if !s.startedAt.IsZero() {
+				lastEnd = s.startedAt
+			}
+			if !lastEnd.IsZero() {
+				next := lastEnd.Add(interval)
+				now := time.Now().UTC()
+				data["NextCheck"] = next
+				data["NextCheckIn"] = next.Sub(now)
+			}
+		}
+	}
 	render(w, statsTpl, data)
+}
+
+// parseCronInterval returns the duration encoded by the limited
+// "interval" subset of our cron config: "@every 4h", "@every 30m", …
+// Anything else (real cron expressions, empty) is rejected so the
+// caller can fall back to a static display.
+func parseCronInterval(spec string) (time.Duration, bool) {
+	spec = strings.TrimSpace(spec)
+	after, ok := strings.CutPrefix(spec, "@every ")
+	if !ok {
+		return 0, false
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(after))
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// durationHuman formats a duration as a short, human-readable countdown
+// like "2h 14m", "45s", or "1j 3h". Negative inputs (countdown already
+// overdue) are clamped to zero and prefixed with a small "en retard"
+// hint handled by the template, so we always return a positive string.
+func durationHuman(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %02ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
+	days := int(d / (24 * time.Hour))
+	rem := d - time.Duration(days)*24*time.Hour
+	return fmt.Sprintf("%dj %dh", days, int(rem.Hours()))
 }
 
 func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
@@ -410,8 +537,24 @@ func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 func (s *Server) products(w http.ResponseWriter, r *http.Request) {
 	prices, err := s.db.LatestPrices(r.Context(), 300)
 	filtered := filterPrices(prices, r)
+	// 7-day sparkline data per product. We ask for it even when filtered
+	// is empty so the page still renders (just with no sparklines).
+	sparklines := map[string][]db.SparklinePoint{}
+	if s.db != nil && len(filtered) > 0 {
+		ids := make([]string, 0, len(filtered))
+		seen := make(map[string]bool, len(filtered))
+		for _, p := range filtered {
+			if !seen[p.ProductID] {
+				seen[p.ProductID] = true
+				ids = append(ids, p.ProductID)
+			}
+		}
+		sparklines, _ = s.db.Sparklines(r.Context(), ids, 7, 24)
+	}
 	data := s.baseWithRequest(r, "Produits", "products")
 	data["Prices"] = filtered
+	data["Sparklines"] = sparklines
+	data["Sparkline"] = func(points []db.SparklinePoint) SparklineResult { return computeSparklinePoints(points) }
 	data["Error"] = err
 	data["Sources"] = uniqueSources(prices)
 	data["SelectedSource"] = r.URL.Query().Get("source")
@@ -504,6 +647,78 @@ func computeChartPoints(history []db.PriceHistoryPoint, minPT, maxPT float64) st
 		fmt.Fprintf(&sb, "%.1f,%.1f", x, y)
 	}
 	return sb.String()
+}
+
+// SparklineResult is the value exposed to templates via the .Sparkline
+// helper. Templates can branch on Coords (empty → no data) and Trend
+// (down/up/flat) without exposing the raw point list.
+type SparklineResult struct {
+	Coords string
+	Trend  string
+}
+
+// computeSparklinePoints is the small 80x24 version rendered inside each
+// row of the products page. It returns the polyline "x1,y1 x2,y2 ..."
+// string and a stroke colour hint derived from the price trend (down =
+// last observation below the median, up = above). "Down=green, up=red"
+// matches what users expect on price pages: cheaper = good.
+func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
+	if len(points) < 2 {
+		return SparklineResult{}
+	}
+	// Median to decide colour. Equal observations are a perfectly valid
+	// sparkline; we do not bail.
+	prices := make([]float64, len(points))
+	for i, p := range points {
+		prices[i] = p.PricePerTB
+	}
+	sorted := append([]float64(nil), prices...)
+	for i := 1; i < len(sorted); i++ {
+		for j := i; j > 0 && sorted[j-1] > sorted[j]; j-- {
+			sorted[j-1], sorted[j] = sorted[j], sorted[j-1]
+		}
+	}
+	median := sorted[len(sorted)/2]
+	last := prices[len(prices)-1]
+	var trend string
+	switch {
+	case last < median-0.01:
+		trend = "down"
+	case last > median+0.01:
+		trend = "up"
+	default:
+		trend = "flat"
+	}
+
+	const (
+		w = 80.0
+		h = 24.0
+		pad = 2.0
+	)
+	minP, maxP := prices[0], prices[0]
+	for _, v := range prices {
+		if v < minP {
+			minP = v
+		}
+		if v > maxP {
+			maxP = v
+		}
+	}
+	rng := maxP - minP
+	if rng <= 0 {
+		rng = 1
+	}
+	var sb strings.Builder
+	for i, pt := range points {
+		x := pad + float64(i)*(w-2*pad)/float64(len(points)-1)
+		normalized := (pt.PricePerTB - minP) / rng
+		y := h - pad - normalized*(h-2*pad)
+		if i > 0 {
+			sb.WriteString(" ")
+		}
+		fmt.Fprintf(&sb, "%.1f,%.1f", x, y)
+	}
+	return SparklineResult{Coords: sb.String(), Trend: trend}
 }
 
 // feed serves a public RSS 2.0 feed of the latest best prices. It is
@@ -852,6 +1067,58 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// apiSourcePreview triggers a live fetch for a single source and
+// returns the parsed deals as JSON. It is admin-only and bypasses
+// the per-source circuit breaker so the operator can verify a
+// fix without waiting for the breaker to half-open.
+//
+// Query string: ?name=diskprices
+func (s *Server) apiSourcePreview(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(w, "name query param required", http.StatusBadRequest)
+		return
+	}
+	if s.scanner == nil {
+		http.Error(w, "scanner not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var target sources.Source
+	for _, src := range s.scanner.Sources() {
+		if src.Name() == name {
+			target = src
+			break
+		}
+	}
+	if target == nil {
+		http.Error(w, "unknown source: "+name, http.StatusNotFound)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	deals, err := target.Fetch(ctx)
+	resp := map[string]any{
+		"source": name,
+		"deals":  deals,
+		"count":  len(deals),
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+		// Classify so the admin can tell apart a transient network
+		// blip from a broken selector without parsing the message.
+		if se, ok := err.(*sources.SourceError); ok {
+			resp["severity"] = se.Severity
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) metricsDashboard(w http.ResponseWriter, r *http.Request) {
 	report := s.scanner.LastReport()
 	data := s.baseWithRequest(r, "Sante & metriques", "metrics")
@@ -973,6 +1240,9 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 	if _, ok := data["KnownLangs"]; !ok {
 		data["KnownLangs"] = i18n.KnownLocales()
 	}
+	if _, ok := data["Theme"]; !ok {
+		data["Theme"] = themeAuto
+	}
 	tpl := template.Must(template.New("page").Funcs(template.FuncMap{
 		"join": strings.Join,
 		"ts": func(t *time.Time) string {
@@ -1035,6 +1305,13 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 			}
 			return "", nil
 		},
+		// Sparkline computes the 7-day mini-chart for a single product
+		// row. Templates call it as `{{call .Sparkline $points}}` and
+		// receive a SparklineResult with Coords/Trend fields.
+		"Sparkline": func(points []db.SparklinePoint) SparklineResult {
+			return computeSparklinePoints(points)
+		},
+		"durationHuman": durationHuman,
 	}).Parse(layoutTpl + body))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tpl.Execute(w, data); err != nil {
@@ -1043,18 +1320,47 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 }
 
 const layoutTpl = `<!doctype html>
-<html lang="{{.Locale}}">
+<html lang="{{.Locale}}" data-theme="{{.Theme}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DiskCount - {{.Title}}</title>
+<script>
+  // Inline theme bootstrap: read the cookie and apply the data-theme
+  // attribute before the CSS paints so users on dark mode do not see
+  // a light-mode flash on first load. Falls back to the OS preference
+  // when no cookie is set.
+  (function () {
+    var m = document.cookie.match(/(?:^|;\s*)diskcount_theme=(light|dark|auto)/);
+    var v = m ? m[1] : 'auto';
+    if (v === 'auto') {
+      v = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    document.documentElement.setAttribute('data-theme', v);
+  })();
+</script>
 <style>
-:root{color-scheme:light;--bg:#f3f6f8;--panel:#fff;--ink:#15202b;--muted:#667085;--line:#d8e0e7;--line2:#edf1f4;--nav:#102532;--nav2:#183847;--brand:#167c80;--brand2:#255f78;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eef7f7}
+:root[data-theme=light]{color-scheme:light;--bg:#f3f6f8;--panel:#fff;--ink:#15202b;--muted:#667085;--line:#d8e0e7;--line2:#edf1f4;--nav:#102532;--nav2:#183847;--brand:#167c80;--brand2:#255f78;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eef7f7}
+:root[data-theme=dark]{color-scheme:dark;--bg:#0e1620;--panel:#15202b;--ink:#e7eef3;--muted:#8b9aa6;--line:#1f2e3a;--line2:#1a2731;--nav:#08111a;--nav2:#0f1d28;--brand:#3aa6a8;--brand2:#5fbcc2;--good:#4ec78a;--warn:#e0a558;--bad:#e87972;--soft:#152736}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}a{color:inherit}
 .app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px;background:#7ba7b4}.active .dot{background:#59d7c9}.shell{min-width:0}.topbar{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:#fff;color:var(--muted);font-size:12px}.badge.good{border-color:#b7dec9;background:#edf9f2;color:var(--good)}.badge.warn{border-color:#ffd99d;background:#fff8eb;color:var(--warn)}.badge.bad{border-color:#f5b5b0;background:#fff1f0;color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}.card{padding:16px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.panel-body{padding:16px}.table-wrap{overflow:auto}table{width:100%;border-colla
 .lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#59d7c9;border-color:#59d7c9;color:#0a1a21;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#1c3a45}
 @media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto;gap:12px}.nav{grid-template-columns:repeat(3,minmax(0,1fr))}.topbar{position:relative;height:auto;align-items:flex-start;gap:10px;flex-direction:column;padding:16px}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
 @media (max-width:560px){.nav{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.status{display:grid;width:100%}.truncate{max-width:240px}}
+.sparkline{width:80px;height:24px;display:block}
+.muted{color:var(--muted)}
+:root[data-theme=dark] .topbar{background:var(--panel);color:var(--ink)}
+:root[data-theme=dark] .badge{background:var(--panel);color:var(--muted)}
+:root[data-theme=dark] .badge.good{background:rgba(78,199,138,.12);color:var(--good);border-color:rgba(78,199,138,.4)}
+:root[data-theme=dark] .badge.warn{background:rgba(224,165,88,.12);color:var(--warn);border-color:rgba(224,165,88,.4)}
+:root[data-theme=dark] .badge.bad{background:rgba(232,121,114,.12);color:var(--bad);border-color:rgba(232,121,114,.4)}
+:root[data-theme=dark] .login-card input[type=password]{background:var(--panel);color:var(--ink)}
+:root[data-theme=dark] .login-card .error{background:rgba(232,121,114,.12);border-color:rgba(232,121,114,.5)}
+.theme-switch{display:inline-flex;gap:4px;margin-top:6px;width:100%}
+.theme-switch a,.theme-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 6px;font-size:11px;cursor:pointer;flex:1;text-decoration:none;text-align:center}
+:root[data-theme=light] .theme-switch a,.theme-switch button{color:var(--muted);border-color:var(--line)}
+.theme-switch a.active,.theme-switch button.active{background:#59d7c9;border-color:#59d7c9;color:#0a1a21;font-weight:600}
+:root[data-theme=light] .theme-switch a.active,.theme-switch button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
 </style>
 </head>
 <body>
@@ -1071,6 +1377,7 @@ const layoutTpl = `<!doctype html>
 <a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.users"}}</a>
 </nav>
 <div class="lang-switch">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
+<div class="theme-switch"><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "light"}}class="active"{{end}}>☀ Light</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "dark"}}class="active"{{end}}>🌙 Dark</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "auto"}}class="active"{{end}}>🖥 Auto</button></form></div>
 </aside>
 <div class="shell">
 <header class="topbar">
@@ -1138,6 +1445,7 @@ const statsTpl = `{{define "body"}}
 <tr><th>Derniere observation</th><td>{{if .Stats}}{{ts .Stats.LastObservationAt}}{{else}}-{{end}}</td></tr>
 <tr><th>Derniere notification</th><td>{{if .Stats}}{{ts .Stats.LastNotificationAt}}{{else}}-{{end}}</td></tr>
 {{if .LastReport}}<tr><th>Dernier scan</th><td>{{tsv .LastReport.FinishedAt}} - fetched={{.LastReport.Fetched}}, accepted={{.LastReport.Accepted}}, rejected={{.LastReport.Rejected}}, matched={{.LastReport.Matched}}, notified={{.LastReport.Notified}}, errors={{len .LastReport.Errors}}</td></tr>{{else}}<tr><th>Dernier scan</th><td>-</td></tr>{{end}}
+{{if .NextCheck}}<tr><th>Prochain scan</th><td>{{tsv .NextCheck}} - dans {{durationHuman .NextCheckIn}}</td></tr>{{end}}
 </tbody></table></div></section>
 {{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>âš  Sources en alerte</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Scans vides consecutifs</th><th>Message</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
 {{end}}`
@@ -1163,8 +1471,8 @@ const productsTpl = `{{define "body"}}
 <div><label for="filter_max_eur_tb">Max EUR/To</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal"></div>
 <div class="actions"><button type="submit">Filtrer</button><a class="badge" href="/products">Reinitialiser</a></div>
 </form></div></section>
-<section class="section panel"><div class="panel-head"><h2>Meilleures offres recentes</h2><span class="hint">Creation d'alertes uniquement via Telegram.</span></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Source</th><th>Media</th><th>Capacite</th><th>Prix</th><th>EUR/To</th><th>Observe</th></tr></thead><tbody>
-{{range .Prices}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td>{{.Source}}</td><td>{{ptr .MediaType}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{tsv .ObservedAt}}</td></tr>{{else}}<tr><td colspan="7" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
+<section class="section panel"><div class="panel-head"><h2>Meilleures offres recentes</h2><span class="hint">Creation d'alertes uniquement via Telegram.</span></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Source</th><th>Media</th><th>Capacite</th><th>Prix</th><th>EUR/To</th><th>7j</th><th>Observe</th></tr></thead><tbody>
+{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := call .Sparkline $pts}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td>{{.Source}}</td><td>{{ptr .MediaType}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{if $spark.Coords}}<svg class="sparkline" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#188052"{{else if eq $spark.Trend "up"}}stroke="#b42318"{{else}}stroke="#667085"{{end}} points="{{$spark.Coords}}"/></svg>{{else}}<span class="muted">-</span>{{end}}</td><td>{{tsv .ObservedAt}}</td></tr>{{else}}<tr><td colspan="8" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
 
