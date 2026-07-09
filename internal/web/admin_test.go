@@ -10,6 +10,51 @@ import (
 	"github.com/Balrog57/DiskCount/internal/db"
 )
 
+func TestWithCSRF(t *testing.T) {
+	srv := &Server{}
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+
+	tests := []struct {
+		name       string
+		origin     string
+		referer    string
+		method     string
+		wantStatus int
+	}{
+		{"GET allowed without headers", "", "", http.MethodGet, http.StatusOK},
+		{"POST allowed without headers", "", "", http.MethodPost, http.StatusOK},
+		{"POST with same origin", "http://example.com", "", http.MethodPost, http.StatusOK},
+		{"POST with same referer", "", "http://example.com/some/path", http.MethodPost, http.StatusOK},
+		{"POST with different origin", "http://evil.com", "", http.MethodPost, http.StatusForbidden},
+		{"POST with suffix origin", "http://example.com.evil.com", "", http.MethodPost, http.StatusForbidden},
+		{"POST with suffix origin 2", "http://evilexample.com", "", http.MethodPost, http.StatusForbidden},
+		{"POST with null origin", "null", "", http.MethodPost, http.StatusForbidden},
+		{"POST with different referer", "", "http://evil.com/some/path", http.MethodPost, http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "http://example.com/api", nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("got status %d, want %d", w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, configTpl, map[string]any{
