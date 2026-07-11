@@ -253,23 +253,91 @@ func extractCapacityTB(text string) (float64, bool) {
 // parseFrenchDecimal converts a number string that may use a comma or dot as
 // the decimal separator (French vs English) into a float64.
 func parseFrenchDecimal(s string) float64 {
-	s = strings.ReplaceAll(s, "\u00a0", "") // non-breaking space
-	s = strings.ReplaceAll(s, " ", "")
-	hasComma := strings.Contains(s, ",")
-	hasDot := strings.Contains(s, ".")
-	if hasComma && hasDot {
-		// Both present: the rightmost is the decimal separator; the other
-		// is a thousands separator.
-		if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
-			s = strings.ReplaceAll(s, ".", "")
-			s = strings.Replace(s, ",", ".", 1)
-		} else {
-			s = strings.ReplaceAll(s, ",", "")
+	// ⚡ Bolt: Single-pass iteration replacing multiple strings.ReplaceAll allocations.
+	// We do a fast scan first, then build the cleaned string cleanly.
+	hasComma := false
+	hasDot := false
+	commaIdx := -1
+	dotIdx := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			hasComma = true
+			commaIdx = i
+		} else if s[i] == '.' {
+			hasDot = true
+			dotIdx = i
 		}
-	} else if hasComma {
-		s = strings.Replace(s, ",", ".", 1)
 	}
-	v, err := strconv.ParseFloat(s, 64)
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' {
+			continue
+		}
+		// Fallback to rune iteration if we hit multibyte characters (like \u00a0)
+		if c >= 128 {
+			for _, r := range s[i:] {
+				if r == ' ' || r == '\u00a0' {
+					continue
+				}
+				if hasComma && hasDot {
+					if commaIdx > dotIdx {
+						if r == '.' {
+							continue
+						} else if r == ',' {
+							b.WriteByte('.')
+						} else {
+							b.WriteRune(r)
+						}
+					} else {
+						if r == ',' {
+							continue
+						} else {
+							b.WriteRune(r)
+						}
+					}
+				} else if hasComma {
+					if r == ',' {
+						b.WriteByte('.')
+					} else {
+						b.WriteRune(r)
+					}
+				} else {
+					b.WriteRune(r)
+				}
+			}
+			break
+		}
+
+		if hasComma && hasDot {
+			if commaIdx > dotIdx {
+				if c == '.' {
+					continue
+				} else if c == ',' {
+					b.WriteByte('.')
+				} else {
+					b.WriteByte(c)
+				}
+			} else {
+				if c == ',' {
+					continue
+				} else {
+					b.WriteByte(c)
+				}
+			}
+		} else if hasComma {
+			if c == ',' {
+				b.WriteByte('.')
+			} else {
+				b.WriteByte(c)
+			}
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	v, err := strconv.ParseFloat(b.String(), 64)
 	if err != nil {
 		return 0
 	}

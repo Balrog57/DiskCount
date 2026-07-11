@@ -186,9 +186,56 @@ func inferInterfaces(cat domain.DriveCategory) []domain.DriveInterface {
 }
 
 func cleanTitle(s string) string {
-	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
+	s = strings.TrimSpace(s)
 	s = strings.Trim(s, "-|")
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+
+	if s == "" {
+		return ""
+	}
+
+	// ⚡ Bolt: Fast-path check to avoid slice allocations from strings.Fields and strings.Join.
+	// If there are no consecutive spaces or non-standard whitespaces, return as-is (zero allocs).
+	needsClean := false
+	inSpace := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		// Force fallback for any multibyte characters (like \u00a0) to let unicode.IsSpace handle them.
+		if c >= 128 {
+			needsClean = true
+			break
+		}
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' {
+			if inSpace || c != ' ' {
+				needsClean = true
+				break
+			}
+			inSpace = true
+		} else {
+			inSpace = false
+		}
+	}
+
+	if !needsClean {
+		return s
+	}
+
+	// Fallback: build string in a single pass
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace = false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if !inSpace {
+				b.WriteByte(' ')
+				inSpace = true
+			}
+		} else {
+			b.WriteRune(r)
+			inSpace = false
+		}
+	}
+	return b.String()
 }
 
 func host(raw string) string {
