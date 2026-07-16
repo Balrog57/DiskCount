@@ -19,10 +19,28 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
-	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
+
+	// ⚡ Bolt: Fast path check - avoid allocating if string is already lowercase ASCII
+	idx := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		return s
+	}
+
 	var b strings.Builder
 	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
+	// Write the safe prefix
+	b.WriteString(s[:idx])
+
+	// Process the rest
+	for i := idx; i < len(s); i++ {
 		c := s[i]
 		if c < 128 {
 			if c >= 'A' && c <= 'Z' {
