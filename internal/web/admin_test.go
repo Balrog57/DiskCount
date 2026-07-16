@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -631,5 +631,89 @@ func TestLogoutClearsSession(t *testing.T) {
 	cleared := rec2.Header().Get("Set-Cookie")
 	if !strings.Contains(cleared, sessionCookieName+"=") || !strings.Contains(cleared, "Max-Age=0") && !strings.Contains(cleared, "expires=") {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
+	}
+}
+
+func TestCSRFMiddleware(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}))
+
+	tests := []struct {
+		name           string
+		method         string
+		origin         string
+		referer        string
+		host           string
+		expectedStatus int
+	}{
+		{
+			name:           "Safe method GET allows empty headers",
+			method:         http.MethodGet,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Missing headers allowed (for API clients)",
+			method:         http.MethodPost,
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Null origin rejected",
+			method:         http.MethodPost,
+			origin:         "null",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "Origin mismatch rejected",
+			method:         http.MethodPost,
+			origin:         "https://evil.com",
+			host:           "good.com",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "Origin match allowed",
+			method:         http.MethodPost,
+			origin:         "https://good.com",
+			host:           "good.com",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Referer match allowed if Origin is empty",
+			method:         http.MethodPost,
+			referer:        "https://good.com/path",
+			host:           "good.com",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Referer mismatch rejected if Origin is empty",
+			method:         http.MethodPost,
+			referer:        "https://evil.com/path",
+			host:           "good.com",
+			expectedStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/", nil)
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			if tt.host != "" {
+				req.Host = tt.host
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, rec.Code)
+			}
+		})
 	}
 }
