@@ -19,6 +19,20 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
+
+	// ⚡ Bolt: Fast-path zero allocation check if string is already lowercased and ascii
+	needsChange := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			needsChange = true
+			break
+		}
+	}
+	if !needsChange {
+		return s
+	}
+
 	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
 	var b strings.Builder
 	b.Grow(len(s))
@@ -170,9 +184,25 @@ func NormalizeMediaType(text string) *domain.MediaType {
 
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
 	folded := asciiFold(text)
-	folded = strings.ReplaceAll(folded, "\"", "")
-	compact := strings.ReplaceAll(folded, ".", "")
-	compact = strings.ReplaceAll(compact, "-", " ")
+
+	// ⚡ Bolt: Fast-path zero allocation check before string builder iteration
+	compact := folded
+	if idx := strings.IndexAny(folded, "\".-"); idx >= 0 {
+		var b strings.Builder
+		b.Grow(len(folded))
+		b.WriteString(folded[:idx])
+		for i := idx; i < len(folded); i++ {
+			c := folded[i]
+			if c == '"' || c == '.' {
+				continue
+			} else if c == '-' {
+				b.WriteByte(' ')
+			} else {
+				b.WriteByte(c)
+			}
+		}
+		compact = b.String()
+	}
 
 	isExternal := false
 	for _, w := range []string{"external", "externe", "portable", "usb", "boitier"} {
@@ -287,7 +317,22 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		return nil
 	}
 	folded := asciiFold(text)
-	compact := strings.ReplaceAll(strings.ReplaceAll(folded, "-", ""), "_", "")
+
+	// ⚡ Bolt: Fast-path zero allocation check before string builder iteration
+	compact := folded
+	if idx := strings.IndexAny(folded, "-_"); idx >= 0 {
+		var b strings.Builder
+		b.Grow(len(folded))
+		b.WriteString(folded[:idx])
+		for i := idx; i < len(folded); i++ {
+			c := folded[i]
+			if c == '-' || c == '_' {
+				continue
+			}
+			b.WriteByte(c)
+		}
+		compact = b.String()
+	}
 
 	// Explicit declaration wins.
 	if strings.Contains(folded, "conventional") || strings.Contains(compact, "cmr") {

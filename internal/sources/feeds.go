@@ -252,27 +252,56 @@ func extractCapacityTB(text string) (float64, bool) {
 
 // parseFrenchDecimal converts a number string that may use a comma or dot as
 // the decimal separator (French vs English) into a float64.
-func parseFrenchDecimal(s string) float64 {
-	s = strings.ReplaceAll(s, "\u00a0", "") // non-breaking space
-	s = strings.ReplaceAll(s, " ", "")
-	hasComma := strings.Contains(s, ",")
-	hasDot := strings.Contains(s, ".")
-	if hasComma && hasDot {
-		// Both present: the rightmost is the decimal separator; the other
-		// is a thousands separator.
-		if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
-			s = strings.ReplaceAll(s, ".", "")
-			s = strings.Replace(s, ",", ".", 1)
-		} else {
-			s = strings.ReplaceAll(s, ",", "")
+func parseFrenchDecimal(text string) float64 {
+	// ⚡ Bolt: Single-pass byte iteration to extract digits and decimal separator
+	// avoiding multiple string allocations from strings.ReplaceAll
+	hasComma := false
+	hasDot := false
+	lastComma := -1
+	lastDot := -1
+	for i := 0; i < len(text); i++ {
+		if text[i] == ',' {
+			hasComma = true
+			lastComma = i
+		} else if text[i] == '.' {
+			hasDot = true
+			lastDot = i
 		}
-	} else if hasComma {
-		s = strings.Replace(s, ",", ".", 1)
 	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+
+	var b strings.Builder
+	b.Grow(len(text))
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if (c >= '0' && c <= '9') || c == '-' || c == '+' || c == 'e' || c == 'E' {
+			b.WriteByte(c)
+		} else if c == ',' {
+			if hasDot {
+				if lastComma > lastDot {
+					b.WriteByte('.')
+				} else {
+					continue
+				}
+			} else {
+				b.WriteByte('.')
+			}
+		} else if c == '.' {
+			if hasComma {
+				if lastComma > lastDot {
+					continue
+				} else {
+					b.WriteByte('.')
+				}
+			} else {
+				b.WriteByte('.')
+			}
+		}
+	}
+
+	if b.Len() == 0 {
 		return 0
 	}
+	v, _ := strconv.ParseFloat(b.String(), 64)
 	return v
 }
 
