@@ -253,23 +253,46 @@ func extractCapacityTB(text string) (float64, bool) {
 // parseFrenchDecimal converts a number string that may use a comma or dot as
 // the decimal separator (French vs English) into a float64.
 func parseFrenchDecimal(s string) float64 {
-	s = strings.ReplaceAll(s, "\u00a0", "") // non-breaking space
-	s = strings.ReplaceAll(s, " ", "")
-	hasComma := strings.Contains(s, ",")
-	hasDot := strings.Contains(s, ".")
-	if hasComma && hasDot {
-		// Both present: the rightmost is the decimal separator; the other
-		// is a thousands separator.
-		if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
-			s = strings.ReplaceAll(s, ".", "")
-			s = strings.Replace(s, ",", ".", 1)
-		} else {
-			s = strings.ReplaceAll(s, ",", "")
+	// ⚡ Bolt: Single-pass iteration to extract digits and replace decimal point.
+	// Avoiding multiple string allocations from sequential strings.ReplaceAll.
+	hasComma := false
+	hasDot := false
+	lastComma := -1
+	lastDot := -1
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			hasComma = true
+			lastComma = i
+		} else if s[i] == '.' {
+			hasDot = true
+			lastDot = i
 		}
-	} else if hasComma {
-		s = strings.Replace(s, ",", ".", 1)
 	}
-	v, err := strconv.ParseFloat(s, 64)
+
+	var b strings.Builder
+	b.Grow(len(s))
+
+	commaIsDecimal := hasComma && (!hasDot || lastComma > lastDot)
+
+	for _, r := range s {
+		switch r {
+		case '\u00a0', ' ':
+			// skip
+		case ',':
+			if commaIsDecimal {
+				b.WriteByte('.')
+			}
+		case '.':
+			if !commaIsDecimal {
+				b.WriteByte('.')
+			}
+		default:
+			b.WriteRune(r)
+		}
+	}
+
+	v, err := strconv.ParseFloat(b.String(), 64)
 	if err != nil {
 		return 0
 	}
