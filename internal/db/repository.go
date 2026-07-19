@@ -811,6 +811,11 @@ func (db *DB) ListAuthorizedUsers(ctx context.Context, includeDisabled bool) ([]
 // Stats returns the dashboard counters in a single round-trip. The previous
 // implementation issued 6 sequential queries; the dashboard renders on every
 // page load, so batching them keeps the latency low under load.
+//
+// Each scalar subquery in the SELECT list must return exactly one column.
+// The COUNT/MAX pairs for observations and notifications are therefore split
+// into two subqueries each — combining them as `(SELECT COUNT(*), MAX(..) FROM ..)`
+// was rejected by Postgres with "subquery must return only one column".
 func (db *DB) Stats(ctx context.Context) (*Stats, error) {
 	s := &Stats{}
 	err := db.Pool.QueryRow(ctx, `
@@ -820,8 +825,10 @@ SELECT
   (SELECT COUNT(*) FILTER (WHERE enabled)      FROM authorized_users),
   (SELECT COUNT(*) FILTER (WHERE NOT enabled)  FROM authorized_users),
   (SELECT COUNT(*)                             FROM products),
-  (SELECT COUNT(*), MAX(observed_at)           FROM price_observations),
-  (SELECT COUNT(*), MAX(sent_at)               FROM notifications),
+  (SELECT COUNT(*)                             FROM price_observations),
+  (SELECT MAX(observed_at)                     FROM price_observations),
+  (SELECT COUNT(*)                             FROM notifications),
+  (SELECT MAX(sent_at)                         FROM notifications),
   (SELECT COUNT(*)                             FROM rejected_deals)
 `).Scan(&s.ActiveAlerts, &s.InactiveAlerts,
 		&s.AuthorizedEnabled, &s.AuthorizedDisabled,
