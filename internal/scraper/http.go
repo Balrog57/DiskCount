@@ -17,9 +17,16 @@ import (
 const maxBodyBytes = 5 << 20
 
 var BrowserLikeHeaders = map[string]string{
-	"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-	"Accept-Language":           "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
-	"Accept-Encoding":           "gzip, deflate, br",
+	"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+	"Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+	// NOTE: Accept-Encoding is intentionally NOT set here. Go's net/http
+	// transport transparently adds "Accept-Encoding: gzip" AND decompresses
+	// the response — but ONLY when the application has not set the header
+	// itself. Setting it manually (even to just "gzip") disables Go's
+	// transparent decompression, so the caller receives raw compressed
+	// bytes. This silently broke pricepertb.com (Brotli) and would have
+	// broken any gzip-only site too once we pinned the header. Leave it
+	// to the transport.
 	"Cache-Control":             "no-cache",
 	"Sec-Ch-Ua":                 `"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"`,
 	"Sec-Ch-Ua-Mobile":          "?0",
@@ -117,10 +124,17 @@ func NewHTTPFetcher(userAgent string, timeoutSeconds float64) *HTTPFetcher {
 	}
 }
 
+// DefaultUserAgent is the browser-like fallback. Many deal sites
+// (diskprices.com in particular) return HTTP 403 to anything that does not
+// look like a real browser; the old "DiskCountBot/2.0" default was blocked,
+// which silently broke those sources. Operators can still override via the
+// USER_AGENT setting — this is just the safe default.
+const DefaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
 // NewHTTPFetcherWithOptions builds a fully configured HTTPFetcher.
 func NewHTTPFetcherWithOptions(opts Options) *HTTPFetcher {
 	if opts.UserAgent == "" {
-		opts.UserAgent = "DiskCountBot/2.0"
+		opts.UserAgent = DefaultUserAgent
 	}
 	if opts.PerRequestTimeout <= 0 {
 		opts.PerRequestTimeout = 10 * time.Second

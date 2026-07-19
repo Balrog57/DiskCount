@@ -35,11 +35,40 @@ type byparrResponse struct {
 	Message  string           `json:"message"`
 }
 
+// byparrSessionRaw maps the Byparr "solution" object. The HTML body field is
+// accepted under two names because Byparr versions disagree:
+//   - older / FlareSolverr-compatible: "body"
+//   - current Byparr (2025+):          "response"
+//
+// Reading only "body" meant the headless fallback silently returned empty
+// HTML on current Byparr, so diskprices' 403 (UA block) never recovered even
+// though Byparr successfully fetched the page. The custom UnmarshalJSON picks
+// whichever field is present, preferring "response" when both exist.
 type byparrSessionRaw struct {
 	Cookies   []map[string]interface{} `json:"cookies"`
 	UserAgent string                   `json:"userAgent"`
 	Body      string                   `json:"body"`
+	Response  string                   `json:"response"`
 	Status    int                      `json:"status"`
+}
+
+func (r *byparrSessionRaw) UnmarshalJSON(data []byte) error {
+	// Avoid infinite recursion: define a local type that shares the fields
+	// but has no methods, so json.Unmarshal populates it directly.
+	type alias byparrSessionRaw
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*r = byparrSessionRaw(a)
+	// Prefer "response" (current Byparr); fall back to "body" (FlareSolverr).
+	if r.Response == "" && r.Body != "" {
+		r.Response = r.Body
+	}
+	if r.Body == "" && r.Response != "" {
+		r.Body = r.Response
+	}
+	return nil
 }
 
 func NewByparrClient(baseURL string) *ByparrClient {

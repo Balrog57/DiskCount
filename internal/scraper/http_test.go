@@ -1,10 +1,13 @@
 package scraper
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -151,5 +154,69 @@ func TestClassifyTransportError(t *testing.T) {
 	}
 	if err := classifyTransportError("u", errors.New("invalid url syntax")); err.(*FetchError).Kind != ErrKindPermanent {
 		t.Fatal("invalid url should be permanent")
+	}
+}
+
+// TestBrowserLikeHeadersDoNotSetAcceptEncoding is the regression test for the
+// pricepertb.com failure. The fetcher used to send Accept-Encoding: gzip,
+// deflate, br. Two things broke:
+//  1. "br" (Brotli) — Go's transport cannot decompress it, so Brotli responses
+//     arrived as compressed bytes and the parser saw garbage (0 deals).
+//  2. Even "gzip" set manually disables Go's transparent decompression, so
+//     gzip responses would also have arrived compressed.
+//
+// The fix is to NOT set Accept-Encoding at all and let Go's transport manage
+// it (it adds gzip and decompresses automatically).
+func TestBrowserLikeHeadersDoNotSetAcceptEncoding(t *testing.T) {
+	if _, ok := BrowserLikeHeaders["Accept-Encoding"]; ok {
+		t.Fatalf("Accept-Encoding must not be in BrowserLikeHeaders (let Go's transport manage it); got %q", BrowserLikeHeaders["Accept-Encoding"])
+	}
+}
+
+// TestFetcherDecompressesGzip confirms Go's transport transparently
+// decompresses a gzip response when we have NOT pinned the Accept-Encoding
+// header ourselves. This is the path pricepertb.com and diskprices.com rely
+// on (both serve gzip to a browser-like client).
+func TestFetcherDecompressesGzip(t *testing.T) {
+	const plain = "<html><body><table><tr><td>gzipped content</td></tr></table></body></html>"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Go's transport sets Accept-Encoding: gzip when we don't override it.
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			t.Errorf("transport did not request gzip: %q", r.Header.Get("Accept-Encoding"))
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		_, _ = gz.Write([]byte(plain))
+		_ = gz.Close()
+	}))
+	defer srv.Close()
+
+	f := NewHTTPFetcherWithOptions(Options{
+		UserAgent:         "test/1.0",
+		PerRequestTimeout: 2 * time.Second,
+	})
+	body, err := f.Get(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if !bytes.Contains([]byte(body), []byte("gzipped content")) {
+		t.Fatalf("body was not decompressed: %q", body)
+	}
+}
+
+// TestDefaultUserAgentIsBrowserLike locks in the UA fix: diskprices.com
+// returns HTTP 403 to "DiskCountBot/2.0". The default must look like a real
+// browser so the source works out of the box. Operators can still override.
+func TestDefaultUserAgentIsBrowserLike(t *testing.T) {
+	if DefaultUserAgent == "DiskCountBot/2.0" {
+		t.Fatal("DefaultUserAgent is still the bot string that gets 403'd")
+	}
+	if !strings.Contains(DefaultUserAgent, "Mozilla") {
+		t.Fatalf("DefaultUserAgent does not look like a browser: %q", DefaultUserAgent)
+	}
+	// NewHTTPFetcherWithOptions with no UA must fall back to the browser default.
+	f := NewHTTPFetcherWithOptions(Options{PerRequestTimeout: time.Second})
+	if f.Headers["User-Agent"] != DefaultUserAgent {
+		t.Fatalf("default UA = %q, want %q", f.Headers["User-Agent"], DefaultUserAgent)
 	}
 }

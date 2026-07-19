@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Balrog57/DiskCount/internal/scraper"
 )
 
 type SettingMeta struct {
@@ -22,7 +24,7 @@ var AppSettings = []SettingMeta{
 	{"WEB_ADMIN_PASSWORD", "Web admin password", true, true, ""},
 	{"TELEGRAM_BOT_TOKEN", "Telegram bot token", true, true, ""},
 	{"REQUEST_TIMEOUT_SECONDS", "Request timeout seconds", false, true, "30"},
-	{"USER_AGENT", "HTTP user agent", false, true, "DiskCountBot/2.0"},
+	{"USER_AGENT", "HTTP user agent", false, true, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"},
 	{"DISKPRICES_URL", "DiskPrices URL", false, true, "https://diskprices.com/?locale=fr"},
 	{"PRICEPERGIG_ENABLED", "PricePerGig enabled", false, true, "true"},
 	{"PRICEPERGIG_API_URL", "PricePerGig API URL", false, true, "https://api.pricepergig.com/drives"},
@@ -131,7 +133,7 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		DatabaseURL:           value(values, "DATABASE_URL", "postgres://localhost:5432/diskcount"),
 		WebAdminAddr:          value(values, "WEB_ADMIN_ADDR", "0.0.0.0:47832"),
 		RequestTimeoutSeconds: parseFloat(values["REQUEST_TIMEOUT_SECONDS"], 30),
-		UserAgent:             value(values, "USER_AGENT", "DiskCountBot/2.0"),
+		UserAgent:             value(values, "USER_AGENT", scraper.DefaultUserAgent),
 		DiskPricesURL:         values["DISKPRICES_URL"],
 		PricePerGigEnabled:    parseBool(values["PRICEPERGIG_ENABLED"], true),
 		PricePerGigAPIURL:     values["PRICEPERGIG_API_URL"],
