@@ -23,7 +23,7 @@ func init() {
 }
 
 type PricePerGig struct {
-	http   *scraper.HTTPFetcher
+	http   scraper.Fetcher
 	apiURL string
 	market string
 }
@@ -85,34 +85,47 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		if url == "" && d.ASIN != "" {
 			url = "https://www.amazon.fr/dp/" + d.ASIN
 		}
-		// Normalise through the shared pipeline so the matcher, the
-		// notifier and the DB all see the same fields. pricepergig is
-		// the first source migrated; diskprices and the RSS feeds are
-		// still using their inline code path.
-		price := d.Price
-		capacityGB := d.CapacityGB
-		deal, rej := Normalize(RawDeal{
-			Source:     s.Name(),
-			Title:      title,
-			URL:        url,
-			PriceEUR:   &price,
-			CapacityGB: &capacityGB,
-			Condition:  d.Condition,
-			MediaHint:  d.Technology,
-			FormFactor: d.FormFactor,
-			Interface:  d.Interface,
-			Brand:      d.Brand,
-			Model:      d.Model,
-			ExternalID: d.ASIN,
-		})
-		_ = pt // already used inside Normalize; kept for clarity above
-		if rej != nil {
-			// pricepergig has loose fields; silently skip instead of
-			// failing the whole batch.
-			slog.Debug("pricepergig skipped", "title", title, "reason", rej.Reason)
+		// Build the Deal inline — the same construction path as diskprices,
+		// pricepertb, feeds, keepa and ebay. The scanner's normalize.Deal()
+		// pipeline then validates, enriches and computes the QualityScore
+		// uniformly for every source, so we no longer need a second
+		// sources.Normalize pipeline that disagrees with the canonical one.
+		classText := strings.Join([]string{title, d.Technology, d.FormFactor, d.Interface}, " ")
+		media := normalMedia(classText)
+		if media == nil {
+			// pricepergig has loose fields; silently skip drives we cannot
+			// classify instead of failing the whole batch.
+			slog.Debug("pricepergig skipped", "title", title, "reason", "unknown_media")
 			continue
 		}
-		deals = append(deals, deal)
+		dc := parsing.NormalizeDriveCategory(classText, media)
+		ifaces := parsing.NormalizeInterfaces(classText)
+		if len(ifaces) == 0 && dc != nil {
+			ifaces = parsing.DefaultInterfacesForCategory(*dc)
+		}
+		cond := parsing.NormalizeCondition(d.Condition)
+		if cond == nil {
+			c := domain.ConditionNew
+			cond = &c
+		}
+		deals = append(deals, domain.Deal{
+			Source:        s.Name(),
+			Title:         title,
+			URL:           url,
+			PriceEUR:      round2(d.Price),
+			PricePerTB:    round2(pt),
+			CapacityTB:    round2(tb),
+			Condition:     cond,
+			MediaType:     media,
+			FormFactor:    strPtr(d.FormFactor),
+			Technology:    strPtr(d.Technology),
+			DriveCategory: dc,
+			Interfaces:    ifaces,
+			Brand:         strPtr(d.Brand),
+			Model:         strPtr(d.Model),
+			ExternalID:    parsing.ExtractASIN(url),
+			ObservedAt:    domain.UTCNow(),
+		})
 	}
 	slog.Debug("pricepergig", "deals", len(deals))
 	return deals, nil

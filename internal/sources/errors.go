@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/Balrog57/DiskCount/internal/scraper"
 )
 
 // Severity ranks how a failure should be handled by the scanner.
@@ -91,9 +93,12 @@ var (
 	ErrConfig    = &SourceError{Severity: SeverityConfig, Stage: "config"}
 )
 
-// Classify walks the error chain and returns its Severity. Unknown
-// errors are mapped to SeverityUnknown so the scanner can decide
-// whether to count them as transient (conservative) or permanent.
+// Classify walks the error chain and returns its Severity. It understands
+// both the sources.SourceError taxonomy and the lower-level scraper.FetchError
+// taxonomy, so a source that wraps a transport failure with sources.Transient
+// (which nests the *FetchError as its Cause) classifies consistently whether
+// the caller type-asserts at the source level or the scraper level. Unknown
+// errors map to SeverityUnknown.
 func Classify(err error) Severity {
 	if err == nil {
 		return SeverityUnknown
@@ -101,6 +106,22 @@ func Classify(err error) Severity {
 	var se *SourceError
 	if errors.As(err, &se) {
 		return se.Severity
+	}
+	// Fall through to the scraper-level taxonomy so raw *FetchError values
+	// (not wrapped in a *SourceError) still classify meaningfully. This
+	// removes the need for every source to remember to wrap.
+	var fe *scraper.FetchError
+	if errors.As(err, &fe) {
+		switch fe.Kind {
+		case scraper.ErrKindTransient:
+			return SeverityTransient
+		case scraper.ErrKindAuth:
+			return SeverityAuth
+		case scraper.ErrKindParse:
+			return SeveritySchema
+		case scraper.ErrKindPermanent:
+			return SeveritySelector
+		}
 	}
 	return SeverityUnknown
 }

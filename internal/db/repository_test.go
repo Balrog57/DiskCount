@@ -140,3 +140,38 @@ func TestRejectedDealsAndQualityStats(t *testing.T) {
 		t.Fatalf("quality stats did not include rejected deal: %#v", qs.Reasons)
 	}
 }
+
+// TestMigrateIsIdempotent runs Migrate twice against the same database and
+// verifies the schema_migrations ledger matches the declared history. The
+// migration system is called on every boot, so a second run must be a no-op
+// and must not error on the already-created schema_migrations table.
+func TestMigrateIsIdempotent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// testDB() already calls Migrate once; call it again to prove idempotency.
+	if err := d.Migrate(ctx); err != nil {
+		t.Fatalf("second Migrate failed: %v", err)
+	}
+	rows, err := d.Pool.Query(ctx, `SELECT n FROM schema_migrations ORDER BY n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []int
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, n)
+	}
+	if len(got) != len(migrations) {
+		t.Fatalf("expected %d applied migrations, got %d: %v", len(migrations), len(got), got)
+	}
+	for i, m := range migrations {
+		if got[i] != m.n {
+			t.Errorf("migration[%d]: ledger has %d, declared %d", i, got[i], m.n)
+		}
+	}
+}

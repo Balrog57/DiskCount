@@ -37,7 +37,7 @@ func init() {
 // client-credentials grant and searches for configured queries, mapping each
 // item summary to a domain.Deal.
 type Ebay struct {
-	http      *scraper.HTTPFetcher
+	http      scraper.Fetcher
 	clientID  string
 	secret    string
 	queries   []string

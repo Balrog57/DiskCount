@@ -1,14 +1,17 @@
 package sources
 
 import (
-	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
 
+// round2 rounds a float64 to two decimal places. It uses math.Round rather
+// than fmt.Sprintf+ParseFloat (the previous implementation) because every
+// price field of every deal in every source flows through here on the scan
+// hot path — the Sprintf variant allocated a string per call.
 func round2(v float64) float64 {
-	r, _ := strconv.ParseFloat(fmt.Sprintf("%.2f", v), 64)
-	return r
+	return math.Round(v*100) / 100
 }
 
 func strPtr(s string) *string {

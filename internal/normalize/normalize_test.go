@@ -124,3 +124,42 @@ func TestDealDoesNotTreatXboxAsPack(t *testing.T) {
 		t.Fatalf("xbox text treated as pack: %#v", res.Deal)
 	}
 }
+
+// TestInferBrandMatchesMidTitle locks in the fix for the previous
+// implementation, which took the first whitespace token as the brand.
+// A title like "2 To Seagate IronWolf" used to be branded "2"; it must
+// now be "Seagate" so brand-based alerts actually match.
+func TestInferBrandMatchesMidTitle(t *testing.T) {
+	cases := map[string]string{
+		"2 To Seagate IronWolf Pro 16 To":          "Seagate",
+		"WD Red Plus 4 To NAS HDD":                 "WD",
+		"Western Digital Red 8 To":                 "Western Digital",
+		"Toshiba MG08 16 To Enterprise":            "Toshiba",
+		"samsung 990 pro 2 to ssd":                 "Samsung", // case-insensitive
+		"Disque Générique 4 To Marque Inconnue":    "",        // unknown → no junk brand
+		"4 To":                                     "",        // capacity only, no brand
+	}
+	for title, want := range cases {
+		if got := inferBrand(title); got != want {
+			t.Errorf("inferBrand(%q) = %q, want %q", title, got, want)
+		}
+	}
+}
+
+// TestDealEnrichesBrandFromTitle verifies the canonical pipeline actually
+// populates Deal.Brand via inferBrand for a realistic title.
+func TestDealEnrichesBrandFromTitle(t *testing.T) {
+	res := Deal(domain.Deal{
+		Source:     "test",
+		Title:      "2 To Seagate IronWolf HDD",
+		URL:        "https://example.test/ironwolf",
+		CapacityTB: 2,
+		PriceEUR:   60,
+	})
+	if res.Reject != nil {
+		t.Fatalf("deal rejected: %#v", res.Reject)
+	}
+	if res.Deal.Brand == nil || *res.Deal.Brand != "Seagate" {
+		t.Fatalf("brand not enriched: %#v", res.Deal.Brand)
+	}
+}

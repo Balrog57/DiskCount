@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Balrog57/DiskCount/internal/config"
@@ -487,21 +488,12 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	render(w, statsTpl, data)
 }
 
-// parseCronInterval returns the duration encoded by the limited
-// "interval" subset of our cron config: "@every 4h", "@every 30m", …
-// Anything else (real cron expressions, empty) is rejected so the
-// caller can fall back to a static display.
+// parseCronInterval delegates to config.ParseScrapeInterval so the web UI's
+// "prochain scan" countdown and the scheduler share one parser. Anything the
+// scheduler cannot understand is also hidden from the UI (ok=false → no
+// countdown shown), which keeps the two views consistent.
 func parseCronInterval(spec string) (time.Duration, bool) {
-	spec = strings.TrimSpace(spec)
-	after, ok := strings.CutPrefix(spec, "@every ")
-	if !ok {
-		return 0, false
-	}
-	d, err := time.ParseDuration(strings.TrimSpace(after))
-	if err != nil || d <= 0 {
-		return 0, false
-	}
-	return d, true
+	return config.ParseScrapeInterval(spec)
 }
 
 // durationHuman formats a duration as a short, human-readable countdown
@@ -1222,6 +1214,99 @@ func writeJSON(w http.ResponseWriter, code int, payload any) {
 	_ = enc.Encode(payload)
 }
 
+// tmplFuncs is the function map shared by every parsed template. It is built
+// once at package init; render() references it when populating the cache.
+var tmplFuncs = template.FuncMap{
+	"join": strings.Join,
+	"ts": func(t *time.Time) string {
+		if t == nil {
+			return "-"
+		}
+		return t.Local().Format("2006-01-02 15:04")
+	},
+	"tsv": func(t time.Time) string {
+		if t.IsZero() {
+			return "-"
+		}
+		return t.Local().Format("2006-01-02 15:04")
+	},
+	"flt": func(v *float64) string {
+		if v == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.2f", *v)
+	},
+	"price": func(v float64) string { return fmt.Sprintf("%.2f", v) },
+	"cap":   func(v float64) string { return fmt.Sprintf("%.1f To", v) },
+	"ptr": func(v *string) string {
+		if v == nil || *v == "" {
+			return "-"
+		}
+		return *v
+	},
+	"csv": func(values []string) string {
+		if len(values) == 0 {
+			return "Tous"
+		}
+		return strings.Join(values, ", ")
+	},
+	"alertPrice": func(a db.Alert) string {
+		if a.MaxPricePerTB == nil {
+			return "Sans limite"
+		}
+		return fmt.Sprintf("%.2f EUR/To", *a.MaxPricePerTB)
+	},
+	"stateClass": func(ok bool) string {
+		if ok {
+			return "good"
+		}
+		return "warn"
+	},
+	// T is the i18n helper exposed to templates. When the caller did
+	// not populate .T (e.g. some unit tests that render a body in
+	// isolation) we fall back to a passthrough that returns the key
+	// itself, so `{{call .T "any.key"}}` still renders something
+	// instead of panicking.
+	"call": func(f any, args ...any) (string, error) {
+		if fn, ok := f.(func(string) string); ok {
+			if len(args) == 0 {
+				return "", nil
+			}
+			if s, ok := args[0].(string); ok {
+				return fn(s), nil
+			}
+		}
+		return "", nil
+	},
+	// Sparkline computes the 7-day mini-chart for a single product
+	// row. Templates call it as `{{call .Sparkline $points}}` and
+	// receive a SparklineResult with Coords/Trend fields.
+	"Sparkline": func(points []db.SparklinePoint) SparklineResult {
+		return computeSparklinePoints(points)
+	},
+	"durationHuman": durationHuman,
+}
+
+// templateCache memoises the parsed template for each body string. The
+// previous render() re-parsed layoutTpl+body on every HTTP request, which
+// allocated and parsed a multi-KB template each time. Since the bodies are
+// package-level constants, the cache holds ~10 entries in steady state.
+// A sync.Map keeps the read path lock-free after the first miss.
+var templateCache sync.Map // body(string) -> *template.Template
+
+// parseBodyTemplate parses layoutTpl+body once and caches the result.
+// The FuncMap is installed before Parse so the cached template already
+// knows about all helpers. Duplicate concurrent parses of the same body
+// are harmless — last writer wins and both produce equivalent templates.
+func parseBodyTemplate(body string) *template.Template {
+	if cached, ok := templateCache.Load(body); ok {
+		return cached.(*template.Template)
+	}
+	tpl := template.Must(template.New("page").Funcs(tmplFuncs).Parse(layoutTpl + body))
+	actual, _ := templateCache.LoadOrStore(body, tpl)
+	return actual.(*template.Template)
+}
+
 func render(w http.ResponseWriter, body string, data map[string]any) {
 	if _, ok := data["Status"]; !ok {
 		data["Status"] = appStatus{}
@@ -1243,76 +1328,7 @@ func render(w http.ResponseWriter, body string, data map[string]any) {
 	if _, ok := data["Theme"]; !ok {
 		data["Theme"] = themeAuto
 	}
-	tpl := template.Must(template.New("page").Funcs(template.FuncMap{
-		"join": strings.Join,
-		"ts": func(t *time.Time) string {
-			if t == nil {
-				return "-"
-			}
-			return t.Local().Format("2006-01-02 15:04")
-		},
-		"tsv": func(t time.Time) string {
-			if t.IsZero() {
-				return "-"
-			}
-			return t.Local().Format("2006-01-02 15:04")
-		},
-		"flt": func(v *float64) string {
-			if v == nil {
-				return "-"
-			}
-			return fmt.Sprintf("%.2f", *v)
-		},
-		"price": func(v float64) string { return fmt.Sprintf("%.2f", v) },
-		"cap":   func(v float64) string { return fmt.Sprintf("%.1f To", v) },
-		"ptr": func(v *string) string {
-			if v == nil || *v == "" {
-				return "-"
-			}
-			return *v
-		},
-		"csv": func(values []string) string {
-			if len(values) == 0 {
-				return "Tous"
-			}
-			return strings.Join(values, ", ")
-		},
-		"alertPrice": func(a db.Alert) string {
-			if a.MaxPricePerTB == nil {
-				return "Sans limite"
-			}
-			return fmt.Sprintf("%.2f EUR/To", *a.MaxPricePerTB)
-		},
-		"stateClass": func(ok bool) string {
-			if ok {
-				return "good"
-			}
-			return "warn"
-		},
-		// T is the i18n helper exposed to templates. When the caller did
-		// not populate .T (e.g. some unit tests that render a body in
-		// isolation) we fall back to a passthrough that returns the key
-		// itself, so `{{call .T "any.key"}}` still renders something
-		// instead of panicking.
-		"call": func(f any, args ...any) (string, error) {
-			if fn, ok := f.(func(string) string); ok {
-				if len(args) == 0 {
-					return "", nil
-				}
-				if s, ok := args[0].(string); ok {
-					return fn(s), nil
-				}
-			}
-			return "", nil
-		},
-		// Sparkline computes the 7-day mini-chart for a single product
-		// row. Templates call it as `{{call .Sparkline $points}}` and
-		// receive a SparklineResult with Coords/Trend fields.
-		"Sparkline": func(points []db.SparklinePoint) SparklineResult {
-			return computeSparklinePoints(points)
-		},
-		"durationHuman": durationHuman,
-	}).Parse(layoutTpl + body))
+	tpl := parseBodyTemplate(body)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tpl.Execute(w, data); err != nil {
 		http.Error(w, fmt.Sprintf("template: %v", err), http.StatusInternalServerError)

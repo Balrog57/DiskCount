@@ -24,7 +24,7 @@ func init() {
 }
 
 type DiskPrices struct {
-	http   *scraper.HTTPFetcher
+	http   scraper.Fetcher
 	byparr *scraper.ByparrClient
 	url    string
 	useFB  bool
@@ -120,16 +120,7 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 		dc := parsing.NormalizeDriveCategory(categoryText, media)
 		ifaces := parsing.NormalizeInterfaces(categoryText)
 		if len(ifaces) == 0 && dc != nil {
-			switch *dc {
-			case domain.DriveCategoryInternal3_5, domain.DriveCategoryInternal2_5, domain.DriveCategoryInternalHybrid, domain.DriveCategoryInternalSSD, domain.DriveCategoryM2SATA:
-				ifaces = append(ifaces, domain.DriveInterfaceSATA)
-			case domain.DriveCategoryExternal3_5, domain.DriveCategoryExternal2_5, domain.DriveCategoryExternalSSD:
-				ifaces = append(ifaces, domain.DriveInterfaceUSB)
-			case domain.DriveCategoryM2NVMe, domain.DriveCategoryU2U3:
-				ifaces = append(ifaces, domain.DriveInterfaceNVMe)
-			case domain.DriveCategoryInternalSAS:
-				ifaces = append(ifaces, domain.DriveInterfaceSAS)
-			}
+			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 
 		cond := parsing.NormalizeCondition(texts[7])

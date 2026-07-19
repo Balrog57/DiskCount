@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -402,8 +401,13 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 	// return, not a regular price drop.
 	backInStockThreshold := time.Duration(s.cfg.BackInStockHours * float64(time.Hour))
 	lastSeenSnapshot := map[string]time.Time{}
-	if s.db != nil && backInStockThreshold > 0 && len(deals) > 0 {
-		ids := make([]string, 0, len(deals))
+	// ⚡ Bolt optimization: collect the unique product IDs once and
+	// reuse the slice for both the last-seen snapshot and the batched
+	// baseline-median lookup, so the whole batch costs two round-trips
+	// instead of N. Both queries take the same deduplicated ID slice.
+	var productIDs []string
+	if s.db != nil && len(deals) > 0 {
+		productIDs = make([]string, 0, len(deals))
 		seen := make(map[string]struct{}, len(deals))
 		for _, d := range deals {
 			pid := d.ProductID()
@@ -411,12 +415,41 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				continue
 			}
 			seen[pid] = struct{}{}
-			ids = append(ids, pid)
+			productIDs = append(productIDs, pid)
 		}
-		if m, err := s.db.LastSeenMap(ctx, ids); err == nil {
+	}
+	if s.db != nil && backInStockThreshold > 0 && len(productIDs) > 0 {
+		if m, err := s.db.LastSeenMap(ctx, productIDs); err == nil {
 			lastSeenSnapshot = m
 		} else {
 			slog.Warn("lastseen snapshot", "err", err)
+		}
+	}
+	// ⚡ Bolt optimization: fetch every 30-day median price-per-TB in
+	// a single grouped query instead of one percentile_cont per deal.
+	// Falls back to nil (no baseline) for products with no history.
+	baselines := map[string]float64{}
+	if s.db != nil && len(productIDs) > 0 {
+		if m, err := s.db.BaselinePricePerTBMap(ctx, productIDs, now, 30); err == nil {
+			baselines = m
+		} else {
+			slog.Warn("baseline map", "err", err)
+		}
+	}
+	// ⚡ Batch the last-notification lookup for the whole scan in one
+	// query instead of one indexed SELECT per (deal × matching alert).
+	// We only need the enabled alert IDs; product IDs are the same slice
+	// we already deduplicated above.
+	lastNotifs := map[string]*db.Notification{}
+	if s.db != nil && len(alerts) > 0 && len(productIDs) > 0 {
+		alertIDs := make([]int64, 0, len(alerts))
+		for i := range alerts {
+			alertIDs = append(alertIDs, alerts[i].ID)
+		}
+		if m, err := s.db.LastNotificationsMap(ctx, alertIDs, productIDs); err == nil {
+			lastNotifs = m
+		} else {
+			slog.Warn("last-notifications map", "err", err)
 		}
 	}
 	for _, raw := range deals {
@@ -425,22 +458,39 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			r.Rejected++
 			r.RejectReasons[res.Reject.Reason]++
 			if !dryRun && s.db != nil {
-				_ = s.db.RecordRejectedDeal(ctx, res.Deal, res.Reject.Reason, res.Reject.Detail)
+				if err := s.db.RecordRejectedDeal(ctx, res.Deal, res.Reject.Reason, res.Reject.Detail); err != nil {
+					slog.Warn("record rejected deal", "src", res.Deal.Source, "err", err)
+					r.Errors = append(r.Errors, "record rejected: "+err.Error())
+				}
 			}
 			continue
 		}
 		deal := res.Deal
 		r.Accepted++
+		// Point lookup into the pre-fetched baseline map; nil out when
+		// the product has no history so ShouldNotify behaves as before.
 		var base *float64
-		if s.db != nil {
-			base, _ = s.db.BaselinePricePerTB(ctx, deal.ProductID(), now, 30)
+		if v, ok := baselines[deal.ProductID()]; ok {
+			base = &v
 		}
 		if !dryRun && s.db != nil {
-			s.db.UpsertProduct(ctx, deal)
+			if err := s.db.UpsertProduct(ctx, deal); err != nil {
+				// A failing product upsert should not lose the price
+				// observation silently, but neither should it abort the
+				// whole scan. Log + count, then continue.
+				slog.Warn("upsert product", "src", deal.Source, "pid", deal.ProductID(), "err", err)
+				r.Errors = append(r.Errors, "upsert product: "+err.Error())
+				continue
+			}
 		}
 		if !normalize.IsAlertQuality(deal) {
 			if !dryRun && s.db != nil {
-				s.db.RecordObservation(ctx, deal)
+				// ⚡ Bolt optimization: product already upserted above; skip
+				// the redundant product write and the wrapping transaction.
+				if err := s.db.RecordObservationNoUpsert(ctx, deal); err != nil {
+					slog.Warn("record observation", "src", deal.Source, "err", err)
+					r.Errors = append(r.Errors, "record observation: "+err.Error())
+				}
 			}
 			continue
 		}
@@ -459,7 +509,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				continue
 			}
 			r.Matched++
-			last, _ := s.db.LastNotification(ctx, a.ID, deal.ProductID())
+			last := lastNotifs[fmt.Sprintf("%d:%s", a.ID, deal.ProductID())]
 			dec := rules.ShouldNotify(a, deal, base, last, now, s.cfg.NotificationPriceDropPct)
 			if !dec.ShouldNotify {
 				continue
@@ -478,20 +528,35 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				s.ntf.SendDeal(a.ChatID, a, deal, dec)
 				time.Sleep(time.Duration(s.cfg.TelegramMessageDelayS * float64(time.Second)))
 			}
-			s.db.RecordNotification(ctx, a, deal, dec.Reason, dec.DiscountPct)
+			// ⚡ Bolt optimization: product already upserted earlier in the
+			// loop; record just the notification row, skipping the redundant
+			// product upsert + wrapping transaction.
+			if err := s.db.RecordNotificationNoUpsert(ctx, a, deal, dec.Reason, dec.DiscountPct); err != nil {
+				slog.Warn("record notification", "alert", a.ID, "pid", deal.ProductID(), "err", err)
+				r.Errors = append(r.Errors, "record notification: "+err.Error())
+			}
 			r.Notified++
 		}
 		if !dryRun && s.db != nil {
-			s.db.RecordObservation(ctx, deal)
+			// ⚡ Bolt optimization: see above; skip the redundant upsert.
+			if err := s.db.RecordObservationNoUpsert(ctx, deal); err != nil {
+				slog.Warn("record observation", "src", deal.Source, "err", err)
+				r.Errors = append(r.Errors, "record observation: "+err.Error())
+			}
 		}
 	}
 }
 
 func ScheduleLoop(ctx context.Context, s *Scanner, cron string) error {
 	for {
-		d, err := parDur(cron)
-		if err != nil {
-			return err
+		// Use the shared parser so the scheduler and the web dashboard's
+		// "prochain scan" countdown always agree. If the spec is invalid
+		// we fall back to the documented default rather than silently
+		// changing cadence, and log once so the misconfiguration is visible.
+		d, ok := config.ParseScrapeInterval(cron)
+		if !ok {
+			slog.Warn("invalid SCRAPE_INTERVAL_CRON; using default", "spec", cron, "default", config.DefaultScrapeInterval)
+			d = config.DefaultScrapeInterval
 		}
 		select {
 		case <-ctx.Done():
@@ -501,11 +566,4 @@ func ScheduleLoop(ctx context.Context, s *Scanner, cron string) error {
 		r := s.RunOnce(ctx, false)
 		slog.Info("scan", "fetched", r.Fetched, "matched", r.Matched, "notified", r.Notified, "errors", len(r.Errors))
 	}
-}
-
-func parDur(c string) (time.Duration, error) {
-	if a, ok := strings.CutPrefix(c, "@every "); ok {
-		return time.ParseDuration(a)
-	}
-	return 4 * time.Hour, nil
 }

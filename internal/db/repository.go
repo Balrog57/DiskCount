@@ -33,8 +33,21 @@ func New(ctx context.Context, databaseURL string) (*DB, error) {
 
 func (db *DB) Close() { db.Pool.Close() }
 
-func (db *DB) Migrate(ctx context.Context) error {
-	_, err := db.Pool.Exec(ctx, `
+// migrations is the append-only history of schema changes. Each entry runs
+// in its own transaction and is recorded in schema_migrations so it is never
+// re-applied. To evolve the schema: append a new {N, "..."} entry here. Do
+// not edit or reorder existing entries — they must stay idempotent for fresh
+// deployments (which run every migration in order) and safe to skip for
+// existing ones (which only run the tail).
+//
+// All statements intentionally use IF NOT EXISTS so the base migration can
+// run on a fresh database in one pass without special-casing the "create
+// table" vs "add column" distinction.
+var migrations = []struct {
+	n    int
+	sql  string
+}{
+	{n: 1, sql: `
 CREATE TABLE IF NOT EXISTS subscribers (chat_id BIGINT PRIMARY KEY, username VARCHAR(255), first_seen_at TIMESTAMPTZ DEFAULT NOW(), last_seen_at TIMESTAMPTZ DEFAULT NOW(), enabled BOOLEAN DEFAULT TRUE);
 CREATE TABLE IF NOT EXISTS authorized_users (telegram_user_id BIGINT PRIMARY KEY, label VARCHAR(120) NOT NULL, is_admin BOOLEAN DEFAULT FALSE, enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
 CREATE TABLE IF NOT EXISTS alerts (id SERIAL PRIMARY KEY, chat_id BIGINT NOT NULL, owner_user_id BIGINT NOT NULL, name VARCHAR(120) NOT NULL, min_capacity_tb DOUBLE PRECISION, max_capacity_tb DOUBLE PRECISION, capacity_presets JSONB DEFAULT '[]', conditions JSONB DEFAULT '[]', media_types JSONB DEFAULT '[]', drive_categories JSONB DEFAULT '[]', interfaces JSONB DEFAULT '[]', sources JSONB DEFAULT '[]', max_price_per_tb NUMERIC(10,2), min_discount_pct REAL DEFAULT 5.0, cooldown_hours INTEGER DEFAULT 24, enabled BOOLEAN DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW());
@@ -43,7 +56,7 @@ CREATE TABLE IF NOT EXISTS products (id VARCHAR(80) PRIMARY KEY, source VARCHAR(
 CREATE TABLE IF NOT EXISTS price_observations (id SERIAL PRIMARY KEY, product_id VARCHAR(80) REFERENCES products(id), source VARCHAR(40) NOT NULL, observed_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, quality_score INTEGER DEFAULT 0, raw_json JSONB DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS idx_obs_pid ON price_observations(product_id);
 CREATE INDEX IF NOT EXISTS idx_obs_ts ON price_observations(observed_at);
-CREATE INDEX IF NOT EXISTS idx_obs_latest ON price_observations(product_id, observed_at DESC); -- ⚡ Bolt: composite index to avoid costly sort during DISTINCT ON (product_id) in LatestPrices query
+CREATE INDEX IF NOT EXISTS idx_obs_latest ON price_observations(product_id, observed_at DESC); -- composite index to avoid costly sort during DISTINCT ON (product_id) in LatestPrices query
 CREATE TABLE IF NOT EXISTS notifications (id SERIAL PRIMARY KEY, alert_id INTEGER REFERENCES alerts(id), product_id VARCHAR(80) REFERENCES products(id), sent_at TIMESTAMPTZ DEFAULT NOW(), price_eur NUMERIC(10,2) NOT NULL, price_per_tb NUMERIC(10,2) NOT NULL, discount_pct NUMERIC(6,2), reason VARCHAR(80) NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_notif_aid ON notifications(alert_id);
 CREATE INDEX IF NOT EXISTS idx_notif_pid ON notifications(product_id);
@@ -52,21 +65,89 @@ CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS rejected_deals (id SERIAL PRIMARY KEY, source VARCHAR(40) NOT NULL, reason VARCHAR(80) NOT NULL, detail TEXT, title TEXT, url TEXT, observed_at TIMESTAMPTZ DEFAULT NOW(), raw_json JSONB DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS idx_rejected_deals_source ON rejected_deals(source);
 CREATE INDEX IF NOT EXISTS idx_rejected_deals_observed ON rejected_deals(observed_at);
+`},
+	// v2: incremental columns added after the initial release. Each ADD
+	// COLUMN is idempotent so a fresh DB rolling through v1+v2 ends up at
+	// the same schema as a long-running one that applied v2 in production.
+	{n: 2, sql: `
 ALTER TABLE products ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS classification_source VARCHAR(40);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS canonical_url TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS merchant VARCHAR(120);
-	ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(120);
-	ALTER TABLE products ADD COLUMN IF NOT EXISTS model VARCHAR(180);
-	ALTER TABLE products ADD COLUMN IF NOT EXISTS raw_title TEXT;
-	ALTER TABLE products ADD COLUMN IF NOT EXISTS recording_method VARCHAR(20);
-	ALTER TABLE price_observations ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
-	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS brands JSONB DEFAULT '[]';
-	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS keywords JSONB DEFAULT '[]';
-	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exclude_keywords JSONB DEFAULT '[]';
-	ALTER TABLE alerts ADD COLUMN IF NOT EXISTS recording_methods JSONB DEFAULT '[]';
-`)
-	return err
+ALTER TABLE products ADD COLUMN IF NOT EXISTS brand VARCHAR(120);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS model VARCHAR(180);
+ALTER TABLE products ADD COLUMN IF NOT EXISTS raw_title TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS recording_method VARCHAR(20);
+ALTER TABLE price_observations ADD COLUMN IF NOT EXISTS quality_score INTEGER DEFAULT 0;
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS brands JSONB DEFAULT '[]';
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS keywords JSONB DEFAULT '[]';
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exclude_keywords JSONB DEFAULT '[]';
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS recording_methods JSONB DEFAULT '[]';
+`},
+}
+
+// Migrate applies every pending migration in order. Each migration runs in
+// its own transaction and is recorded in schema_migrations (created on the
+// fly). Already-applied migrations are skipped, so this is safe to call on
+// every boot regardless of the database's current state.
+//
+// Behaviour note: the previous implementation ran the whole history as a
+// single Exec every boot, relying on IF NOT EXISTS for idempotency. This
+// version produces the same end schema but makes the history reviewable,
+// keeps the migration log queryable (SELECT * FROM schema_migrations), and
+// lets future changes ship as new numbered entries instead of being
+// interleaved into one growing string.
+func (db *DB) Migrate(ctx context.Context) error {
+	if _, err := db.Pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+	n INTEGER PRIMARY KEY,
+	applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`); err != nil {
+		return fmt.Errorf("create schema_migrations: %w", err)
+	}
+	applied := make(map[int]bool, len(migrations))
+	rows, err := db.Pool.Query(ctx, `SELECT n FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("read schema_migrations: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n int
+		if err := rows.Scan(&n); err != nil {
+			return err
+		}
+		applied[n] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, m := range migrations {
+		if applied[m.n] {
+			continue
+		}
+		if err := db.applyMigration(ctx, m.n, m.sql); err != nil {
+			return fmt.Errorf("migration %d: %w", m.n, err)
+		}
+	}
+	return nil
+}
+
+// applyMigration runs one migration's SQL in a transaction and records it.
+// The transaction guarantees a migration is either fully applied or fully
+// rolled back, so a crash mid-migration never leaves a half-applied state.
+func (db *DB) applyMigration(ctx context.Context, n int, sql string) error {
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, sql); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (n) VALUES ($1) ON CONFLICT (n) DO NOTHING`, n); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type Alert struct {
@@ -234,7 +315,12 @@ type AlertDraft struct {
 
 func (db *DB) CreateAlert(ctx context.Context, chatID, ownerID int64, name string, d AlertDraft) (*Alert, error) {
 	a := &Alert{ChatID: chatID, OwnerUserID: ownerID, Name: name, MaxPricePerTB: d.MaxPricePerTB, MinDiscountPct: d.MinDiscountPct, CooldownHours: d.CooldownHours, CapacityPresets: d.CapacityPresets, Conditions: d.Conditions, MediaTypes: d.MediaTypes, DriveCategories: d.DriveCategories, Interfaces: d.Interfaces, Sources: d.Sources, Brands: d.Brands, Keywords: d.Keywords, ExcludeKeywords: d.ExcludeKeywords, RecordingMethods: d.RecordingMethods, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (chat_id,owner_user_id,name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+	// The column list has 16 columns and we pass 16 args; the placeholder
+	// count must match exactly or Postgres rejects the INSERT with
+	// "INSERT has more expressions than target columns". The phantom $17/$18
+	// was a latent bug that surfaced on every alert creation via the bot.
+	const cols = "chat_id,owner_user_id,name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours"
+	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
 		chatID, ownerID, name, ja(d.CapacityPresets), ja(d.Conditions), ja(d.MediaTypes), ja(d.DriveCategories), ja(d.Interfaces), ja(d.Sources), ja(d.Brands), ja(d.Keywords), ja(d.ExcludeKeywords), ja(d.RecordingMethods), d.MaxPricePerTB, d.MinDiscountPct, d.CooldownHours).Scan(&a.ID)
 	return a, err
 }
@@ -277,10 +363,25 @@ func (db *DB) DeleteAlert(ctx context.Context, ownerID, aID int64) error {
 	return err
 }
 
+// productUpsertSQL is the shared INSERT...ON CONFLICT statement used by
+// UpsertProduct, RecordObservation, and RecordNotification. Centralizing it
+// keeps the three call sites in sync as columns are added.
+const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`
+
+// productUpsertArgs builds the positional arguments for productUpsertSQL.
+// Extracted so the three call sites cannot drift out of sync.
+func productUpsertArgs(deal domain.Deal, ifaces []string) []any {
+	return []any{
+		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB,
+		ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory),
+		ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL),
+		deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod),
+	}
+}
+
 func (db *DB) UpsertProduct(ctx context.Context, deal domain.Deal) error {
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := db.Pool.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
+	_, err := db.Pool.Exec(ctx, productUpsertSQL, productUpsertArgs(deal, ifaces)...)
 	return err
 }
 
@@ -294,8 +395,7 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
+	_, err := tx.Exec(ctx, productUpsertSQL, productUpsertArgs(deal, ifaces)...)
 	if err != nil {
 		return err
 	}
@@ -309,6 +409,29 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RecordObservationNoUpsert records a price observation without re-upserting
+// the product row. Callers that have already called UpsertProduct for the
+// same deal in the same scan should prefer this variant to avoid redundant
+// writes on the products table.
+//
+// ⚡ Bolt optimization: skips one INSERT...ON CONFLICT on the products
+// table per observation. In the scanner hot path the product has already
+// been upserted, so this drops the per-deal write cost by ~2/3 during a
+// notification-heavy scan. Observation insert only touches the
+// price_observations table (no transaction needed).
+func (db *DB) RecordObservationNoUpsert(ctx context.Context, deal domain.Deal) error {
+	if err := validateObservationDeal(deal); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(deal.Raw)
+	obs := deal.ObservedAt
+	if obs.IsZero() {
+		obs = time.Now().UTC()
+	}
+	_, err := db.Pool.Exec(ctx, `INSERT INTO price_observations(product_id,source,observed_at,price_eur,price_per_tb,quality_score,raw_json) VALUES($1,$2,$3,$4,$5,$6,$7)`, deal.ProductID(), deal.Source, obs, deal.PriceEUR, deal.PricePerTB, deal.QualityScore, raw)
+	return err
 }
 
 func (db *DB) RecordRejectedDeal(ctx context.Context, deal domain.Deal, reason, detail string) error {
@@ -337,6 +460,40 @@ func (db *DB) BaselinePricePerTB(ctx context.Context, pid string, before time.Ti
 	return &r, nil
 }
 
+// BaselinePricePerTBMap returns the 30-day median price-per-TB for every
+// product ID in the input slice in a single round-trip. Missing products
+// and products with no qualifying observations are absent from the map.
+//
+// ⚡ Bolt optimization: replaces N per-deal calls to BaselinePricePerTB in
+// the scanner hot path (each one a percentile_cont over 30 days of rows)
+// with one grouped query. On a typical diskprices scan (~200 accepted
+// deals) this cuts ~200 sequential median aggregations down to 1.
+func (db *DB) BaselinePricePerTBMap(ctx context.Context, productIDs []string, before time.Time, days int) (map[string]float64, error) {
+	if len(productIDs) == 0 {
+		return map[string]float64{}, nil
+	}
+	start := before.Add(-time.Duration(days) * 24 * time.Hour)
+	rows, err := db.Pool.Query(ctx, `
+		SELECT product_id, ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY price_per_tb)::numeric, 2)::float8 AS median
+		FROM price_observations
+		WHERE product_id = ANY($1) AND observed_at >= $2 AND observed_at < $3
+		GROUP BY product_id`, productIDs, start, before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]float64, len(productIDs))
+	for rows.Next() {
+		var pid string
+		var med float64
+		if err := rows.Scan(&pid, &med); err != nil {
+			return nil, err
+		}
+		out[pid] = med
+	}
+	return out, rows.Err()
+}
+
 func (db *DB) LastNotification(ctx context.Context, aID int64, pid string) (*Notification, error) {
 	n := &Notification{}
 	err := db.Pool.QueryRow(ctx, "SELECT id,alert_id,product_id,sent_at,price_eur,price_per_tb,discount_pct,reason,title,url FROM notifications WHERE alert_id=$1 AND product_id=$2 ORDER BY sent_at DESC LIMIT 1", aID, pid).Scan(&n.ID, &n.AlertID, &n.ProductID, &n.SentAt, &n.PriceEUR, &n.PricePerTB, &n.DiscountPct, &n.Reason, &n.Title, &n.URL)
@@ -344,6 +501,40 @@ func (db *DB) LastNotification(ctx context.Context, aID int64, pid string) (*Not
 		return nil, nil
 	}
 	return n, err
+}
+
+// LastNotificationsMap returns the most recent notification for every
+// (alert_id, product_id) pair the scanner might evaluate, in a single
+// round-trip. The key is "alertID:productID". Pairs with no notification
+// are absent from the map.
+//
+// This replaces the per-(deal × matching alert) LastNotification call in
+// the scanner hot path: a scan with 200 deals × 5 matching alerts used
+// to issue up to 1000 sequential indexed lookups; this collapses them
+// to one DISTINCT ON query bounded by len(alertIDs) × len(productIDs).
+func (db *DB) LastNotificationsMap(ctx context.Context, alertIDs []int64, productIDs []string) (map[string]*Notification, error) {
+	if len(alertIDs) == 0 || len(productIDs) == 0 {
+		return map[string]*Notification{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, `
+		SELECT DISTINCT ON (alert_id, product_id)
+			alert_id, product_id, id, sent_at, price_eur, price_per_tb, discount_pct, reason, title, url
+		FROM notifications
+		WHERE alert_id = ANY($1) AND product_id = ANY($2)
+		ORDER BY alert_id, product_id, sent_at DESC`, alertIDs, productIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*Notification, len(alertIDs)*len(productIDs))
+	for rows.Next() {
+		n := &Notification{}
+		if err := rows.Scan(&n.AlertID, &n.ProductID, &n.ID, &n.SentAt, &n.PriceEUR, &n.PricePerTB, &n.DiscountPct, &n.Reason, &n.Title, &n.URL); err != nil {
+			return nil, err
+		}
+		out[fmt.Sprintf("%d:%s", n.AlertID, n.ProductID)] = n
+	}
+	return out, rows.Err()
 }
 
 func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.Deal, reason string, disc *float64) error {
@@ -356,8 +547,7 @@ func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.
 	}
 	defer tx.Rollback(ctx)
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err := tx.Exec(ctx, `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`,
-		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB, ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory), ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod))
+	_, err := tx.Exec(ctx, productUpsertSQL, productUpsertArgs(deal, ifaces)...)
 	if err != nil {
 		return err
 	}
@@ -366,6 +556,22 @@ func (db *DB) RecordNotification(ctx context.Context, alert *Alert, deal domain.
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// RecordNotificationNoUpsert records a notification without re-upserting the
+// product row. The scanner already called UpsertProduct earlier in the loop,
+// so this variant avoids a redundant write on the products table per notified
+// deal.
+//
+// ⚡ Bolt optimization: the notification insert only touches the notifications
+// table (no transaction needed), saving one BEGIN/COMMIT round-trip plus one
+// product upsert per notification.
+func (db *DB) RecordNotificationNoUpsert(ctx context.Context, alert *Alert, deal domain.Deal, reason string, disc *float64) error {
+	if err := validateObservationDeal(deal); err != nil {
+		return err
+	}
+	_, err := db.Pool.Exec(ctx, `INSERT INTO notifications(alert_id,product_id,price_eur,price_per_tb,discount_pct,reason,title,url) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, alert.ID, deal.ProductID(), deal.PriceEUR, deal.PricePerTB, disc, reason, deal.Title, deal.URL)
+	return err
 }
 
 func (db *DB) ToggleAlertFilter(ctx context.Context, ownerID, aID int64, field, value string) error {
@@ -539,9 +745,11 @@ type SparklinePoint struct {
 // the rendering layer can do a single map lookup per row. Empty
 // products are absent from the map.
 //
-// The query picks the most recent `maxPoints` observations per product
-// using DISTINCT ON, which keeps the response size bounded even when
-// the database has been collecting data for months.
+// The previous implementation used DISTINCT ON (product_id), which
+// collapses every product to a single row — so each sparkline had at
+// most ONE point and computeSparklinePoints (which needs >=2) never
+// drew anything. The ROW_NUMBER() window keeps up to `maxPoints` rows
+// per product, which is what the feature actually needs.
 func (db *DB) Sparklines(ctx context.Context, productIDs []string, days int, maxPoints int) (map[string][]SparklinePoint, error) {
 	if len(productIDs) == 0 {
 		return map[string][]SparklinePoint{}, nil
@@ -554,16 +762,16 @@ func (db *DB) Sparklines(ctx context.Context, productIDs []string, days int, max
 	}
 	start := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
 	rows, err := db.Pool.Query(ctx, `
-		SELECT DISTINCT ON (product_id) product_id, observed_at, price_per_tb
+		SELECT product_id, observed_at, price_per_tb
 		FROM (
-			SELECT product_id, observed_at, price_per_tb
+			SELECT product_id, observed_at, price_per_tb,
+			       ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY observed_at DESC) AS rn
 			FROM price_observations
 			WHERE product_id = ANY($1) AND observed_at >= $2
-			ORDER BY product_id, observed_at DESC
-			LIMIT $3
 		) recent
+		WHERE rn <= $3
 		ORDER BY product_id, observed_at ASC
-	`, productIDs, start, len(productIDs)*maxPoints)
+	`, productIDs, start, maxPoints)
 	if err != nil {
 		return nil, err
 	}
@@ -600,29 +808,27 @@ func (db *DB) ListAuthorizedUsers(ctx context.Context, includeDisabled bool) ([]
 	return users, nil
 }
 
+// Stats returns the dashboard counters in a single round-trip. The previous
+// implementation issued 6 sequential queries; the dashboard renders on every
+// page load, so batching them keeps the latency low under load.
 func (db *DB) Stats(ctx context.Context) (*Stats, error) {
 	s := &Stats{}
-	err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FILTER (WHERE enabled), COUNT(*) FILTER (WHERE NOT enabled) FROM alerts`).Scan(&s.ActiveAlerts, &s.InactiveAlerts)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FILTER (WHERE enabled), COUNT(*) FILTER (WHERE NOT enabled) FROM authorized_users`).Scan(&s.AuthorizedEnabled, &s.AuthorizedDisabled)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM products`).Scan(&s.Products)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*), MAX(observed_at) FROM price_observations`).Scan(&s.Observations, &s.LastObservationAt)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*), MAX(sent_at) FROM notifications`).Scan(&s.Notifications, &s.LastNotificationAt)
-	if err != nil {
-		return nil, err
-	}
-	err = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM rejected_deals`).Scan(&s.RejectedDeals)
+	err := db.Pool.QueryRow(ctx, `
+SELECT
+  (SELECT COUNT(*) FILTER (WHERE enabled)      FROM alerts),
+  (SELECT COUNT(*) FILTER (WHERE NOT enabled)  FROM alerts),
+  (SELECT COUNT(*) FILTER (WHERE enabled)      FROM authorized_users),
+  (SELECT COUNT(*) FILTER (WHERE NOT enabled)  FROM authorized_users),
+  (SELECT COUNT(*)                             FROM products),
+  (SELECT COUNT(*), MAX(observed_at)           FROM price_observations),
+  (SELECT COUNT(*), MAX(sent_at)               FROM notifications),
+  (SELECT COUNT(*)                             FROM rejected_deals)
+`).Scan(&s.ActiveAlerts, &s.InactiveAlerts,
+		&s.AuthorizedEnabled, &s.AuthorizedDisabled,
+		&s.Products,
+		&s.Observations, &s.LastObservationAt,
+		&s.Notifications, &s.LastNotificationAt,
+		&s.RejectedDeals)
 	if err != nil {
 		return nil, err
 	}

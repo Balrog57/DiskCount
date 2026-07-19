@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
 	"github.com/Balrog57/DiskCount/internal/parsing"
@@ -103,7 +102,7 @@ func enrich(d domain.Deal) domain.Deal {
 		d.Interfaces = parsing.NormalizeInterfaces(classText)
 	}
 	if len(d.Interfaces) == 0 && d.DriveCategory != nil {
-		d.Interfaces = inferInterfaces(*d.DriveCategory)
+		d.Interfaces = parsing.DefaultInterfacesForCategory(*d.DriveCategory)
 	}
 	if d.RecordingMethod == nil {
 		d.RecordingMethod = parsing.NormalizeRecordingMethod(classText, d.MediaType)
@@ -170,21 +169,6 @@ func rejected(d domain.Deal, reason, detail string) Result {
 	return Result{Deal: d, Reject: &Reject{Reason: reason, Detail: detail}}
 }
 
-func inferInterfaces(cat domain.DriveCategory) []domain.DriveInterface {
-	switch cat {
-	case domain.DriveCategoryInternal3_5, domain.DriveCategoryInternal2_5, domain.DriveCategoryInternalHybrid, domain.DriveCategoryInternalSSD, domain.DriveCategoryM2SATA:
-		return []domain.DriveInterface{domain.DriveInterfaceSATA}
-	case domain.DriveCategoryExternal3_5, domain.DriveCategoryExternal2_5, domain.DriveCategoryExternalSSD:
-		return []domain.DriveInterface{domain.DriveInterfaceUSB}
-	case domain.DriveCategoryM2NVMe, domain.DriveCategoryU2U3:
-		return []domain.DriveInterface{domain.DriveInterfaceNVMe}
-	case domain.DriveCategoryInternalSAS:
-		return []domain.DriveInterface{domain.DriveInterfaceSAS}
-	default:
-		return nil
-	}
-}
-
 func cleanTitle(s string) string {
 	s = strings.TrimSpace(strings.Join(strings.Fields(s), " "))
 	s = strings.Trim(s, "-|")
@@ -199,32 +183,59 @@ func host(raw string) string {
 	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 }
 
+// knownBrands is the canonical list of brands we recognise. It is matched
+// case-insensitively against the full title so brands appear even when the
+// title does not start with them (e.g. "2 To Seagate IronWolf" → "Seagate").
+// The list mirrors the brand picker exposed in the Telegram bot so an alert
+// configured by brand matches the same spelling the normaliser produces.
+var knownBrands = []string{
+	"Seagate", "Western Digital", "WD", "Toshiba", "Samsung",
+	"Crucial", "Kingston", "HGST", "Micron", "SanDisk", "Lexar",
+	"ADATA", "Corsair", "PNY", "Intel", "Kioxia", "LaCie",
+	"Maxtor", "Fujitsu", "G-Technology", "OWC",
+}
+
+// inferBrand returns the brand of a drive by scanning the title for any
+// known brand, case-insensitively. The previous implementation took the
+// first whitespace token of the title, which mis-classified titles that
+// begin with a capacity (e.g. "2 To Seagate ..." → brand "2") and so both
+// polluted the products.brand column and silently broke brand-based alert
+// filtering. Matching the whole title against a curated list is far more
+// accurate and avoids storing junk brands for unrecognised titles.
 func inferBrand(title string) string {
-	fields := strings.Fields(title)
-	if len(fields) == 0 {
+	if title == "" {
 		return ""
 	}
-	brand := strings.Trim(fields[0], "[](){}:,;")
-	for _, r := range brand {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '-' {
-			return ""
+	lower := strings.ToLower(title)
+	// Check "Western Digital" before "WD" — longer match wins so we don't
+	// label a "Western Digital Red" drive as "WD".
+	for _, b := range knownBrands {
+		if strings.Contains(lower, strings.ToLower(b)) {
+			return b
 		}
 	}
-	if len(brand) > 32 {
-		return ""
-	}
-	return brand
+	return ""
+}
+
+// unsupportedTerms lists the substrings that mark a listing as NOT a
+// standalone HDD/SSD (RAM, laptops, GPUs, flash cards, USB sticks, ...).
+//
+// ⚡ Bolt optimization: hoisted to a package-level var so normalize.Deal
+// does not allocate a fresh ~30-element slice on every call. With ~200
+// deals per scan this avoids ~6000 short-lived slice headers per scan,
+// which is the dominant allocation in the normalize hot path. All terms
+// are lowercase; unsupportedProduct lowercases the title before matching.
+var unsupportedTerms = []string{
+	"ddr", "sodimm", "so-dimm", "udimm", "mémoire ram", "memoire ram", "ram ",
+	"ordinateur portable", "pc portable", "notebook", "laptop", "mini pc", "desktop pc",
+	"intel core", "ryzen", "rtx", "geforce", "radeon", "clavier",
+	"compactflash", "cfexpress", "cf card", "carte cf", "carte cfe", "sd card",
+	"carte mémoire", "carte memoire", "usb flash drive", "clé usb", "cle usb",
 }
 
 func unsupportedProduct(title string) bool {
 	t := strings.ToLower(title)
-	for _, term := range []string{
-		"ddr", "sodimm", "so-dimm", "udimm", "mémoire ram", "memoire ram", "ram ",
-		"ordinateur portable", "pc portable", "notebook", "laptop", "mini pc", "desktop pc",
-		"intel core", "ryzen", "rtx", "geforce", "radeon", "clavier",
-		"compactflash", "cfexpress", "cf card", "carte cf", "carte cfe", "sd card",
-		"carte mémoire", "carte memoire", "usb flash drive", "clé usb", "cle usb",
-	} {
+	for _, term := range unsupportedTerms {
 		if strings.Contains(t, term) {
 			return true
 		}

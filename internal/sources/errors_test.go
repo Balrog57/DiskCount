@@ -3,6 +3,8 @@ package sources
 import (
 	"errors"
 	"testing"
+
+	"github.com/Balrog57/DiskCount/internal/scraper"
 )
 
 func TestClassifyUnknownWhenNil(t *testing.T) {
@@ -71,6 +73,28 @@ func TestConfigHelperCarriesHint(t *testing.T) {
 	got := Format(err)
 	if !contains(got, "set EBAY_CLIENT_ID") {
 		t.Fatalf("Format should include hint, got %q", got)
+	}
+}
+
+// TestClassifyScraperFetchError locks in the unified taxonomy: a raw
+// *scraper.FetchError (not wrapped in *SourceError) must still classify
+// to the matching sources.Severity, so the scanner's health tracking
+// works whether or not a source remembered to wrap the error.
+func TestClassifyScraperFetchError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  *scraper.FetchError
+		want Severity
+	}{
+		{"transient", scraper.NewTransientError("u", 0, "timeout", nil), SeverityTransient},
+		{"auth", scraper.NewAuthError("u", 401, "no perms", nil), SeverityAuth},
+		{"parse", scraper.NewParseError("u", "bad json", nil), SeveritySchema},
+		{"permanent", scraper.NewPermanentError("u", 404, "gone", nil), SeveritySelector},
+	}
+	for _, c := range cases {
+		if got := Classify(c.err); got != c.want {
+			t.Errorf("%s: Classify = %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 

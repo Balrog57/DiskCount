@@ -48,7 +48,7 @@ type FeedSource struct {
 	name string
 	urls []string
 	def  domain.Condition
-	http *scraper.HTTPFetcher
+	http scraper.Fetcher
 }
 
 func (s *FeedSource) Name() string { return s.name }

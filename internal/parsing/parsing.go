@@ -130,17 +130,41 @@ func ParseCapacityTB(text string) (float64, error) {
 	return value, nil
 }
 
+// conditionUsedWords / conditionNewWords / ssdWords / hddWords and the
+// category keyword lists below are the substrings used by the Normalize*
+// classifiers.
+//
+// ⚡ Bolt optimization: hoisted to package-level vars so the classifiers do
+// not allocate a fresh slice literal on every call. Each Normalize* function
+// runs once per accepted deal in the normalize pipeline (and again inside
+// parseDiskPrices per row), so a 200-deal scan previously allocated ~200
+// copies of each list. All entries are ASCII constants with no per-call
+// state and are matched against asciiFold-stripped text, so they must stay
+// accent-free (see bolt.md asciiFold note).
+var (
+	conditionUsedWords = []string{"used", "occasion", "reconditionne", "reconditionne", "refurbished", "renewed", "seconde main"}
+	conditionNewWords  = []string{"new", "neuf", "neuve"}
+
+	ssdWords = []string{"ssd", "nvme", "solid state", "nand", "tlc", "qlc", "mlc", "m2", "m 2", "pcie", "pci-e", "u2", "u 2", "u3", "u 3"}
+	hddWords = []string{"hdd", "disque dur", "hard drive", "hard disk", "7200rpm", "5400rpm", "7200 tr", "5400 tr"}
+
+	externalWords = []string{"external", "externe", "portable", "usb", "boitier"}
+	internalWords = []string{"internal", "interne", "m2", "m 2", "u2", "u 2", "u3", "u 3", "sata", "sas", "nas", "surveillance"}
+
+	m2NvmeWords = []string{"m2 nvme", "m 2 nvme", "nvme"}
+	m2SataWords = []string{"m2 sata", "m 2 sata"}
+	u2u3Words   = []string{"u2", "u 2", "u3", "u 3"}
+)
+
 func NormalizeCondition(text string) *domain.Condition {
 	folded := asciiFold(text)
-	usedWords := []string{"used", "occasion", "reconditionne", "reconditionne", "refurbished", "renewed", "seconde main"}
-	newWords := []string{"new", "neuf", "neuve"}
-	for _, w := range usedWords {
+	for _, w := range conditionUsedWords {
 		if strings.Contains(folded, w) {
 			c := domain.ConditionUsed
 			return &c
 		}
 	}
-	for _, w := range newWords {
+	for _, w := range conditionNewWords {
 		if strings.Contains(folded, w) {
 			c := domain.ConditionNew
 			return &c
@@ -151,8 +175,6 @@ func NormalizeCondition(text string) *domain.Condition {
 
 func NormalizeMediaType(text string) *domain.MediaType {
 	folded := asciiFold(text)
-	ssdWords := []string{"ssd", "nvme", "solid state", "nand", "tlc", "qlc", "mlc", "m2", "m 2", "pcie", "pci-e", "u2", "u 2", "u3", "u 3"}
-	hddWords := []string{"hdd", "disque dur", "hard drive", "hard disk", "7200rpm", "5400rpm", "7200 tr", "5400 tr"}
 	for _, w := range ssdWords {
 		if strings.Contains(folded, w) {
 			m := domain.MediaTypeSolidState
@@ -175,14 +197,14 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 	compact = strings.ReplaceAll(compact, "-", " ")
 
 	isExternal := false
-	for _, w := range []string{"external", "externe", "portable", "usb", "boitier"} {
+	for _, w := range externalWords {
 		if strings.Contains(compact, w) {
 			isExternal = true
 			break
 		}
 	}
 	isInternal := false
-	for _, w := range []string{"internal", "interne", "m2", "m 2", "u2", "u 2", "u3", "u 3", "sata", "sas", "nas", "surveillance"} {
+	for _, w := range internalWords {
 		if strings.Contains(compact, w) {
 			isInternal = true
 			break
@@ -190,19 +212,19 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 	}
 
 	if mediaType != nil && *mediaType == domain.MediaTypeSolidState {
-		for _, w := range []string{"m2 nvme", "m 2 nvme", "nvme"} {
+		for _, w := range m2NvmeWords {
 			if strings.Contains(compact, w) {
 				c := domain.DriveCategoryM2NVMe
 				return &c
 			}
 		}
-		for _, w := range []string{"m2 sata", "m 2 sata"} {
+		for _, w := range m2SataWords {
 			if strings.Contains(compact, w) {
 				c := domain.DriveCategoryM2SATA
 				return &c
 			}
 		}
-		for _, w := range []string{"u2", "u 2", "u3", "u 3"} {
+		for _, w := range u2u3Words {
 			if strings.Contains(compact, w) {
 				c := domain.DriveCategoryU2U3
 				return &c
@@ -274,6 +296,53 @@ func NormalizeInterfaces(text string) []domain.DriveInterface {
 	return ifaces
 }
 
+// DefaultInterfacesForCategory is the single source of truth for the
+// "if no explicit interface was detected, infer one from the drive category"
+// mapping. It was previously duplicated verbatim in four places
+// (normalize.inferInterfaces, sources.defaultInterfacesForCategory, and
+// inline in diskprices/pricepertb). Centralising it here means a future
+// change to the table only touches one file.
+func DefaultInterfacesForCategory(dc domain.DriveCategory) []domain.DriveInterface {
+	switch dc {
+	case domain.DriveCategoryInternal3_5, domain.DriveCategoryInternal2_5,
+		domain.DriveCategoryInternalHybrid, domain.DriveCategoryInternalSSD,
+		domain.DriveCategoryM2SATA:
+		return []domain.DriveInterface{domain.DriveInterfaceSATA}
+	case domain.DriveCategoryExternal3_5, domain.DriveCategoryExternal2_5,
+		domain.DriveCategoryExternalSSD:
+		return []domain.DriveInterface{domain.DriveInterfaceUSB}
+	case domain.DriveCategoryM2NVMe, domain.DriveCategoryU2U3:
+		return []domain.DriveInterface{domain.DriveInterfaceNVMe}
+	case domain.DriveCategoryInternalSAS:
+		return []domain.DriveInterface{domain.DriveInterfaceSAS}
+	}
+	return nil
+}
+
+// cmrFamilies and smrFamilies list the model-family substrings that imply a
+// drive's recording method when no explicit "CMR"/"SMR" label is present.
+//
+// ⚡ Bolt optimization: hoisted to package-level vars so NormalizeRecordingMethod
+// does not allocate two fresh slices on every call. It runs once per accepted
+// HDD deal in the normalize pipeline and once per row in parseDiskPrices, so
+// a single scan previously allocated ~400 short-lived slices (~23 entries
+// each) just for recording-method detection. All entries are ASCII constants
+// with no per-call state.
+var (
+	cmrFamilies = []string{
+		"exos", "ironwolf", "wd red plus", "red plus", "ultrastar",
+		"wd gold", "wdgold", "seagate skyhawk", "skyhawk",
+		"toshiba mg", "toshiba mn", "mg07", "mg08", "mg09", "mg10",
+		"hgst", "enterprise capacity",
+	}
+	smrFamilies = []string{
+		"wd red ", " wd red,", " wd red-", // base WD Red (not "Plus")
+		"barracuda", "archive", "smrdata",
+		"toshiba l200", "toshiba md3004", "l200",
+		"seagate enterprise smr",
+	}
+)
+
 // NormalizeRecordingMethod infers whether a rotational drive uses CMR or SMR.
 // This only applies to HDDs; SSDs return nil. Detection priority:
 //  1. Explicit "CMR"/"conventional" or "SMR"/"shingled" in the title/tech text.
@@ -299,13 +368,7 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		return &c
 	}
 
-	// Known CMR families.
-	cmrFamilies := []string{
-		"exos", "ironwolf", "wd red plus", "red plus", "ultrastar",
-		"wd gold", "wdgold", "seagate skyhawk", "skyhawk",
-		"toshiba mg", "toshiba mn", "mg07", "mg08", "mg09", "mg10",
-		"hgst", "enterprise capacity",
-	}
+	// Known CMR families (package-level var; see cmrFamilies comment).
 	for _, f := range cmrFamilies {
 		if strings.Contains(folded, f) {
 			c := domain.RecordingMethodCMR
@@ -313,13 +376,7 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		}
 	}
 
-	// Known SMR families.
-	smrFamilies := []string{
-		"wd red ", " wd red,", " wd red-", // base WD Red (not "Plus")
-		"barracuda", "archive", "smrdata",
-		"toshiba l200", "toshiba md3004", "l200",
-		"seagate enterprise smr",
-	}
+	// Known SMR families (package-level var; see smrFamilies comment).
 	for _, f := range smrFamilies {
 		if strings.Contains(folded, f) {
 			c := domain.RecordingMethodSMR

@@ -23,7 +23,7 @@ func init() {
 }
 
 type PricePerTB struct {
-	http   *scraper.HTTPFetcher
+	http   scraper.Fetcher
 	byparr *scraper.ByparrClient
 	urls   []string
 	useFB  bool
@@ -132,16 +132,7 @@ func parsePTB(html, baseURL string) []domain.Deal {
 		dc := parsing.NormalizeDriveCategory(classText, media)
 		ifaces := parsing.NormalizeInterfaces(classText)
 		if len(ifaces) == 0 && dc != nil {
-			switch *dc {
-			case domain.DriveCategoryInternal3_5, domain.DriveCategoryInternal2_5, domain.DriveCategoryInternalHybrid, domain.DriveCategoryInternalSSD, domain.DriveCategoryM2SATA:
-				ifaces = append(ifaces, domain.DriveInterfaceSATA)
-			case domain.DriveCategoryExternal3_5, domain.DriveCategoryExternal2_5, domain.DriveCategoryExternalSSD:
-				ifaces = append(ifaces, domain.DriveInterfaceUSB)
-			case domain.DriveCategoryM2NVMe, domain.DriveCategoryU2U3:
-				ifaces = append(ifaces, domain.DriveInterfaceNVMe)
-			case domain.DriveCategoryInternalSAS:
-				ifaces = append(ifaces, domain.DriveInterfaceSAS)
-			}
+			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 
 		cond := domain.ConditionNew

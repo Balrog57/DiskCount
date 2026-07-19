@@ -364,6 +364,24 @@ func (f *HTTPFetcher) isBlocked(body string) (bool, string) {
 	return false, ""
 }
 
+// Fetcher is the contract every source depends on. *HTTPFetcher implements
+// it directly; *RetryingFetcher wraps an *HTTPFetcher and retries only the
+// transient Get failures. PostWithHeaders and GetWithAuth are delegated
+// without retry (token endpoints and authenticated API calls have their own
+// backoff requirements and are not on the hot scraping path).
+//
+// Sources hold a Fetcher rather than a concrete *HTTPFetcher so the registry
+// can hand them the retrying variant transparently — this is what makes the
+// RETRY_MAX_ATTEMPTS / RETRY_BASE_DELAY_SECONDS / RETRY_MAX_DELAY_SECONDS
+// settings actually take effect. Without this indirection every source was
+// calling *HTTPFetcher.Get directly and the configured retry policy was dead.
+type Fetcher interface {
+	Get(ctx context.Context, url string) (string, error)
+	PostJSON(ctx context.Context, url string, body io.Reader) (string, error)
+	PostWithHeaders(ctx context.Context, url, body string, headers map[string]string) (string, error)
+	GetWithAuth(ctx context.Context, url, bearer string) (string, error)
+}
+
 // RetryingFetcher wraps an HTTPFetcher with bounded exponential-backoff
 // retries. Only ErrKindTransient errors are retried; permanent, auth and parse
 // errors propagate immediately. Retry-After headers are honoured for 429/503
@@ -378,6 +396,24 @@ func NewRetryingFetcher(fetcher *HTTPFetcher, config RetryConfig) *RetryingFetch
 		config.MaxRetries = 0
 	}
 	return &RetryingFetcher{fetcher: fetcher, config: config}
+}
+
+// PostJSON delegates to the inner fetcher. POST endpoints (token exchanges,
+// API submissions) are not retried here: they are not on the hot scraping
+// path and each has its own idempotency rules.
+func (rf *RetryingFetcher) PostJSON(ctx context.Context, url string, body io.Reader) (string, error) {
+	return rf.fetcher.PostJSON(ctx, url, body)
+}
+
+// PostWithHeaders delegates to the inner fetcher (see PostJSON note).
+func (rf *RetryingFetcher) PostWithHeaders(ctx context.Context, url, body string, headers map[string]string) (string, error) {
+	return rf.fetcher.PostWithHeaders(ctx, url, body, headers)
+}
+
+// GetWithAuth delegates to the inner fetcher. Authenticated API calls manage
+// their own rate limiting and would double-count against a retry budget.
+func (rf *RetryingFetcher) GetWithAuth(ctx context.Context, url, bearer string) (string, error) {
+	return rf.fetcher.GetWithAuth(ctx, url, bearer)
 }
 
 func (rf *RetryingFetcher) Get(ctx context.Context, url string) (string, error) {

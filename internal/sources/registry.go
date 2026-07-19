@@ -12,7 +12,7 @@ type SourceFactory func(reg *Registry) Source
 
 type Registry struct {
 	cfg    *config.Config
-	http   *scraper.HTTPFetcher
+	http   scraper.Fetcher
 	retry  *scraper.RetryingFetcher
 	byparr *scraper.ByparrClient
 }
@@ -48,16 +48,21 @@ func NewRegistry(cfg *config.Config) *Registry {
 
 	return &Registry{
 		cfg:    cfg,
-		http:   fetcher,
+		http:   retry, // sources get the retrying fetcher so RETRY_* config takes effect
 		retry:  retry,
 		byparr: scraper.NewByparrClient(cfg.ByparrURL),
 	}
 }
 
-func (r *Registry) HTTP() *scraper.HTTPFetcher     { return r.http }
-func (r *Registry) Retry() *scraper.RetryingFetcher { return r.retry }
-func (r *Registry) Byparr() *scraper.ByparrClient  { return r.byparr }
-func (r *Registry) Config() *config.Config         { return r.cfg }
+// HTTP returns the fetcher sources should use. It is the retrying variant,
+// so every source that calls .Get() transparently honours the RETRY_*
+// configuration. Use RawHTTP() in the rare case a caller needs the
+// underlying *HTTPFetcher (e.g. to reach a private helper that is not on
+// the Fetcher interface).
+func (r *Registry) HTTP() scraper.Fetcher            { return r.http }
+func (r *Registry) Retry() *scraper.RetryingFetcher  { return r.retry }
+func (r *Registry) Byparr() *scraper.ByparrClient    { return r.byparr }
+func (r *Registry) Config() *config.Config           { return r.cfg }
 
 func Register(fn SourceFactory) { registeredFactories = append(registeredFactories, fn) }
 

@@ -34,7 +34,7 @@ func init() {
 // history stats. Keepa stores prices in cents and timestamps as Keepa minutes
 // (Unix minutes), so conversions are needed.
 type Keepa struct {
-	http    *scraper.HTTPFetcher
+	http    scraper.Fetcher
 	apiKey  string
 	asins   []string
 	domain  int

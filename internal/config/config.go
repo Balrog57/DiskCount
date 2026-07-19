@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type SettingMeta struct {
@@ -357,3 +358,30 @@ func isValidURL(raw string) bool {
 	_, err := url.Parse(raw)
 	return err == nil
 }
+
+// ParseScrapeInterval is the single source of truth for interpreting the
+// SCRAPE_INTERVAL_CRON setting. The scheduler (scanner.ScheduleLoop) and the
+// web dashboard ("prochain scan" countdown) both call it so they agree on
+// the cadence.
+//
+// Currently only the "@every <duration>" form is supported (e.g.
+// "@every 4h", "@every 30m"). Real cron expressions are rejected (ok=false)
+// rather than silently downgraded to a default — the previous behaviour
+// silently turned any unrecognised spec into a 4h interval, which made it
+// impossible to tell whether a custom cadence was being honoured.
+func ParseScrapeInterval(spec string) (time.Duration, bool) {
+	spec = strings.TrimSpace(spec)
+	after, ok := strings.CutPrefix(spec, "@every ")
+	if !ok {
+		return 0, false
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(after))
+	if err != nil || d <= 0 {
+		return 0, false
+	}
+	return d, true
+}
+
+// DefaultScrapeInterval is the fallback used by the scheduler when the
+// configured spec cannot be parsed. It matches AppSettings["SCRAPE_INTERVAL_CRON"].
+const DefaultScrapeInterval = 4 * time.Hour
