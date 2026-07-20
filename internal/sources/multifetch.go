@@ -131,9 +131,8 @@ func fetchWithByparrFallback(
 	parse func(html, baseURL string) []domain.Deal,
 ) ([]domain.Deal, error) {
 	res := fetchMultiURL(ctx, sourceName, http, byparr, urls, useFB, parse)
-	if err := res.asTransientError(sourceName); err != nil {
-		return nil, err
-	}
+	// Even if all HTTP URLs failed, retry via Byparr — the VPN may have
+	// access to hosts the direct connection cannot reach.
 	if len(res.deals) == 0 && useFB && byparr != nil {
 		for _, u := range urls {
 			ses, err := byparr.GetPage(ctx, u)
@@ -143,7 +142,15 @@ func fetchWithByparrFallback(
 			}
 			res.deals = append(res.deals, parse(ses.HTML, u)...)
 		}
-		slog.Debug(sourceName, "byparr_deals", len(res.deals))
+		slog.Info("byparr retry done", "src", sourceName, "n_urls", len(urls), "n_deals", len(res.deals))
+	}
+	// Only return a Transient error from the HTTP round if Byparr also
+	// produced zero deals. Otherwise the circuit breaker never trips even
+	// though the source is effectively dead.
+	if len(res.deals) == 0 {
+		if err := res.asTransientError(sourceName); err != nil {
+			return nil, err
+		}
 	}
 	return res.deals, nil
 }
