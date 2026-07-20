@@ -38,19 +38,17 @@ func (s *LDLC) Name() string { return "ldlc" }
 func (s *LDLC) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "ldlc",
-		Description: "LDLC.com (HDD/SSD, EUR)",
+		Description: "LDLC.com (HDD/SSD, EUR) — SPA, Byparr recommande",
 		Categories:  []string{"scraping"},
-		Requires:    []string{"LDLC_URLS"},
+		Requires:    []string{"LDLC_URLS", "BYPARR_URL"},
 		Version:     "2",
 	}
 }
 
+// Fetch first tries HTTP, then falls back to Byparr if the page returns no
+// products (LDLC search results are injected via JS).
 func (s *LDLC) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseLDLC)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseLDLC)
 }
 
 // parseLDLCPrice handles the LDLC price format "219€95" where the euro sign

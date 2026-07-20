@@ -38,19 +38,17 @@ func (s *Boulanger) Name() string { return "boulanger" }
 func (s *Boulanger) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "boulanger",
-		Description: "Boulanger.com (HDD/SSD, EUR)",
+		Description: "Boulanger.com (HDD/SSD, EUR) — SPA, Byparr recommande",
 		Categories:  []string{"scraping"},
-		Requires:    []string{"BOULANGER_URLS"},
+		Requires:    []string{"BOULANGER_URLS", "BYPARR_URL"},
 		Version:     "2",
 	}
 }
 
+// Fetch first tries HTTP, then falls back to Byparr if the page returns no
+// products (Boulanger is a SPA — the server HTML is an empty shell without JS).
 func (s *Boulanger) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseBoulanger)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseBoulanger)
 }
 
 // parseBoulanger scrapes Boulanger listing pages. Verified against the real

@@ -112,3 +112,38 @@ func (r multiURLFetchResult) errorSummary() string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// fetchWithByparrFallback is a convenience wrapper for sources that serve
+// an SPA shell or an anti-bot challenge page to HTTP clients but render the
+// real product listing when JavaScript is executed (Byparr). It first tries
+// the standard fetchMultiURL path; if that yields zero deals and both the
+// headless fallback flag and the Byparr client are configured, it retries
+// every URL via Byparr and parses the rendered HTML with the same parse
+// function. The Byparr errors are logged but do not cause the overall fetch
+// to fail — only deals from successful renders are returned.
+func fetchWithByparrFallback(
+	ctx context.Context,
+	sourceName string,
+	http scraper.Fetcher,
+	byparr *scraper.ByparrClient,
+	urls []string,
+	useFB bool,
+	parse func(html, baseURL string) []domain.Deal,
+) ([]domain.Deal, error) {
+	res := fetchMultiURL(ctx, sourceName, http, byparr, urls, useFB, parse)
+	if err := res.asTransientError(sourceName); err != nil {
+		return nil, err
+	}
+	if len(res.deals) == 0 && useFB && byparr != nil {
+		for _, u := range urls {
+			ses, err := byparr.GetPage(ctx, u)
+			if err != nil {
+				slog.Warn(sourceName, "byparr", u, "err", err)
+				continue
+			}
+			res.deals = append(res.deals, parse(ses.HTML, u)...)
+		}
+		slog.Debug(sourceName, "byparr_deals", len(res.deals))
+	}
+	return res.deals, nil
+}

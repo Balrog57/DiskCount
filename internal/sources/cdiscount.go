@@ -44,12 +44,9 @@ func (s *Cdiscount) Info() SourceInfo {
 	}
 }
 
+// Fetch first tries HTTP, then falls back to Byparr (Baleen JS anti-bot).
 func (s *Cdiscount) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseCdiscount)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseCdiscount)
 }
 
 func parseCdiscount(html, baseURL string) []domain.Deal {

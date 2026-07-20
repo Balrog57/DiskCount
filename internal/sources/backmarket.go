@@ -51,12 +51,9 @@ func (s *Backmarket) Info() SourceInfo {
 	}
 }
 
+// Fetch first tries HTTP, then falls back to Byparr (bot detection).
 func (s *Backmarket) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseBackmarket)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseBackmarket)
 }
 
 func parseBackmarket(html, baseURL string) []domain.Deal {

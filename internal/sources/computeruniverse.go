@@ -46,12 +46,9 @@ func (s *Computeruniverse) Info() SourceInfo {
 	}
 }
 
+// Fetch first tries HTTP, then falls back to Byparr (403 without browser UA).
 func (s *Computeruniverse) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseComputeruniverse)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseComputeruniverse)
 }
 
 func parseComputeruniverse(html, baseURL string) []domain.Deal {
