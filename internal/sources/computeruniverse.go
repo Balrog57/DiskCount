@@ -57,7 +57,7 @@ func parseComputeruniverse(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	doc.Find("article.c-productTile").Each(func(_ int, s *goquery.Selection) {
+	doc.Find("article.c-productTile, div[data-product-id], a[class*='product']").Each(func(_ int, s *goquery.Selection) {
 		linkEl := s.Find("a.c-productTile__title")
 		title := strings.TrimSpace(linkEl.Text())
 		if title == "" {

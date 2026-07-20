@@ -92,64 +92,45 @@ func parseLDLC(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	seen := make(map[string]bool)
-	// LDLC search results render products as blocks containing a link to
-	// /fiche/PBxxxxxx.html. We select by that link pattern which is stable
-	// across their redesigns.
-	doc.Find("a[href*='/fiche/PB']").Each(func(_ int, linkEl *goquery.Selection) {
-		href, _ := linkEl.Attr("href")
-		href = absolutizeURL(baseURL, strings.TrimSpace(href))
-		if href == "" || !strings.Contains(href, "/fiche/PB") {
+	// LDLC search results render each product as li.pdt-item containing
+	// a /fiche/PBxxxxx.html link and a price span.
+	doc.Find("li.pdt-item").Each(func(_ int, s *goquery.Selection) {
+		// Find the product link — there may be several /fiche/PB links
+		// (image, title, rating). Pick the first one with a title.
+		var href, title string
+		s.Find("a[href*='/fiche/PB']").Each(func(_ int, linkEl *goquery.Selection) {
+			if title != "" {
+				return // already found a valid link
+			}
+			t := strings.TrimSpace(linkEl.Text())
+			if t == "" || strings.Contains(t, "avis") {
+				return
+			}
+			h, _ := linkEl.Attr("href")
+			h = absolutizeURL(baseURL, strings.TrimSpace(h))
+			if h != "" && strings.Contains(h, "/fiche/PB") {
+				href = h
+				title = t
+			}
+		})
+		if href == "" || title == "" {
 			return
 		}
-		// Strip fragment to deduplicate (image, title, and rating links
-		// all point to the same /fiche/PBxxxxx.html with different #fragments).
 		href = strings.SplitN(href, "#", 2)[0]
-		if seen[href] {
-			return
-		}
-		title := strings.TrimSpace(linkEl.Text())
-		// Skip image links (empty text, just an <img>) and rating links
-		// ("N avis"). Only the title link has the real product name.
-		if title == "" || strings.Contains(title, "avis") {
-			return
-		}
-		seen[href] = true
-		// Find the enclosing product block by climbing to the closest
-		// container that also holds the price. The exact class varies
-		// across LDLC redesigns, so we search up to 5 levels.
-		block := linkEl
+		// LDLC prices: the price element contains text like "219€95"
+		// (euros + centimes joined by the € sign) or "219€" (no centimes).
 		priceText := ""
-		desc := ""
-		for i := 0; i < 5; i++ {
-			// Prefer the specific .newprice element, then fall back to
-			// generic price selectors.
-			priceEl := block.Find(".newprice")
-			if priceEl.Length() == 0 {
-				priceEl = block.Find("[class*='price-amount'], .price__amount")
+		s.Find("[class*='price']").Each(func(_ int, el *goquery.Selection) {
+			t := strings.TrimSpace(el.Text())
+			if t != "" && strings.Contains(t, "€") {
+				priceText = t
 			}
-			if priceEl.Length() > 0 {
-				priceText = strings.TrimSpace(priceEl.First().Text())
-				if priceText != "" {
-					break
-				}
-			}
-			// Also grab the description if we find it at this level.
-			if desc == "" {
-				descEl := block.Find("p.desc, p.description, .desc, .description")
-				if descEl.Length() > 0 {
-					desc = strings.TrimSpace(descEl.First().Text())
-				}
-			}
-			block = block.Parent()
-			if block.Length() == 0 {
-				break
-			}
-		}
+		})
 		priceEUR, err := parseLDLCPrice(priceText)
 		if err != nil || priceEUR <= 0 {
 			return
 		}
+		desc := strings.TrimSpace(s.Find("p.desc, .desc, .description").First().Text())
 		capText := title + " " + desc
 		tb, err := parsing.ParseCapacityTB(capText)
 		if err != nil || tb <= 0 {

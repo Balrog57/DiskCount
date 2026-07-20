@@ -55,8 +55,11 @@ func parseCdiscount(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	doc.Find("li.prdtBloc").Each(func(_ int, s *goquery.Selection) {
-		linkEl := s.Find("a.prdtBloc-link")
+	doc.Find("li.prdtBloc, li.sc-dmzty, div[class*='product']").Each(func(_ int, s *goquery.Selection) {
+		linkEl := s.Find("a[class*='link'], a[class*='prdtBloc-link'], a[href*='/p/'], a[href*='fiche']").First()
+		if linkEl.Length() == 0 {
+			linkEl = s.Find("a").First()
+		}
 		title := strings.TrimSpace(linkEl.Text())
 		if title == "" {
 			return
@@ -66,7 +69,7 @@ func parseCdiscount(html, baseURL string) []domain.Deal {
 		if href == "" {
 			return
 		}
-		priceText := strings.TrimSpace(s.Find("span.price").Text())
+		priceText := strings.TrimSpace(s.Find("[class*='price'], .prdtPrice").First().Text())
 		priceEUR, err := parseFloatClean(priceText)
 		if err != nil || priceEUR <= 0 {
 			return
