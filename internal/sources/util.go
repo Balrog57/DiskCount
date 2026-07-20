@@ -24,9 +24,23 @@ func strPtr(s string) *string {
 
 func parseFloatClean(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	return strconv.ParseFloat(s, 64)
+
+	// ⚡ Bolt: Single-pass iteration replacing strings.ReplaceAll chain.
+	// We iterate over runes to properly handle multibyte characters (like € and \u00a0)
+	// and preserve invalid characters so strconv.ParseFloat can fail naturally,
+	// maintaining original strict parsing semantics.
+	var b strings.Builder
+	b.Grow(len(s))
+
+	for _, r := range s {
+		if r == '€' || r == '\u00a0' || r == ' ' {
+			continue
+		} else if r == ',' {
+			b.WriteRune('.')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+
+	return strconv.ParseFloat(b.String(), 64)
 }
