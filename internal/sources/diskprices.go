@@ -14,6 +14,9 @@ import (
 func init() {
 	Register(func(r *Registry) Source {
 		cfg := r.Config()
+		if cfg.DiskPricesURL == "" {
+			return nil
+		}
 		return &DiskPrices{
 			http:   r.HTTP(),
 			byparr: r.Byparr(),

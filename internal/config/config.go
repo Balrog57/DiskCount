@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -40,6 +41,22 @@ var AppSettings = []SettingMeta{
 	{"EBAY_CLIENT_ID", "eBay client ID", false, true, ""},
 	{"EBAY_CLIENT_SECRET", "eBay client secret", true, true, ""},
 	{"EBAY_SEARCH_QUERIES", "eBay search queries", false, true, ""},
+	{"EBAY_MARKETPLACES", "eBay marketplaces (CSV: EBAY_FR, EBAY_DE, EBAY_IT, EBAY_ES)", false, true, "EBAY_FR"},
+	{"KEEPA_DOMAINS", "Keepa domains (CSV: 3=DE, 4=FR, 6=IT, 7=ES)", false, true, ""},
+	{"MINDFACTORY_URLS", "Mindfactory URLs (CSV)", false, true, ""},
+	{"ALTERNATE_URLS", "Alternate URLs (CSV)", false, true, ""},
+	{"COMPUTERUNIVERSE_URLS", "Computeruniverse URLs (CSV)", false, true, ""},
+	{"PROSHOP_URLS", "ProShop URLs (CSV)", false, true, ""},
+	{"GEIZHALS_URLS", "Geizhals URLs (CSV)", false, true, ""},
+	{"LDLC_URLS", "LDLC URLs (CSV)", false, true, ""},
+	{"TOPACHAT_URLS", "TopAchat URLs (CSV)", false, true, ""},
+	{"GROSBILL_URLS", "Grosbill URLs (CSV)", false, true, ""},
+	{"FNAC_URLS", "Fnac/Darty URLs (CSV)", false, true, ""},
+	{"BOULANGER_URLS", "Boulanger URLs (CSV)", false, true, ""},
+	{"CDISCOUNT_URLS", "Cdiscount URLs (CSV)", false, true, ""},
+	{"RAKUTEN_URLS", "Rakuten FR URLs (CSV)", false, true, ""},
+	{"RUEDUCOMMERCE_URLS", "Rue du Commerce URLs (CSV)", false, true, ""},
+	{"BACKMARKET_URLS", "Back Market URLs (CSV)", false, true, ""},
 	{"SOURCE_HEADLESS_FALLBACK", "Headless fallback", false, true, "true"},
 	{"BYPARR_URL", "Byparr URL", false, true, "http://byparr:8191"},
 	{"NOTIFICATION_PRICE_DROP_PCT", "Notification price drop percent", false, true, "2.0"},
@@ -85,6 +102,22 @@ type Config struct {
 	EbayClientID             string
 	EbayClientSecret         string
 	EbaySearchQueries        []string
+	EbayMarketplaces         []string
+	KeepaDomains             []int
+	MindfactoryURLs          []string
+	AlternateURLs            []string
+	ComputeruniverseURLs     []string
+	ProshopURLs              []string
+	GeizhalsURLs             []string
+	LDLCURLs                 []string
+	TopachatURLs             []string
+	GrosbillURLs             []string
+	FnacURLs                 []string
+	BoulangerURLs            []string
+	CdiscountURLs            []string
+	RakutenURLs              []string
+	RueDuCommerceURLs        []string
+	BackmarketURLs           []string
 	HeadlessFallback         bool
 	ByparrURL                string
 	NotificationPriceDropPct float64
@@ -127,7 +160,11 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		values[k] = v
 	}
 
-	return &Config{
+	return loadConfig(values)
+}
+
+func loadConfig(values map[string]string) *Config {
+	cfg := &Config{
 		WebAdminPassword:      values["WEB_ADMIN_PASSWORD"],
 		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
 		DatabaseURL:           value(values, "DATABASE_URL", "postgres://localhost:5432/diskcount"),
@@ -149,6 +186,22 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		EbayClientID:          values["EBAY_CLIENT_ID"],
 		EbayClientSecret:      values["EBAY_CLIENT_SECRET"],
 		EbaySearchQueries:     splitCSV(values["EBAY_SEARCH_QUERIES"]),
+		EbayMarketplaces:      splitCSV(values["EBAY_MARKETPLACES"]),
+		KeepaDomains:          resolveKeepaDomains(values),
+		MindfactoryURLs:       splitCSV(values["MINDFACTORY_URLS"]),
+		AlternateURLs:         splitCSV(values["ALTERNATE_URLS"]),
+		ComputeruniverseURLs:  splitCSV(values["COMPUTERUNIVERSE_URLS"]),
+		ProshopURLs:           splitCSV(values["PROSHOP_URLS"]),
+		GeizhalsURLs:          splitCSV(values["GEIZHALS_URLS"]),
+		LDLCURLs:              splitCSV(values["LDLC_URLS"]),
+		TopachatURLs:          splitCSV(values["TOPACHAT_URLS"]),
+		GrosbillURLs:          splitCSV(values["GROSBILL_URLS"]),
+		FnacURLs:              splitCSV(values["FNAC_URLS"]),
+		BoulangerURLs:         splitCSV(values["BOULANGER_URLS"]),
+		CdiscountURLs:         splitCSV(values["CDISCOUNT_URLS"]),
+		RakutenURLs:           splitCSV(values["RAKUTEN_URLS"]),
+		RueDuCommerceURLs:     splitCSV(values["RUEDUCOMMERCE_URLS"]),
+		BackmarketURLs:        splitCSV(values["BACKMARKET_URLS"]),
 		HeadlessFallback:      parseBool(values["SOURCE_HEADLESS_FALLBACK"], true),
 		ByparrURL:             value(values, "BYPARR_URL", "http://byparr:8191"),
 		NotificationPriceDropPct: parseFloat(
@@ -175,6 +228,23 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 		AdminLocale:                 values["ADMIN_LOCALE"],
 		BackInStockHours:            parseFloat(values["BACK_IN_STOCK_HOURS"], 48),
 	}
+
+	// Warn about Keepa multi-domain timeout risk: the scanner wraps each
+	// source call with context.WithTimeout(ctx, RequestTimeoutSeconds).
+	// Keepa issues N_ASINs × M_domains requests at ~800ms each, so large
+	// multi-domain configs need a generously long REQUEST_TIMEOUT_SECONDS.
+	// 50 ASINs × 4 domains × 0.8s = 160s > default 30s → guaranteed timeout.
+	if len(cfg.KeepaDomains) > 2 && cfg.RequestTimeoutSeconds < 120 {
+		estimated := float64(len(cfg.KeepaASINs)*len(cfg.KeepaDomains)) * 0.8
+		slog.Warn("keepa multi-domaine: REQUEST_TIMEOUT_SECONDS risque de timeout",
+			"domains", len(cfg.KeepaDomains),
+			"asins", len(cfg.KeepaASINs),
+			"estime_s", estimated,
+			"timeout_s", cfg.RequestTimeoutSeconds,
+			"hint", "augmenter REQUEST_TIMEOUT_SECONDS >= 120 ou reduire KEEPA_DOMAINS",
+		)
+	}
+	return cfg
 }
 
 func DefaultValues() map[string]string {
@@ -289,6 +359,39 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func splitInts(s string) []int {
+	if s == "" {
+		return nil
+	}
+	var out []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		v, err := strconv.Atoi(p)
+		if err != nil || v <= 0 {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func resolveKeepaDomains(values map[string]string) []int {
+	domains := splitInts(values["KEEPA_DOMAINS"])
+	if len(domains) > 0 {
+		return domains
+	}
+	// backward-compat: single KEEPA_DOMAIN value
+	if v := values["KEEPA_DOMAIN"]; v != "" {
+		if d, err := strconv.Atoi(v); err == nil && d > 0 {
+			return []int{d}
+		}
+	}
+	return []int{4}
 }
 
 func (c *Config) Validate() []error {

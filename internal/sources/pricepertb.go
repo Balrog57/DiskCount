@@ -2,7 +2,6 @@ package sources
 
 import (
 	"context"
-	"log/slog"
 	"net/url"
 	"strings"
 
@@ -42,23 +41,11 @@ func (s *PricePerTB) Info() SourceInfo {
 }
 
 func (s *PricePerTB) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	var all []domain.Deal
-	for _, u := range s.urls {
-		html, err := s.http.Get(ctx, u)
-		if err != nil && s.useFB && s.byparr != nil {
-			if ses, e2 := s.byparr.GetPage(ctx, u); e2 == nil {
-				html = ses.HTML
-				err = nil
-			}
-		}
-		if err != nil {
-			slog.Warn("pricepertb", "url", u, "err", err)
-			continue
-		}
-		all = append(all, parsePTB(html, u)...)
+	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parsePTB)
+	if err := res.asTransientError(s.Name()); err != nil {
+		return nil, err
 	}
-	slog.Debug("pricepertb", "deals", len(all))
-	return all, nil
+	return res.deals, nil
 }
 
 func parsePTB(html, baseURL string) []domain.Deal {

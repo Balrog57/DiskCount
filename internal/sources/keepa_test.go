@@ -36,7 +36,7 @@ func TestKeepaFetchParsesProduct(t *testing.T) {
 	fetcher := newTestHTTPFetcher(t)
 	s := &Keepa{
 		http: fetcher, apiKey: "test-key", asins: []string{"B08XYZ1234"},
-		domain: 4, apiBase: srv.URL,
+		domains: []int{4}, apiBase: srv.URL,
 	}
 
 	deals, err := s.Fetch(context.Background())
@@ -81,7 +81,7 @@ func TestKeepaPriceFallback(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := newTestHTTPFetcher(t)
-	s := &Keepa{http: fetcher, apiKey: "k", asins: []string{"B00ABC"}, domain: 4, apiBase: srv.URL}
+	s := &Keepa{http: fetcher, apiKey: "k", asins: []string{"B00ABC"}, domains: []int{4}, apiBase: srv.URL}
 	deals, _ := s.Fetch(context.Background())
 	if len(deals) != 1 {
 		t.Fatalf("expected 1 deal, got %d", len(deals))
@@ -110,7 +110,7 @@ func TestKeepaNoPrice(t *testing.T) {
 	defer srv.Close()
 
 	fetcher := newTestHTTPFetcher(t)
-	s := &Keepa{http: fetcher, apiKey: "k", asins: []string{"X"}, domain: 4, apiBase: srv.URL}
+	s := &Keepa{http: fetcher, apiKey: "k", asins: []string{"X"}, domains: []int{4}, apiBase: srv.URL}
 	deals, _ := s.Fetch(context.Background())
 	if len(deals) != 0 {
 		t.Fatalf("expected 0 deals when all prices are -1, got %d", len(deals))
@@ -149,5 +149,90 @@ func TestKeepaPriceExtraction(t *testing.T) {
 				t.Errorf("keepaPrice(%v) = %.0f, want %.0f", c.current, got, c.want)
 			}
 		})
+	}
+}
+
+// TestKeepaMultiDomain verifies that Fetch queries every configured domain for
+// each ASIN and produces one deal per (ASIN × domain), with distinct Amazon
+// URLs. The plan (§Phase 2) explicitly requires this dedicated test: the
+// generic TestKeepaFetchParsesProduct only exercises a single domain.
+func TestKeepaMultiDomain(t *testing.T) {
+	var requestCount int
+	seenDomains := make(map[string]bool)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		dom := r.URL.Query().Get("domain")
+		seenDomains[dom] = true
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		// Title contains the domain so we can tell the deals apart.
+		titleByDomain := map[string]string{"3": "Seagate Exos 18TB DE", "4": "Seagate Exos 18TB FR"}
+		title := titleByDomain[dom]
+		if title == "" {
+			t.Errorf("unexpected domain: %s", dom)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"products": []map[string]any{
+				{
+					"asin":  "B08XYZ1234",
+					"brand": "Seagate",
+					"title": title,
+					"stats": map[string]any{
+						"current": []float64{28999, -1, -1},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	fetcher := newTestHTTPFetcher(t)
+	s := &Keepa{
+		http: fetcher, apiKey: "test-key", asins: []string{"B08XYZ1234"},
+		domains: []int{3, 4}, // DE + FR
+		apiBase: srv.URL,
+	}
+
+	deals, err := s.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if len(deals) != 2 {
+		t.Fatalf("expected 2 deals (1 ASIN × 2 domains), got %d: %+v", len(deals), deals)
+	}
+	if requestCount != 2 {
+		t.Fatalf("expected 2 API calls (one per domain), got %d", requestCount)
+	}
+	if !seenDomains["3"] || !seenDomains["4"] {
+		t.Fatalf("expected both domains 3 and 4 queried, seen=%v", seenDomains)
+	}
+
+	// Collect URLs to verify they target different Amazon TLDs.
+	urls := map[string]bool{}
+	externalIDs := map[string]bool{}
+	for _, d := range deals {
+		urls[d.URL] = true
+		if d.ExternalID != nil {
+			externalIDs[*d.ExternalID] = true
+		}
+		if d.CapacityTB != 18 {
+			t.Errorf("capacity: got %.2f, want 18", d.CapacityTB)
+		}
+		if d.PriceEUR != 289.99 {
+			t.Errorf("price: got %.2f, want 289.99", d.PriceEUR)
+		}
+	}
+	if len(urls) != 2 {
+		t.Fatalf("expected 2 distinct URLs, got %d: %v", len(urls), urls)
+	}
+	if !urls["https://www.amazon.de/dp/B08XYZ1234"] || !urls["https://www.amazon.fr/dp/B08XYZ1234"] {
+		t.Fatalf("expected amazon.de + amazon.fr URLs, got %v", urls)
+	}
+	// ExternalID is the same ASIN across domains — ProductID dedup is by source
+	// ("keepa"), so both deals share the same ProductID. That is the documented
+	// behaviour: the last observation wins. This test only asserts that the two
+	// domains are queried, not that they dedup.
+	if len(externalIDs) != 1 || !externalIDs["B08XYZ1234"] {
+		t.Fatalf("expected ExternalID B08XYZ1234 on both deals, got %v", externalIDs)
 	}
 }

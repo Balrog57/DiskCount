@@ -1,10 +1,12 @@
 package sources
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/Balrog57/DiskCount/internal/config"
+	"github.com/Balrog57/DiskCount/internal/domain"
 	"github.com/Balrog57/DiskCount/internal/scraper"
 )
 
@@ -81,9 +83,63 @@ func BuildAll(reg *Registry) []Source {
 			slog.Debug("source disabled by config", "src", s.Name())
 			continue
 		}
+		if rl, ok := s.(RateLimitable); ok {
+			reqs, period := rl.RateLimit()
+			s = wrapRateLimited(s, reqs, period)
+		}
 		out = append(out, s)
 	}
 	return out
+}
+
+// rateLimitSource wraps a Source with a simple token-bucket rate limiter.
+// It uses a background goroutine that ticks at period/reqs so the Source
+// is never called more often than the declared limit.
+type rateLimitSource struct {
+	inner  Source
+	ticker *time.Ticker
+}
+
+func wrapRateLimited(s Source, reqsPerPeriod int, period time.Duration) Source {
+	interval := period / time.Duration(reqsPerPeriod)
+	if interval <= 0 {
+		interval = time.Second
+	}
+	return &rateLimitSource{
+		inner:  s,
+		ticker: time.NewTicker(interval),
+	}
+}
+
+func (r *rateLimitSource) Name() string                                    { return r.inner.Name() }
+func (r *rateLimitSource) Info() SourceInfo                               { return infoOf(r.inner) }
+func (r *rateLimitSource) HealthCheck(ctx context.Context) error           { return healthCheckOf(r.inner, ctx) }
+
+func (r *rateLimitSource) Fetch(ctx context.Context) ([]domain.Deal, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-r.ticker.C:
+	}
+	return r.inner.Fetch(ctx)
+}
+
+// infoOf returns the source info if the source implements Describable, or
+// a minimal placeholder otherwise.
+func infoOf(s Source) SourceInfo {
+	if d, ok := s.(Describable); ok {
+		return d.Info()
+	}
+	return SourceInfo{Name: s.Name()}
+}
+
+// healthCheckOf calls HealthCheck if the source implements it, otherwise
+// returns nil (assumes the source is always healthy).
+func healthCheckOf(s Source, ctx context.Context) error {
+	if h, ok := s.(HealthCheckable); ok {
+		return h.HealthCheck(ctx)
+	}
+	return nil
 }
 
 func mergeAgents(primary string, pool []string) []string {

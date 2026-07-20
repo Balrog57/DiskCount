@@ -15,7 +15,7 @@ import (
 func init() {
 	Register(func(r *Registry) Source {
 		cfg := r.Config()
-		if !cfg.PricePerGigEnabled {
+		if !cfg.PricePerGigEnabled || cfg.PricePerGigAPIURL == "" {
 			return nil
 		}
 		return &PricePerGig{http: r.HTTP(), apiURL: cfg.PricePerGigAPIURL, market: cfg.PricePerGigMarket}
@@ -149,11 +149,11 @@ func firstNonEmpty(values ...string) string {
 
 func normalMedia(text string) *domain.MediaType {
 	t := strings.ToLower(text)
-	if strings.Contains(t, "ssd") || strings.Contains(t, "nvme") || strings.Contains(t, "solid") {
+	if strings.Contains(t, "ssd") || strings.Contains(t, "nvme") || strings.Contains(t, "solid") || strings.Contains(t, "m.2") || strings.Contains(t, "pcie") {
 		m := domain.MediaTypeSolidState
 		return &m
 	}
-	if strings.Contains(t, "hdd") || strings.Contains(t, "disque dur") || strings.Contains(t, "hard drive") || strings.Contains(t, "rpm") {
+	if strings.Contains(t, "hdd") || strings.Contains(t, "disque dur") || strings.Contains(t, "hard drive") || strings.Contains(t, "hard disk") || strings.Contains(t, "festplatte") || strings.Contains(t, "rpm") || strings.Contains(t, "drehzahl") {
 		m := domain.MediaTypeRotational
 		return &m
 	}

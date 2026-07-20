@@ -89,26 +89,28 @@ func (s *FeedSource) nameUpper() string {
 
 func (s *FeedSource) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	fp := gofeed.NewParser()
-	var deals []domain.Deal
-	for _, u := range s.urls {
-		body, err := s.http.Get(ctx, u)
-		if err != nil {
-			slog.Warn("feed", "src", s.name, "url", u, "err", err)
-			continue
-		}
+	parse := func(body, _ string) []domain.Deal {
 		feed, err := fp.ParseString(body)
 		if err != nil {
+			// Parse failures are not network failures: they mean the feed
+			// returned something we can't interpret. Log-and-skip keeps
+			// the source alive when only one feed URL is misformatted.
 			slog.Warn("feed parse", "src", s.name, "err", err)
-			continue
+			return nil
 		}
+		var out []domain.Deal
 		for _, it := range feed.Items {
 			if d, ok := parseItem(it, s.name, s.def); ok {
-				deals = append(deals, d)
+				out = append(out, d)
 			}
 		}
+		return out
 	}
-	slog.Debug(s.name, "deals", len(deals))
-	return deals, nil
+	res := fetchMultiURL(ctx, s.Name(), s.http, nil, s.urls, false, parse)
+	if err := res.asTransientError(s.Name()); err != nil {
+		return nil, err
+	}
+	return res.deals, nil
 }
 
 // feedPriceRE matches a price like "289,99 €", "289.99€", "€289.99", or "289€".

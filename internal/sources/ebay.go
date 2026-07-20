@@ -22,25 +22,31 @@ func init() {
 		if cfg.EbayClientID == "" || cfg.EbayClientSecret == "" || len(cfg.EbaySearchQueries) == 0 {
 			return nil
 		}
+		marketplaces := cfg.EbayMarketplaces
+		if len(marketplaces) == 0 {
+			marketplaces = []string{"EBAY_FR"}
+		}
 		return &Ebay{
-			http:      r.HTTP(),
-			clientID:  cfg.EbayClientID,
-			secret:    cfg.EbayClientSecret,
-			queries:   cfg.EbaySearchQueries,
-			apiBase:   "https://api.ebay.com",
-			oauthBase: "https://api.ebay.com/identity/v1/oauth2/token",
+			http:         r.HTTP(),
+			clientID:     cfg.EbayClientID,
+			secret:       cfg.EbayClientSecret,
+			queries:      cfg.EbaySearchQueries,
+			marketplaces: marketplaces,
+			apiBase:      "https://api.ebay.com",
+			oauthBase:    "https://api.ebay.com/identity/v1/oauth2/token",
 		}
 	})
 }
 
 // Ebay implements the eBay Browse API source. It authenticates via the OAuth2
-// client-credentials grant and searches for configured queries, mapping each
-// item summary to a domain.Deal.
+// client-credentials grant and searches for configured queries across one or
+// more eBay marketplaces, mapping each item summary to a domain.Deal.
 type Ebay struct {
 	http      scraper.Fetcher
 	clientID  string
 	secret    string
 	queries   []string
+	marketplaces []string
 	apiBase   string
 	oauthBase string
 
@@ -54,10 +60,10 @@ func (s *Ebay) Name() string { return "ebay" }
 func (s *Ebay) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "ebay",
-		Description: "API eBay Browse (recherche d'articles par mots-cles)",
+		Description: "API eBay Browse (recherche d'articles multi-marketplaces)",
 		Categories:  []string{"api"},
-		Requires:    []string{"EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET", "EBAY_SEARCH_QUERIES"},
-		Version:     "1",
+		Requires:    []string{"EBAY_CLIENT_ID", "EBAY_CLIENT_SECRET", "EBAY_SEARCH_QUERIES", "EBAY_MARKETPLACES"},
+		Version:     "2",
 	}
 }
 
@@ -67,13 +73,15 @@ func (s *Ebay) Fetch(ctx context.Context) ([]domain.Deal, error) {
 		return nil, fmt.Errorf("ebay oauth: %w", err)
 	}
 	var deals []domain.Deal
-	for _, q := range s.queries {
-		items, err := s.search(ctx, token, q)
-		if err != nil {
-			slog.Warn("ebay search", "query", q, "err", err)
-			continue
+	for _, mkt := range s.marketplaces {
+		for _, q := range s.queries {
+			items, err := s.search(ctx, token, q, mkt)
+			if err != nil {
+				slog.Warn("ebay search", "marketplace", mkt, "query", q, "err", err)
+				continue
+			}
+			deals = append(deals, items...)
 		}
-		deals = append(deals, items...)
 	}
 	slog.Debug("ebay", "deals", len(deals))
 	return deals, nil
@@ -116,9 +124,9 @@ func (s *Ebay) ensureToken(ctx context.Context) (string, error) {
 	return s.token, nil
 }
 
-func (s *Ebay) search(ctx context.Context, token, query string) ([]domain.Deal, error) {
-	u := fmt.Sprintf("%s/buy/browse/v1/item_summary/search?q=%s&limit=50&filter=buyingOptions:{FIXED_PRICE}",
-		s.apiBase, url.QueryEscape(query))
+func (s *Ebay) search(ctx context.Context, token, query, marketplace string) ([]domain.Deal, error) {
+	u := fmt.Sprintf("%s/buy/browse/v1/item_summary/search?q=%s&limit=50&filter=buyingOptions:{FIXED_PRICE}&marketplace_id=%s",
+		s.apiBase, url.QueryEscape(query), url.QueryEscape(marketplace))
 	resp, err := s.http.GetWithAuth(ctx, u, "Bearer "+token)
 	if err != nil {
 		return nil, err

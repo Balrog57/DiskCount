@@ -76,12 +76,13 @@ func TestEbayFetchParsesItems(t *testing.T) {
 
 	fetcher := newTestHTTPFetcher(t)
 	s := &Ebay{
-		http:      fetcher,
-		clientID:  "test-client",
-		secret:    "test-secret",
-		queries:   []string{"disque dur"},
-		apiBase:   srv.URL,
-		oauthBase: srv.URL + "/identity/v1/oauth2/token",
+		http:         fetcher,
+		clientID:     "test-client",
+		secret:       "test-secret",
+		queries:      []string{"disque dur"},
+		marketplaces: []string{"EBAY_FR"},
+		apiBase:      srv.URL,
+		oauthBase:    srv.URL + "/identity/v1/oauth2/token",
 	}
 
 	deals, err := s.Fetch(context.Background())
@@ -143,10 +144,11 @@ func TestEbayTokenCaching(t *testing.T) {
 
 	fetcher := newTestHTTPFetcher(t)
 	s := &Ebay{
-		http:      fetcher,
-		clientID:  "c", secret: "s", queries: []string{"ssd", "hdd"},
-		apiBase:   srv.URL,
-		oauthBase: srv.URL + "/identity/v1/oauth2/token",
+		http:         fetcher,
+		clientID:     "c", secret: "s", queries: []string{"ssd", "hdd"},
+		marketplaces: []string{"EBAY_FR"},
+		apiBase:      srv.URL,
+		oauthBase:    srv.URL + "/identity/v1/oauth2/token",
 	}
 
 	// Two queries should only request the token once (cached).
@@ -176,5 +178,103 @@ func TestEbayConditionMapping(t *testing.T) {
 		if got != c.want {
 			t.Errorf("conditionFromEbay(%q, %q) = %s, want %s", c.condID, c.display, got, c.want)
 		}
+	}
+}
+
+// TestEbayMultiMarketplace verifies that Fetch queries every configured
+// marketplace for each query, sends the correct marketplace_id query parameter,
+// and aggregates the results. The plan (§Phase 2) explicitly requires this
+// dedicated test: the generic TestEbayFetchParsesItems only exercises a single
+// marketplace.
+func TestEbayMultiMarketplace(t *testing.T) {
+	seenMarketplaces := make(map[string]bool)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/identity/v1/oauth2/token" {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "multi-mkt-token",
+				"expires_in":   7200,
+				"token_type":   "Bearer",
+			})
+			return
+		}
+		// Search endpoint: inspect marketplace_id and return a distinguishable item.
+		mkt := r.URL.Query().Get("marketplace_id")
+		seenMarketplaces[mkt] = true
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer multi-mkt-token" {
+			t.Errorf("expected Bearer multi-mkt-token, got %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// Distinct itemId per marketplace so deals don't dedup.
+		itemByMkt := map[string]map[string]any{
+			"EBAY_FR": {
+				"itemId":     "v1|FR123|0",
+				"title":      "Seagate Exos 18TB HDD SATA",
+				"itemWebUrl": "https://www.ebay.fr/itm/FR123",
+				"price":      map[string]any{"value": "289.99", "currency": "EUR"},
+				"condition":  map[string]any{"conditionId": "1000", "condition": "New"},
+				"brand":      "Seagate",
+			},
+			"EBAY_DE": {
+				"itemId":     "v1|DE456|0",
+				"title":      "WD Red Plus 8TB NAS",
+				"itemWebUrl": "https://www.ebay.de/itm/DE456",
+				"price":      map[string]any{"value": "149.50", "currency": "EUR"},
+				"condition":  map[string]any{"conditionId": "3000", "condition": "Used"},
+				"brand":      "Western Digital",
+			},
+		}
+		item, ok := itemByMkt[mkt]
+		if !ok {
+			t.Errorf("unexpected marketplace_id: %q", mkt)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"itemSummaries": []map[string]any{item}})
+	}))
+	defer srv.Close()
+
+	fetcher := newTestHTTPFetcher(t)
+	s := &Ebay{
+		http:         fetcher,
+		clientID:     "test-client",
+		secret:       "test-secret",
+		queries:      []string{"disque dur"},
+		marketplaces: []string{"EBAY_FR", "EBAY_DE"},
+		apiBase:      srv.URL,
+		oauthBase:    srv.URL + "/identity/v1/oauth2/token",
+	}
+
+	deals, err := s.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	if len(deals) != 2 {
+		t.Fatalf("expected 2 deals (1 query × 2 marketplaces), got %d", len(deals))
+	}
+	if !seenMarketplaces["EBAY_FR"] || !seenMarketplaces["EBAY_DE"] {
+		t.Fatalf("expected both marketplaces queried, seen=%v", seenMarketplaces)
+	}
+
+	// ExternalIDs must differ (eBay assigns distinct item IDs per marketplace).
+	ids := map[string]bool{}
+	sources := map[string]bool{}
+	for _, d := range deals {
+		if d.ExternalID == nil {
+			t.Fatal("ExternalID is nil")
+		}
+		ids[*d.ExternalID] = true
+		sources[d.Source] = true
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 distinct ExternalIDs, got %d: %v", len(ids), ids)
+	}
+	if !ids["v1|FR123|0"] || !ids["v1|DE456|0"] {
+		t.Fatalf("expected FR123 + DE456 ExternalIDs, got %v", ids)
+	}
+	// Source stays "ebay" regardless of marketplace — no sub-source per region.
+	if len(sources) != 1 || !sources["ebay"] {
+		t.Fatalf("expected single source 'ebay', got %v", sources)
 	}
 }

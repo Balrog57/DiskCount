@@ -1,6 +1,9 @@
 package sources
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
@@ -171,4 +174,80 @@ func TestParseFrenchDecimal(t *testing.T) {
 			t.Errorf("parseFrenchDecimal(%q) = %.4f, want %.4f", c.in, got, c.want)
 		}
 	}
+}
+
+// TestFeedSourceAllURLsFailReturnsTransient verifies that when every feed URL
+// is unreachable, FeedSource.Fetch bubbles up a typed Transient error so the
+// per-source circuit breaker can count the outage. Previously the loop
+// swallowed all errors and returned (nil, nil), which left the breaker closed
+// and only the slower zero-streak health monitor could flag the dead source.
+func TestFeedSourceAllURLsFailReturnsTransient(t *testing.T) {
+	srv := new500Server(t)
+	defer srv.Close()
+
+	fetcher := newTestHTTPFetcher(t)
+	s := &FeedSource{
+		name: "dealabs",
+		urls: []string{srv.URL, srv.URL + "/x"},
+		def:  domain.ConditionNew,
+		http: fetcher,
+	}
+	deals, err := s.Fetch(context.Background())
+	if err == nil {
+		t.Fatal("expected Transient error when all feed URLs fail, got nil")
+	}
+	if len(deals) != 0 {
+		t.Fatalf("expected 0 deals, got %d", len(deals))
+	}
+	if Classify(err) != SeverityTransient {
+		t.Fatalf("expected SeverityTransient, got %v (err=%v)", Classify(err), err)
+	}
+}
+
+// TestFeedSourcePartialFailureNoError verifies that a single failing URL among
+// several does NOT bubble up as an error — only a total outage trips the
+// breaker. The successful URL must still produce deals.
+func TestFeedSourcePartialFailureNoError(t *testing.T) {
+	bad := new500Server(t)
+	defer bad.Close()
+	good := newFeedServer(t, "Seagate Exos 18TB à 289,99 €")
+	defer good.Close()
+
+	fetcher := newTestHTTPFetcher(t)
+	s := &FeedSource{
+		name: "dealabs",
+		urls: []string{bad.URL, good.URL},
+		def:  domain.ConditionNew,
+		http: fetcher,
+	}
+	deals, err := s.Fetch(context.Background())
+	if err != nil {
+		t.Fatalf("partial failure should not return error, got %v", err)
+	}
+	if len(deals) != 1 {
+		t.Fatalf("expected 1 deal from the good URL, got %d", len(deals))
+	}
+}
+
+// new500Server returns a test server that always responds 500.
+func new500Server(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+}
+
+// newFeedServer returns a test server that serves a minimal RSS 2.0 feed
+// containing a single item with the given title.
+func newFeedServer(t *testing.T, itemTitle string) *httptest.Server {
+	t.Helper()
+	body := `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>Test feed</title><link>http://test</link><description>test</description>
+<item><title>` + itemTitle + `</title><link>http://test/1</link><description>p</description></item>
+</channel></rss>`
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml; charset=utf-8")
+		w.Write([]byte(body))
+	}))
 }

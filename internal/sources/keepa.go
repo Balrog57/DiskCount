@@ -23,21 +23,21 @@ func init() {
 			http:    r.HTTP(),
 			apiKey:  cfg.KeepaAPIKey,
 			asins:   cfg.KeepaASINs,
-			domain:  cfg.KeepaDomain,
+			domains: cfg.KeepaDomains,
 			apiBase: "https://api.keepa.com",
 		}
 	})
 }
 
 // Keepa implements the Keepa product API source. It queries configured ASINs
-// on a given Amazon domain and extracts the current price from the price
+// on one or more Amazon domains and extracts the current price from the price
 // history stats. Keepa stores prices in cents and timestamps as Keepa minutes
 // (Unix minutes), so conversions are needed.
 type Keepa struct {
 	http    scraper.Fetcher
 	apiKey  string
 	asins   []string
-	domain  int
+	domains []int
 	apiBase string
 }
 
@@ -46,29 +46,32 @@ func (s *Keepa) Name() string { return "keepa" }
 func (s *Keepa) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "keepa",
-		Description: "API Keepa (historique des prix Amazon)",
+		Description: "API Keepa (historique des prix Amazon multi-domaines)",
 		Categories:  []string{"api"},
-		Requires:    []string{"KEEPA_API_KEY", "KEEPA_ASINS"},
-		Version:     "1",
+		Requires:    []string{"KEEPA_API_KEY", "KEEPA_ASINS", "KEEPA_DOMAINS"},
+		Version:     "2",
 	}
 }
 
 func (s *Keepa) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	var deals []domain.Deal
 	// Keepa rate-limits by token cost (~1 token per request, 100/min pool).
-	// We process ASINs in small batches to stay within limits.
+	// We process ASINs one at a time, querying all configured domains for
+	// each ASIN before waiting, so the per-ASIN delay stays at ~800ms.
 	for i := 0; i < len(s.asins); i += 1 {
 		asin := strings.TrimSpace(s.asins[i])
 		if asin == "" {
 			continue
 		}
-		deal, err := s.fetchProduct(ctx, asin)
-		if err != nil {
-			slog.Warn("keepa product", "asin", asin, "err", err)
-			continue
-		}
-		if deal != nil {
-			deals = append(deals, *deal)
+		for _, domain := range s.domains {
+			deal, err := s.fetchProduct(ctx, asin, domain)
+			if err != nil {
+				slog.Warn("keepa product", "asin", asin, "domain", domain, "err", err)
+				continue
+			}
+			if deal != nil {
+				deals = append(deals, *deal)
+			}
 		}
 		// Respect Keepa rate limit: ~1 request per 800ms.
 		select {
@@ -81,9 +84,9 @@ func (s *Keepa) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	return deals, nil
 }
 
-func (s *Keepa) fetchProduct(ctx context.Context, asin string) (*domain.Deal, error) {
+func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.Deal, error) {
 	u := fmt.Sprintf("%s/product?key=%s&domain=%d&asin=%s&stats=180&offers=20",
-		s.apiBase, s.apiKey, s.domain, asin)
+		s.apiBase, s.apiKey, kd, asin)
 	resp, err := s.http.Get(ctx, u)
 	if err != nil {
 		return nil, err
@@ -132,7 +135,7 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string) (*domain.Deal, er
 	ifaces := parsing.NormalizeInterfaces(classText)
 
 	// Build the Amazon product URL from the domain and ASIN.
-	amazonTLD := keepaDomainTLD(s.domain)
+	amazonTLD := keepaDomainTLD(kd)
 	productURL := fmt.Sprintf("https://www.amazon.%s/dp/%s", amazonTLD, asin)
 
 	return &domain.Deal{
