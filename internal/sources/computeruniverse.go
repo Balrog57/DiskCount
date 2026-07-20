@@ -3,7 +3,6 @@ package sources
 import (
 	"context"
 	"strings"
-	"time"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
 	"github.com/Balrog57/DiskCount/internal/parsing"
@@ -33,20 +32,18 @@ type Computeruniverse struct {
 	useFB  bool
 }
 
-func (s *Computeruniverse) Name() string  { return "computeruniverse" }
-func (s *Computeruniverse) RateLimit() (int, time.Duration) { return 1, 2 * time.Second }
+func (s *Computeruniverse) Name() string { return "computeruniverse" }
 
 func (s *Computeruniverse) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "computeruniverse",
-		Description: "Computeruniverse (HDD/SSD, EUR) — requiert Byparr (403 sans UA navigateur)",
+		Description: "Computeruniverse (HDD/SSD, EUR) — requiert Byparr",
 		Categories:  []string{"scraping"},
 		Requires:    []string{"COMPUTERUNIVERSE_URLS", "BYPARR_URL"},
-		Version:     "1",
+		Version:     "2",
 	}
 }
 
-// Fetch first tries HTTP, then falls back to Byparr (403 without browser UA).
 func (s *Computeruniverse) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseComputeruniverse)
 }
@@ -57,18 +54,37 @@ func parseComputeruniverse(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	doc.Find("article.c-productTile, div[data-product-id], a[class*='product']").Each(func(_ int, s *goquery.Selection) {
-		linkEl := s.Find("a.c-productTile__title")
-		title := strings.TrimSpace(linkEl.Text())
-		if title == "" {
+	doc.Find("article.c-productTile, div[data-product-id], a[class*='product'], div[class*='productTile']").Each(func(_ int, s *goquery.Selection) {
+		var href, title string
+		s.Find("a").Each(func(_ int, a *goquery.Selection) {
+			if title != "" {
+				return
+			}
+			t := strings.TrimSpace(a.Text())
+			if len(t) < 10 {
+				return
+			}
+			h, _ := a.Attr("href")
+			if h != "" && !strings.HasPrefix(h, "#") {
+				href = absolutizeURL(baseURL, strings.TrimSpace(h))
+				title = t
+			}
+		})
+		if href == "" || title == "" {
 			return
 		}
-		href, _ := linkEl.Attr("href")
-		href = absolutizeURL(baseURL, strings.TrimSpace(href))
-		if href == "" {
-			return
+		priceText := strings.TrimSpace(s.Find("[class*='price'], span.price, .product-price").First().Text())
+		if priceText == "" {
+			s.Find("span, div").Each(func(_ int, el *goquery.Selection) {
+				if priceText != "" {
+					return
+				}
+				t := strings.TrimSpace(el.Text())
+				if strings.Contains(t, "€") || strings.Contains(t, "EUR") {
+					priceText = t
+				}
+			})
 		}
-		priceText := strings.TrimSpace(s.Find("span.c-productTile__price").Text())
 		priceEUR, err := parseFloatClean(priceText)
 		if err != nil || priceEUR <= 0 {
 			return

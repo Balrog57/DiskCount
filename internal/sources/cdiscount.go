@@ -40,11 +40,10 @@ func (s *Cdiscount) Info() SourceInfo {
 		Description: "Cdiscount (HDD/SSD, EUR) — requiert Byparr (anti-bot Baleen JS)",
 		Categories:  []string{"scraping"},
 		Requires:    []string{"CDISCOUNT_URLS", "BYPARR_URL"},
-		Version:     "1",
+		Version:     "2",
 	}
 }
 
-// Fetch first tries HTTP, then falls back to Byparr (Baleen JS anti-bot).
 func (s *Cdiscount) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseCdiscount)
 }
@@ -55,23 +54,70 @@ func parseCdiscount(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	doc.Find("li.prdtBloc, li.sc-dmzty, div[class*='product']").Each(func(_ int, s *goquery.Selection) {
-		linkEl := s.Find("a[class*='link'], a[class*='prdtBloc-link'], a[href*='/p/'], a[href*='fiche']").First()
-		if linkEl.Length() == 0 {
-			linkEl = s.Find("a").First()
-		}
-		title := strings.TrimSpace(linkEl.Text())
-		if title == "" {
+	// Cdiscount product cards use various class names across redesigns:
+	// li.prdtBloc (legacy), li.sc-dmzty (current), div[class*='product'].
+	doc.Find("li.prdtBloc, li.sc-dmzty, div[class*='product'], article").Each(func(_ int, s *goquery.Selection) {
+		// Find a product link: prefer links with product names as text,
+		// skip short/no-text links (icons, buttons).
+		var href, title string
+		s.Find("a").Each(func(_ int, a *goquery.Selection) {
+			if title != "" {
+				return
+			}
+			t := strings.TrimSpace(a.Text())
+			if len(t) < 10 || strings.HasPrefix(t, "Ajouter") || strings.HasPrefix(t, "acheter") {
+				return
+			}
+			h, _ := a.Attr("href")
+			if h != "" && !strings.HasPrefix(h, "#") && !strings.Contains(h, "javascript") {
+				href = absolutizeURL(baseURL, strings.TrimSpace(h))
+				title = t
+			}
+		})
+		if href == "" || title == "" {
 			return
 		}
-		href, _ := linkEl.Attr("href")
-		href = absolutizeURL(baseURL, strings.TrimSpace(href))
-		if href == "" {
-			return
+		// Try multiple price extraction strategies.
+		var priceEUR float64
+		// 1. Data attributes (most reliable if present).
+		s.Find("[data-price], [data-prix], [itemprop='price']").Each(func(_ int, el *goquery.Selection) {
+			if priceEUR > 0 {
+				return
+			}
+			for _, attr := range []string{"data-price", "data-prix", "content"} {
+				if v, ok := el.Attr(attr); ok && v != "" {
+					if p, err := parseFloatClean(v); err == nil && p > 0 {
+						priceEUR = p
+					}
+				}
+			}
+		})
+		// 2. JSON-LD (common on Cdiscount).
+		if priceEUR <= 0 {
+			doc.Find("script[type='application/ld+json']").Each(func(_ int, el *goquery.Selection) {
+				if priceEUR > 0 {
+					return
+				}
+				jsonText := el.Text()
+				if strings.Contains(jsonText, title[:min(10, len(title))]) {
+					if p, err := parsing.ParsePriceEUR(jsonText); err == nil && p > 0 {
+						priceEUR = p
+					}
+				}
+			})
 		}
-		priceText := strings.TrimSpace(s.Find("[class*='price'], .prdtPrice").First().Text())
-		priceEUR, err := parseFloatClean(priceText)
-		if err != nil || priceEUR <= 0 {
+		// 3. Text price elements.
+		if priceEUR <= 0 {
+			s.Find("[class*='price'], span.price, .prdtPrice, .product-price").Each(func(_ int, el *goquery.Selection) {
+				if priceEUR > 0 {
+					return
+				}
+				if p, err := parseFloatClean(el.Text()); err == nil && p > 0 {
+					priceEUR = p
+				}
+			})
+		}
+		if priceEUR <= 0 {
 			return
 		}
 		tb, err := parsing.ParseCapacityTB(title)
