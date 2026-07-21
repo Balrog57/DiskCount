@@ -22,11 +22,45 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// parseFloatClean cleans European price formats before parsing.
+// ⚡ Bolt optimization: using a fast byte scan to avoid allocations when
+// the string needs no modification, and a single-pass strings.Builder
+// blacklist approach to replace multiple chained strings.ReplaceAll
+// calls. This avoids string allocations on the hot path for scraper parsing.
 func parseFloatClean(s string) (float64, error) {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	return strconv.ParseFloat(s, 64)
+	needsModification := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == ',' || c == '\xe2' || c == '\xc2' {
+			needsModification = true
+			break
+		}
+	}
+
+	if !needsModification {
+		return strconv.ParseFloat(s, 64)
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == '\n' || c == '\r' || c == '\t' {
+			continue
+		}
+		if c == ',' {
+			b.WriteByte('.')
+			continue
+		}
+		if c == '\xe2' && i+2 < len(s) && s[i+1] == '\x82' && s[i+2] == '\xac' { // €
+			i += 2
+			continue
+		}
+		if c == '\xc2' && i+1 < len(s) && s[i+1] == '\xa0' { // \u00a0
+			i += 1
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return strconv.ParseFloat(b.String(), 64)
 }
