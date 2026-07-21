@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -604,6 +604,47 @@ func TestJSONEndpointRejectsAnonymous(t *testing.T) {
 	}
 	if rec.Header().Get("WWW-Authenticate") == "" {
 		t.Fatalf("expected WWW-Authenticate header")
+	}
+}
+
+func TestCSRFMiddleware(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	handler := srv.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		statusCode int
+	}{
+		{"GET allowed", "GET", "http://evil.com", "", "example.com", 200},
+		{"POST no origin allowed", "POST", "", "", "example.com", 200},
+		{"POST null origin forbidden", "POST", "null", "", "example.com", 403},
+		{"POST origin mismatch forbidden", "POST", "http://evil.com", "", "example.com", 403},
+		{"POST referer mismatch forbidden", "POST", "", "http://evil.com/page", "example.com", 403},
+		{"POST origin match allowed", "POST", "http://example.com", "", "example.com", 200},
+		{"POST referer match allowed", "POST", "", "http://example.com/page", "example.com", 200},
+	}
+
+	for _, tt := range tests {
+		req := httptest.NewRequest(tt.method, "/", nil)
+		req.Host = tt.host
+		if tt.origin != "" {
+			req.Header.Set("Origin", tt.origin)
+		}
+		if tt.referer != "" {
+			req.Header.Set("Referer", tt.referer)
+		}
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != tt.statusCode {
+			t.Errorf("FAIL: %s (got %d, want %d)", tt.name, rr.Code, tt.statusCode)
+		}
 	}
 }
 
