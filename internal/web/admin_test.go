@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -631,5 +631,49 @@ func TestLogoutClearsSession(t *testing.T) {
 	cleared := rec2.Header().Get("Set-Cookie")
 	if !strings.Contains(cleared, sessionCookieName+"=") || !strings.Contains(cleared, "Max-Age=0") && !strings.Contains(cleared, "expires=") {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
+	}
+}
+
+func TestCSRFMiddleware(t *testing.T) {
+	s := &Server{}
+	handler := s.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	tests := []struct {
+		name       string
+		method     string
+		origin     string
+		referer    string
+		host       string
+		wantStatus int
+	}{
+		{"GET allowed without headers", http.MethodGet, "", "", "example.com", http.StatusOK},
+		{"POST allowed without headers", http.MethodPost, "", "", "example.com", http.StatusOK},
+		{"POST valid origin", http.MethodPost, "https://example.com", "", "example.com", http.StatusOK},
+		{"POST valid referer", http.MethodPost, "", "https://example.com/foo", "example.com", http.StatusOK},
+		{"POST valid origin with port", http.MethodPost, "http://example.com:8080", "", "example.com:8080", http.StatusOK},
+		{"POST null origin rejected", http.MethodPost, "null", "", "example.com", http.StatusForbidden},
+		{"POST cross origin rejected", http.MethodPost, "https://attacker.com", "", "example.com", http.StatusForbidden},
+		{"POST suffix bypass rejected", http.MethodPost, "https://notexample.com", "", "example.com", http.StatusForbidden},
+		{"POST invalid origin url", http.MethodPost, ":invalid", "", "example.com", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/", nil)
+			req.Host = tt.host
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+			if tt.referer != "" {
+				req.Header.Set("Referer", tt.referer)
+			}
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != tt.wantStatus {
+				t.Errorf("got status %v, want %v", rr.Code, tt.wantStatus)
+			}
+		})
 	}
 }
