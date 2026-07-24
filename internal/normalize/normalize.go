@@ -195,6 +195,17 @@ var knownBrands = []string{
 	"Maxtor", "Fujitsu", "G-Technology", "OWC",
 }
 
+// knownBrandsLower caches the lowercase versions of knownBrands to avoid
+// allocation inside inferBrand's inner loop.
+var knownBrandsLower []string
+
+func init() {
+	knownBrandsLower = make([]string, len(knownBrands))
+	for i, b := range knownBrands {
+		knownBrandsLower[i] = strings.ToLower(b)
+	}
+}
+
 // inferBrand returns the brand of a drive by scanning the title for any
 // known brand, case-insensitively. The previous implementation took the
 // first whitespace token of the title, which mis-classified titles that
@@ -202,6 +213,9 @@ var knownBrands = []string{
 // polluted the products.brand column and silently broke brand-based alert
 // filtering. Matching the whole title against a curated list is far more
 // accurate and avoids storing junk brands for unrecognised titles.
+//
+// ⚡ Bolt optimization: Iterating over pre-computed knownBrandsLower avoids
+// repeated strings.ToLower allocations per known brand per deal scanned.
 func inferBrand(title string) string {
 	if title == "" {
 		return ""
@@ -209,9 +223,9 @@ func inferBrand(title string) string {
 	lower := strings.ToLower(title)
 	// Check "Western Digital" before "WD" — longer match wins so we don't
 	// label a "Western Digital Red" drive as "WD".
-	for _, b := range knownBrands {
-		if strings.Contains(lower, strings.ToLower(b)) {
-			return b
+	for i, b := range knownBrandsLower {
+		if strings.Contains(lower, b) {
+			return knownBrands[i]
 		}
 	}
 	return ""
