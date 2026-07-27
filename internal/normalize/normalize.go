@@ -202,6 +202,17 @@ var knownBrands = []string{
 // polluted the products.brand column and silently broke brand-based alert
 // filtering. Matching the whole title against a curated list is far more
 // accurate and avoids storing junk brands for unrecognised titles.
+// ⚡ Bolt optimization: Pre-compute lowercase versions of knownBrands in init()
+// to avoid repeated allocations and case transformations inside the hot loop.
+var knownBrandsLower []string
+
+func init() {
+	knownBrandsLower = make([]string, len(knownBrands))
+	for i, b := range knownBrands {
+		knownBrandsLower[i] = strings.ToLower(b)
+	}
+}
+
 func inferBrand(title string) string {
 	if title == "" {
 		return ""
@@ -209,9 +220,9 @@ func inferBrand(title string) string {
 	lower := strings.ToLower(title)
 	// Check "Western Digital" before "WD" — longer match wins so we don't
 	// label a "Western Digital Red" drive as "WD".
-	for _, b := range knownBrands {
-		if strings.Contains(lower, strings.ToLower(b)) {
-			return b
+	for i, b := range knownBrandsLower {
+		if strings.Contains(lower, b) {
+			return knownBrands[i]
 		}
 	}
 	return ""
