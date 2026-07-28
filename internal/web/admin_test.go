@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -293,6 +293,7 @@ func TestApiSourcesHealthJSON(t *testing.T) {
 	loginRec := httptest.NewRecorder()
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
 	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginReq.Header.Set("Origin", "http://example.com")
 	mux.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusSeeOther {
 		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
@@ -336,6 +337,7 @@ func TestApiSourcesHealthRejectsPOST(t *testing.T) {
 	srv := New(nil, nil, cfg, nil, false)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sources/health", nil)
+	req.Header.Set("Origin", "http://example.com")
 	srv.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
@@ -376,6 +378,7 @@ func TestApiSourcePreviewRejectsPOST(t *testing.T) {
 	srv := New(nil, nil, cfg, nil, false)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sources/preview", nil)
+	req.Header.Set("Origin", "http://example.com")
 	srv.routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("expected 405, got %d", rec.Code)
@@ -421,6 +424,7 @@ func TestLoginPostSetsSessionAndReachesDashboard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("login POST: expected 303, got %d body=%s", rec.Code, rec.Body.String())
@@ -455,6 +459,7 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login POST bad pass: expected 200, got %d", rec.Code)
@@ -500,6 +505,7 @@ func TestSetLangSwitchesLocaleAndPinsCookie(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/lang", strings.NewReader("lang=en&next=/login"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)
@@ -535,6 +541,7 @@ func TestSetThemePinsCookieAndRenders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=dark&next=/"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d body=%s", rec.Code, rec.Body.String())
@@ -556,6 +563,7 @@ func TestSetThemeRejectsBadValue(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=neon"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -613,6 +621,7 @@ func TestLogoutClearsSession(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("login failed: %d", rec.Code)
@@ -621,6 +630,7 @@ func TestLogoutClearsSession(t *testing.T) {
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	req2.Header.Set("Origin", "http://example.com")
 	for _, c := range cookies {
 		req2.AddCookie(c)
 	}
