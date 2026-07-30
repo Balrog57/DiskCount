@@ -1,0 +1,4 @@
+{"time":"2026-07-30T06:43:46.850687607Z","level":"INFO","msg":"sources loaded","count":3}
+{"time":"2026-07-30T06:43:46.850812406Z","level":"WARN","msg":"telegram bot token is missing; web admin only"}
+DiskCount v2.0 running...
+{"time":"2026-07-30T06:43:46.850884461Z","level":"INFO","msg":"web interface starting","addr":"127.0.0.1:47832"}
