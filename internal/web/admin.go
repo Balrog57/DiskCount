@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"context"
@@ -142,6 +142,11 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validOrigin(r) {
+			http.Error(w, "Invalid origin", http.StatusForbidden)
+			return
+		}
+
 		if s.cfg == nil || s.cfg.WebAdminPassword == "" {
 			http.Error(w, "Admin password not configured (set WEB_ADMIN_PASSWORD)", http.StatusForbidden)
 			return
@@ -233,6 +238,28 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
+func validOrigin(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" {
+		return true
+	}
+
+	host := r.Host
+	if host == "" {
+		return true
+	}
+
+	return strings.HasPrefix(origin, "http://"+host+"/") || strings.HasPrefix(origin, "https://"+host+"/") ||
+		origin == "http://"+host || origin == "https://"+host
+}
+
 func isHTMX(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "true"
 }
@@ -264,6 +291,11 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validOrigin(r) {
+			http.Error(w, "Invalid origin", http.StatusForbidden)
+			return
+		}
+
 		switch r.URL.Path {
 		case "/health", "/healthz", "/readyz":
 			s.health(w, r)
@@ -283,7 +315,7 @@ func (s *Server) handler() http.Handler {
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
-			}
+		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
 }
@@ -683,8 +715,8 @@ func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
 	}
 
 	const (
-		w = 80.0
-		h = 24.0
+		w   = 80.0
+		h   = 24.0
 		pad = 2.0
 	)
 	minP, maxP := prices[0], prices[0]
@@ -968,17 +1000,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
-			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"started_at":      report.StartedAt,
+			"finished_at":     report.FinishedAt,
+			"fetched":         report.Fetched,
+			"accepted":        report.Accepted,
+			"rejected":        report.Rejected,
+			"matched":         report.Matched,
+			"notified":        report.Notified,
+			"dry_run":         report.DryRun,
+			"error_count":     len(report.Errors),
+			"breaker_skips":   report.BreakerSkips,
+			"sources":         report.SourceMetrics,
 			"source_warnings": report.SourceWarnings,
 		}
 	}
@@ -1001,12 +1033,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -1052,10 +1084,10 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":          len(entries),
-		"flagged":        flagged,
-		"threshold":      s.scanner.ZeroStreakThreshold(),
-		"sources":        entries,
+		"total":     len(entries),
+		"flagged":   flagged,
+		"threshold": s.scanner.ZeroStreakThreshold(),
+		"sources":   entries,
 	})
 }
 
