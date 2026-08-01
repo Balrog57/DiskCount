@@ -22,11 +22,24 @@ func strPtr(s string) *string {
 	return &s
 }
 
+// parseFloatClean cleans a price string and parses it to a float64.
+// It uses a single-pass strings.Builder to minimize allocations on the hot path.
 func parseFloatClean(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
+	if strings.ContainsAny(s, "€\u00a0 ,") {
+		var b strings.Builder
+		b.Grow(len(s))
+		for _, r := range s {
+			switch r {
+			case '€', '\u00a0', ' ':
+				continue
+			case ',':
+				b.WriteRune('.')
+			default:
+				b.WriteRune(r)
+			}
+		}
+		s = b.String()
+	}
 	return strconv.ParseFloat(s, 64)
 }
