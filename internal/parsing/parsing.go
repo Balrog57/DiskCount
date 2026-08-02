@@ -193,8 +193,24 @@ func NormalizeMediaType(text string) *domain.MediaType {
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
 	folded := asciiFold(text)
 	folded = strings.ReplaceAll(folded, "\"", "")
-	compact := strings.ReplaceAll(folded, ".", "")
-	compact = strings.ReplaceAll(compact, "-", " ")
+
+	// ⚡ Bolt: Replace sequential ReplaceAll calls with a single-pass Builder
+	compact := folded
+	if strings.ContainsAny(folded, ".-") {
+		var b strings.Builder
+		b.Grow(len(folded))
+		for i := 0; i < len(folded); i++ {
+			switch folded[i] {
+			case '.':
+				// skip
+			case '-':
+				b.WriteByte(' ')
+			default:
+				b.WriteByte(folded[i])
+			}
+		}
+		compact = b.String()
+	}
 
 	isExternal := false
 	for _, w := range externalWords {
@@ -356,7 +372,22 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		return nil
 	}
 	folded := asciiFold(text)
-	compact := strings.ReplaceAll(strings.ReplaceAll(folded, "-", ""), "_", "")
+
+	// ⚡ Bolt: Replace sequential ReplaceAll calls with a single-pass Builder
+	compact := folded
+	if strings.ContainsAny(folded, "-_") {
+		var b strings.Builder
+		b.Grow(len(folded))
+		for i := 0; i < len(folded); i++ {
+			switch folded[i] {
+			case '-', '_':
+				// skip
+			default:
+				b.WriteByte(folded[i])
+			}
+		}
+		compact = b.String()
+	}
 
 	// Explicit declaration wins.
 	if strings.Contains(folded, "conventional") || strings.Contains(compact, "cmr") {
