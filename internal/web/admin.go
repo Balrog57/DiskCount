@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"context"
@@ -258,12 +258,37 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	return err
 }
 
+func (s *Server) withCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				origin = r.Header.Get("Referer")
+			}
+			host := r.Host
+			if host == "" || origin == "" {
+				http.Error(w, "Forbidden - Cross-Site Request Forgery (CSRF) detected", http.StatusForbidden)
+				return
+			}
+			validHTTP := "http://" + host
+			validHTTPS := "https://" + host
+
+			if origin != validHTTP && origin != validHTTPS &&
+				!strings.HasPrefix(origin, validHTTP+"/") && !strings.HasPrefix(origin, validHTTPS+"/") {
+				http.Error(w, "Forbidden - Cross-Site Request Forgery (CSRF) detected", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // handler composes the public health endpoints with the authenticated
 // admin endpoints. Anything not matching the public paths goes through
 // the session-based auth middleware, which redirects browsers to /login
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.withCSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health", "/healthz", "/readyz":
 			s.health(w, r)
@@ -283,9 +308,9 @@ func (s *Server) handler() http.Handler {
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
-			}
+		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
-	})
+	}))
 }
 
 func (s *Server) routes() http.Handler {
@@ -683,8 +708,8 @@ func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
 	}
 
 	const (
-		w = 80.0
-		h = 24.0
+		w   = 80.0
+		h   = 24.0
 		pad = 2.0
 	)
 	minP, maxP := prices[0], prices[0]
@@ -968,17 +993,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
-			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"started_at":      report.StartedAt,
+			"finished_at":     report.FinishedAt,
+			"fetched":         report.Fetched,
+			"accepted":        report.Accepted,
+			"rejected":        report.Rejected,
+			"matched":         report.Matched,
+			"notified":        report.Notified,
+			"dry_run":         report.DryRun,
+			"error_count":     len(report.Errors),
+			"breaker_skips":   report.BreakerSkips,
+			"sources":         report.SourceMetrics,
 			"source_warnings": report.SourceWarnings,
 		}
 	}
@@ -1001,12 +1026,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -1052,10 +1077,10 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":          len(entries),
-		"flagged":        flagged,
-		"threshold":      s.scanner.ZeroStreakThreshold(),
-		"sources":        entries,
+		"total":     len(entries),
+		"flagged":   flagged,
+		"threshold": s.scanner.ZeroStreakThreshold(),
+		"sources":   entries,
 	})
 }
 
