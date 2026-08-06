@@ -53,14 +53,26 @@ func (s *LDLC) Fetch(ctx context.Context) ([]domain.Deal, error) {
 
 // parseLDLCPrice handles the LDLC price format "219€95" where the euro sign
 // separates euros from centimes (no decimal comma). Examples:
-//   "219€95"    → 219.95
-//   "1 199€95"  → 1199.95
-//   "59€99"     → 59.99
+//
+//	"219€95"    → 219.95
+//	"1 199€95"  → 1199.95
+//	"59€99"     → 59.99
+//
 // Falls back to parseFloatClean for standard formats.
 func parseLDLCPrice(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "\u00a0", "")
-	s = strings.ReplaceAll(s, " ", "")
+
+	if strings.ContainsAny(s, "\u00a0 ") {
+		var b strings.Builder
+		b.Grow(len(s))
+		for _, r := range s {
+			if r != '\u00a0' && r != ' ' {
+				b.WriteRune(r)
+			}
+		}
+		s = b.String()
+	}
+
 	// Split on the euro sign: "219€95" → ["219", "95"]
 	if idx := strings.Index(s, "€"); idx > 0 {
 		euros := s[:idx]
