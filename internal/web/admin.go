@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"context"
@@ -140,6 +140,27 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	}
 }
 
+func validateOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" {
+		return false
+	}
+
+	host := r.Host
+	if host == "" {
+		return false
+	}
+
+	expectedHTTP := "http://" + host
+	expectedHTTPS := "https://" + host
+
+	return origin == expectedHTTP || origin == expectedHTTPS ||
+		strings.HasPrefix(origin, expectedHTTP+"/") || strings.HasPrefix(origin, expectedHTTPS+"/")
+}
+
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cfg == nil || s.cfg.WebAdminPassword == "" {
@@ -148,6 +169,12 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 
 		if s.validSession(r) {
+			if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete || r.Method == http.MethodPatch {
+				if !validateOrigin(r) {
+					http.Error(w, "Forbidden: Invalid Origin", http.StatusForbidden)
+					return
+				}
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -283,7 +310,7 @@ func (s *Server) handler() http.Handler {
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
-			}
+		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
 }
@@ -683,8 +710,8 @@ func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
 	}
 
 	const (
-		w = 80.0
-		h = 24.0
+		w   = 80.0
+		h   = 24.0
 		pad = 2.0
 	)
 	minP, maxP := prices[0], prices[0]
@@ -968,17 +995,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
-			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"started_at":      report.StartedAt,
+			"finished_at":     report.FinishedAt,
+			"fetched":         report.Fetched,
+			"accepted":        report.Accepted,
+			"rejected":        report.Rejected,
+			"matched":         report.Matched,
+			"notified":        report.Notified,
+			"dry_run":         report.DryRun,
+			"error_count":     len(report.Errors),
+			"breaker_skips":   report.BreakerSkips,
+			"sources":         report.SourceMetrics,
 			"source_warnings": report.SourceWarnings,
 		}
 	}
@@ -1001,12 +1028,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -1052,10 +1079,10 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":          len(entries),
-		"flagged":        flagged,
-		"threshold":      s.scanner.ZeroStreakThreshold(),
-		"sources":        entries,
+		"total":     len(entries),
+		"flagged":   flagged,
+		"threshold": s.scanner.ZeroStreakThreshold(),
+		"sources":   entries,
 	})
 }
 

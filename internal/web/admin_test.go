@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -631,5 +631,45 @@ func TestLogoutClearsSession(t *testing.T) {
 	cleared := rec2.Header().Get("Set-Cookie")
 	if !strings.Contains(cleared, sessionCookieName+"=") || !strings.Contains(cleared, "Max-Age=0") && !strings.Contains(cleared, "expires=") {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
+	}
+}
+
+func TestWithAuthEnforcesCSRFOnPost(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	guarded := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// use login to get valid session cookie
+	recLogin := httptest.NewRecorder()
+	reqLogin := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
+	reqLogin.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.handler().ServeHTTP(recLogin, reqLogin)
+
+	req := httptest.NewRequest(http.MethodPost, "/alerts/delete", nil)
+	for _, c := range recLogin.Result().Cookies() {
+		req.AddCookie(c)
+	}
+
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://example.com")
+
+	rec := httptest.NewRecorder()
+	guarded.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for valid CSRF, got %d", rec.Code)
+	}
+
+	reqBad := httptest.NewRequest(http.MethodPost, "/alerts/delete", nil)
+	for _, c := range recLogin.Result().Cookies() {
+		reqBad.AddCookie(c)
+	}
+	reqBad.Host = "example.com"
+	reqBad.Header.Set("Origin", "http://malicious.com")
+
+	recBad := httptest.NewRecorder()
+	guarded.ServeHTTP(recBad, reqBad)
+	if recBad.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for bad CSRF, got %d", recBad.Code)
 	}
 }
