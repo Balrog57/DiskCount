@@ -19,6 +19,19 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
+
+	needsFolding := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			needsFolding = true
+			break
+		}
+	}
+	if !needsFolding {
+		return s
+	}
+
 	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
 	var b strings.Builder
 	b.Grow(len(s))
@@ -192,10 +205,26 @@ func NormalizeMediaType(text string) *domain.MediaType {
 
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
 	folded := asciiFold(text)
-	folded = strings.ReplaceAll(folded, "\"", "")
-	compact := strings.ReplaceAll(folded, ".", "")
-	compact = strings.ReplaceAll(compact, "-", " ")
 
+	// ⚡ Bolt: Optimize sequential ReplaceAll with fast path
+	if strings.IndexAny(folded, "\".-") != -1 {
+		if strings.IndexByte(folded, '"') != -1 {
+			folded = strings.ReplaceAll(folded, "\"", "")
+		}
+		compact := folded
+		if strings.IndexByte(compact, '.') != -1 {
+			compact = strings.ReplaceAll(compact, ".", "")
+		}
+		if strings.IndexByte(compact, '-') != -1 {
+			compact = strings.ReplaceAll(compact, "-", " ")
+		}
+		return matchDriveCategory(folded, compact, mediaType)
+	}
+
+	return matchDriveCategory(folded, folded, mediaType)
+}
+
+func matchDriveCategory(folded, compact string, mediaType *domain.MediaType) *domain.DriveCategory {
 	isExternal := false
 	for _, w := range externalWords {
 		if strings.Contains(compact, w) {
@@ -356,7 +385,20 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		return nil
 	}
 	folded := asciiFold(text)
-	compact := strings.ReplaceAll(strings.ReplaceAll(folded, "-", ""), "_", "")
+	compact := folded
+
+	// ⚡ Bolt: Optimize sequential ReplaceAll with builder and fast-path scan
+	if strings.IndexAny(folded, "-_") != -1 {
+		var builder strings.Builder
+		builder.Grow(len(folded))
+		for i := 0; i < len(folded); i++ {
+			c := folded[i]
+			if c != '-' && c != '_' {
+				builder.WriteByte(c)
+			}
+		}
+		compact = builder.String()
+	}
 
 	// Explicit declaration wins.
 	if strings.Contains(folded, "conventional") || strings.Contains(compact, "cmr") {
