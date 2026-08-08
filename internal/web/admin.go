@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"context"
@@ -283,7 +283,7 @@ func (s *Server) handler() http.Handler {
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
-			}
+		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
 }
@@ -683,8 +683,8 @@ func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
 	}
 
 	const (
-		w = 80.0
-		h = 24.0
+		w   = 80.0
+		h   = 24.0
 		pad = 2.0
 	)
 	minP, maxP := prices[0], prices[0]
@@ -968,17 +968,17 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
-			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"started_at":      report.StartedAt,
+			"finished_at":     report.FinishedAt,
+			"fetched":         report.Fetched,
+			"accepted":        report.Accepted,
+			"rejected":        report.Rejected,
+			"matched":         report.Matched,
+			"notified":        report.Notified,
+			"dry_run":         report.DryRun,
+			"error_count":     len(report.Errors),
+			"breaker_skips":   report.BreakerSkips,
+			"sources":         report.SourceMetrics,
 			"source_warnings": report.SourceWarnings,
 		}
 	}
@@ -1001,12 +1001,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"telegram":  s.telegramRunning,
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -1052,10 +1052,10 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":          len(entries),
-		"flagged":        flagged,
-		"threshold":      s.scanner.ZeroStreakThreshold(),
-		"sources":        entries,
+		"total":     len(entries),
+		"flagged":   flagged,
+		"threshold": s.scanner.ZeroStreakThreshold(),
+		"sources":   entries,
 	})
 }
 
@@ -1558,7 +1558,7 @@ const metricsTpl = `{{define "body"}}
 </div>
 {{end}}
 <section class="section panel"><div class="panel-head"><h2>Sante des sources</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range $name, $state := .Breakers}}<tr><td>{{$name}}</td><td>{{if eq $state "closed"}}<span class="badge good">closed</span>{{else if eq $state "half-open"}}<span class="badge warn">half-open</span>{{else}}<span class="badge bad">open</span>{{end}}</td><td><form class="inline" method="post" action="/api/sources/breaker/reset"><input type="hidden" name="name" value="{{$name}}"><button class="secondary" type="submit">Reinitialiser</button></form></td></tr>{{else}}<tr><td colspan="3" class="empty">Aucun breaker.</td></tr>{{end}}
+{{range $name, $state := .Breakers}}<tr><td>{{$name}}</td><td>{{if eq $state "closed"}}<span class="badge good">closed</span>{{else if eq $state "half-open"}}<span class="badge warn">half-open</span>{{else}}<span class="badge bad">open</span>{{end}}</td><td><form class="inline" method="post" action="/api/sources/breaker/reset"><input type="hidden" name="name" value="{{$name}}"><button class="secondary" type="submit" aria-label="Reinitialiser la source {{$name}}">Reinitialiser</button></form></td></tr>{{else}}<tr><td colspan="3" class="empty">Aucun breaker.</td></tr>{{end}}
 </tbody></table></div></section>
 <section class="section panel"><div class="panel-head"><h2>Metriques par source (dernier scan)</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Deals</th><th>Breaker</th><th>Erreur</th></tr></thead><tbody>
 {{if .Report}}{{range .Report.SourceMetrics}}<tr><td>{{.Name}}</td><td>{{.DealsFetched}}</td><td>{{.BreakerState}}</td><td>{{.Error}}</td></tr>{{else}}<tr><td colspan="4" class="empty">Aucune metrique.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="empty">Aucun scan.</td></tr>{{end}}
