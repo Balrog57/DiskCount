@@ -24,9 +24,20 @@ func strPtr(s string) *string {
 
 func parseFloatClean(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	return strconv.ParseFloat(s, 64)
+	if !strings.ContainsAny(s, "€\u00a0 ,") {
+		return strconv.ParseFloat(s, 64)
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, c := range s {
+		switch c {
+		case '€', '\u00a0', ' ':
+			continue
+		case ',':
+			b.WriteRune('.')
+		default:
+			b.WriteRune(c)
+		}
+	}
+	return strconv.ParseFloat(b.String(), 64)
 }
