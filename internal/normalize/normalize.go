@@ -195,6 +195,15 @@ var knownBrands = []string{
 	"Maxtor", "Fujitsu", "G-Technology", "OWC",
 }
 
+var knownBrandsLower []string
+
+func init() {
+	knownBrandsLower = make([]string, len(knownBrands))
+	for i, b := range knownBrands {
+		knownBrandsLower[i] = strings.ToLower(b)
+	}
+}
+
 // inferBrand returns the brand of a drive by scanning the title for any
 // known brand, case-insensitively. The previous implementation took the
 // first whitespace token of the title, which mis-classified titles that
@@ -209,9 +218,10 @@ func inferBrand(title string) string {
 	lower := strings.ToLower(title)
 	// Check "Western Digital" before "WD" — longer match wins so we don't
 	// label a "Western Digital Red" drive as "WD".
-	for _, b := range knownBrands {
-		if strings.Contains(lower, strings.ToLower(b)) {
-			return b
+	// ⚡ Bolt: Use pre-computed lowercased brands to avoid repeated allocations in loop
+	for i, b := range knownBrandsLower {
+		if strings.Contains(lower, b) {
+			return knownBrands[i]
 		}
 	}
 	return ""
