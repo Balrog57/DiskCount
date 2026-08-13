@@ -19,6 +19,20 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
+
+	needsChange := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			needsChange = true
+			break
+		}
+	}
+
+	if !needsChange {
+		return s
+	}
+
 	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
 	var b strings.Builder
 	b.Grow(len(s))
