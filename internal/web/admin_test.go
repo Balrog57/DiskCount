@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -447,6 +447,41 @@ func TestLoginPostSetsSessionAndReachesDashboard(t *testing.T) {
 	guarded.ServeHTTP(rec2, req2)
 	if !nextCalled {
 		t.Fatalf("session cookie did not grant access: status=%d location=%q", rec2.Code, rec2.Header().Get("Location"))
+	}
+}
+
+func TestCSRFProtection(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+
+	recLogin := httptest.NewRecorder()
+	reqLogin := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
+	reqLogin.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.handler().ServeHTTP(recLogin, reqLogin)
+
+	req := httptest.NewRequest(http.MethodPost, "/alerts/toggle", strings.NewReader("alert_id=123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range recLogin.Result().Cookies() {
+		req.AddCookie(c)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403 Forbidden for missing Origin/Referer, got %d", rec.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/alerts/toggle", strings.NewReader("alert_id=123"))
+	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req2.Header.Set("Origin", "http://"+req2.Host)
+	for _, c := range recLogin.Result().Cookies() {
+		req2.AddCookie(c)
+	}
+	rec2 := httptest.NewRecorder()
+	srv.handler().ServeHTTP(rec2, req2)
+
+	if rec2.Code == http.StatusForbidden {
+		t.Fatalf("Expected non-403 for valid Origin, got %d", rec2.Code)
 	}
 }
 
