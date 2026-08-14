@@ -210,11 +210,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +228,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
