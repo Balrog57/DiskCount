@@ -36,13 +36,13 @@ func TestTEmptyLocaleUsesDefault(t *testing.T) {
 
 func TestParseLocale(t *testing.T) {
 	cases := map[string]Locale{
-		"fr":      FR,
-		"fr-FR":   FR,
-		"en":      EN,
-		"en-US":   EN,
-		"de":      Default,
-		"":        Default,
-		"f":       Default, // too short
+		"fr":    FR,
+		"fr-FR": FR,
+		"en":    EN,
+		"en-US": EN,
+		"de":    Default,
+		"":      Default,
+		"f":     Default, // too short
 	}
 	for in, want := range cases {
 		if got := ParseLocale(in); got != want {
