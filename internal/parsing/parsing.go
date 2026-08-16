@@ -19,6 +19,22 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
+
+	// ⚡ Bolt: Initial fast-path scan to avoid strings.Builder allocation entirely
+	// for strings that are already ASCII and lowercase.
+	needsMutation := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			needsMutation = true
+			break
+		}
+	}
+
+	if !needsMutation {
+		return s
+	}
+
 	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
 	var b strings.Builder
 	b.Grow(len(s))
