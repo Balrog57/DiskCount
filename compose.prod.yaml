@@ -16,10 +16,33 @@ services:
       timeout: 3s
       retries: 5
 
+  byparr-vpn:
+    image: lscr.io/linuxserver/wireguard:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: Europe/Paris
+    volumes:
+      - type: bind
+        source: ${WIREGUARD_CONFIG_FILE:?set WIREGUARD_CONFIG_FILE to a valid wg0.conf}
+        target: /config/wg_confs/wg0.conf
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "127.0.0.1:8191:8191"
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: "1"
+
   byparr:
     image: ghcr.io/thephaseless/byparr:latest
     restart: unless-stopped
-    network_mode: host
+    network_mode: service:byparr-vpn
+    depends_on:
+      - byparr-vpn
 
   diskcount:
     build: .
@@ -29,6 +52,7 @@ services:
       - .env
     environment:
       WEB_ADMIN_ADDR: 0.0.0.0:47832
+      BYPARR_URL: http://127.0.0.1:8191
     depends_on:
       db:
         condition: service_healthy
