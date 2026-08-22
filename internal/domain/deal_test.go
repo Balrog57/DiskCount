@@ -18,3 +18,11 @@ func TestCanonicalProductKeyNormalizesWesternDigitalAlias(t *testing.T) {
 		t.Fatalf("brand aliases produced different keys: %q != %q", a, b)
 	}
 }
+
+func TestDealCarriesSKUAndImageURL(t *testing.T) {
+	sku, img := "ST16000NM000J", "https://example.test/drive.jpg"
+	d := Deal{SKU: &sku, ImageURL: &img}
+	if d.SKU == nil || *d.SKU != sku || d.ImageURL == nil || *d.ImageURL != img {
+		t.Fatalf("sku/image not retained: %#v", d)
+	}
+}

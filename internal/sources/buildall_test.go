@@ -67,9 +67,9 @@ func TestAllSourcesImplementName(t *testing.T) {
 	}
 	reg := &Registry{
 		cfg: &config.Config{
-			DiskPricesURL:       "https://diskprices.com/?locale=fr",
-			PricePerGigEnabled:  true,
-			PricePerGigAPIURL:   "https://api.pricepergig.com/drives",
+			DiskPricesURL:        "https://diskprices.com/?locale=fr",
+			PricePerGigEnabled:   true,
+			PricePerGigAPIURL:    "https://api.pricepergig.com/drives",
 			PricePerGigMarket:    "amazon.fr",
 			PricePerTBURLs:       []string{"https://pricepertb.com/fr"},
 			DealabsRSSURLs:       []string{"https://dealabs.com/rss"},
@@ -84,7 +84,7 @@ func TestAllSourcesImplementName(t *testing.T) {
 			LDLCURLs:             []string{"https://example.com/"},
 			TopachatURLs:         []string{"https://example.com/"},
 			GrosbillURLs:         []string{"https://example.com/"},
-			FnacURLs:              []string{"https://example.com/"},
+			FnacURLs:             []string{"https://example.com/"},
 			BoulangerURLs:        []string{"https://example.com/"},
 			CdiscountURLs:        []string{"https://example.com/"},
 			RakutenURLs:          []string{"https://example.com/"},
@@ -96,7 +96,7 @@ func TestAllSourcesImplementName(t *testing.T) {
 			EbayClientID:         "test-id",
 			EbayClientSecret:     "test-secret",
 			EbaySearchQueries:    []string{"disque dur"},
-			EbayMarketplaces:    []string{"EBAY_FR"},
+			EbayMarketplaces:     []string{"EBAY_FR"},
 		},
 		http:   scraper.NewHTTPFetcherWithOptions(scraper.Options{}),
 		retry:  scraper.NewRetryingFetcher(scraper.NewHTTPFetcherWithOptions(scraper.Options{}), scraper.RetryConfig{}),

@@ -86,14 +86,14 @@ func parseRakuten(html, baseURL string) []domain.Deal {
 		}
 		cond := domain.ConditionNew
 		deals = append(deals, domain.Deal{
-			Source:        "rakuten",
-			Title:         title, URL: href,
-			PriceEUR:      round2(priceEUR),
-			PricePerTB:    round2(priceEUR / tb),
-			CapacityTB:    round2(tb),
-			Condition:     &cond, MediaType: media,
+			Source: "rakuten",
+			Title:  title, URL: href,
+			PriceEUR:   round2(priceEUR),
+			PricePerTB: round2(priceEUR / tb),
+			CapacityTB: round2(tb),
+			Condition:  &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
-			ObservedAt:    domain.UTCNow(),
+			ObservedAt: domain.UTCNow(),
 		})
 	})
 	return deals

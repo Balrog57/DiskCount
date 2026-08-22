@@ -33,7 +33,7 @@ type Mindfactory struct {
 	useFB  bool
 }
 
-func (s *Mindfactory) Name() string  { return "mindfactory" }
+func (s *Mindfactory) Name() string                    { return "mindfactory" }
 func (s *Mindfactory) RateLimit() (int, time.Duration) { return 1, 2 * time.Second }
 
 func (s *Mindfactory) Info() SourceInfo {
@@ -93,17 +93,17 @@ func parseMindfactory(html, baseURL string) []domain.Deal {
 		cond := domain.ConditionNew
 
 		deals = append(deals, domain.Deal{
-			Source:          "mindfactory",
-			Title:           title,
-			URL:             href,
-			PriceEUR:        round2(priceEUR),
-			PricePerTB:      round2(priceEUR / tb),
-			CapacityTB:      round2(tb),
-			Condition:       &cond,
-			MediaType:       media,
-			DriveCategory:   dc,
-			Interfaces:      ifaces,
-			ObservedAt:      domain.UTCNow(),
+			Source:        "mindfactory",
+			Title:         title,
+			URL:           href,
+			PriceEUR:      round2(priceEUR),
+			PricePerTB:    round2(priceEUR / tb),
+			CapacityTB:    round2(tb),
+			Condition:     &cond,
+			MediaType:     media,
+			DriveCategory: dc,
+			Interfaces:    ifaces,
+			ObservedAt:    domain.UTCNow(),
 		})
 	})
 	return deals

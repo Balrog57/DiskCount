@@ -58,6 +58,8 @@ func buildSiteStats(names []string, quality *db.QualityStats, health []scanner.S
 			status = "hors perimetre stockage"
 		} else if !active[name] {
 			status = "inactif"
+		} else if isBlockedMetric(metric) {
+			status = "captcha"
 		} else if metric.Error != "" {
 			status = "erreur"
 		} else if h.Flagged {
@@ -77,6 +79,19 @@ func buildSiteStats(names []string, quality *db.QualityStats, health []scanner.S
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
 	return out
+}
+
+func isBlockedMetric(metric scanner.SourceMetrics) bool {
+	if metric.BlockedByKeyword != "" {
+		return true
+	}
+	text := strings.ToLower(metric.Error)
+	for _, marker := range []string{"captcha", "waf", "blocked", "access denied"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func siteLabel(name string) string {
@@ -128,7 +143,10 @@ func scanLogEntries(report *scanner.ScanReport) []logEntry {
 	for _, metric := range report.SourceMetrics {
 		entryLevel := "success"
 		message := metric.Name + ": " + strconv.Itoa(metric.DealsFetched) + " offres"
-		if metric.Error != "" {
+		if isBlockedMetric(metric) {
+			entryLevel = "error"
+			message = strings.ToLower(metric.Name) + ": bloqué par CAPTCHA (" + strconv.Itoa(metric.DealsFetched) + " offre)"
+		} else if metric.Error != "" {
 			entryLevel, message = "error", metric.Name+": "+metric.Error
 		} else if metric.DealsFetched == 0 {
 			entryLevel, message = "warning", metric.Name+": aucune offre"
@@ -157,7 +175,7 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 }
 
 const sitesTpl = `{{define "body"}}
-<div class="panel"><div class="panel-head"><h2>Statistiques des sites</h2><span class="hint">État du dernier scan et qualité des offres par fournisseur</span></div><div class="table-wrap"><table><thead><tr><th>Site</th><th>Statut</th><th>Offres</th><th>Produits</th><th>Observations</th><th>Rejets</th><th>Dernier refresh</th><th>Durée</th><th>Breaker</th><th>Médiane €/To</th></tr></thead><tbody>{{range .Sites}}<tr><td><strong>{{.Label}}</strong>{{if ne .Label .Name}}<div class="hint">{{.Name}}</div>{{end}}{{if .Error}}<div class="hint">{{.Error}}</div>{{end}}</td><td><span class="badge {{if eq .Status "actif"}}good{{else}}warn{{end}}">{{.Status}}</span></td><td>{{.LastDeals}}</td><td>{{.Products}}</td><td>{{.Observations}}</td><td>{{.Rejected}}</td><td>{{if .LastScan.IsZero}}—{{else}}{{tsv .LastScan}}{{end}}</td><td>{{if .Duration}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td><td>{{if .Breaker}}{{.Breaker}}{{else}}—{{end}}</td><td>{{if .MedianPricePerTB}}{{printf "%.2f" .MedianPricePerTB}}{{else}}—{{end}}</td></tr>{{else}}<tr><td colspan="10" class="empty">Aucun fournisseur configuré.</td></tr>{{end}}</tbody></table></div>{{if .Error}}<div class="warnbox">Erreur de statistiques : {{.Error}}</div>{{end}}</div>
+<div class="panel"><div class="panel-head"><h2>Statistiques des sites</h2><span class="hint">État du dernier scan et qualité des offres par fournisseur</span></div><div class="table-wrap"><table><thead><tr><th>Site</th><th>Statut</th><th>Offres</th><th>Produits</th><th>Observations</th><th>Rejets</th><th>Dernier refresh</th><th>Durée</th><th>Breaker</th><th>Médiane €/To</th></tr></thead><tbody>{{range .Sites}}<tr><td><strong>{{.Label}}</strong>{{if ne .Label .Name}}<div class="hint">{{.Name}}</div>{{end}}{{if .Error}}<div class="hint">{{.Error}}</div>{{end}}</td><td><span class="badge {{if eq .Status "actif"}}good{{else if or (eq .Status "erreur") (eq .Status "captcha")}}bad{{else}}warn{{end}}">{{.Status}}</span></td><td>{{.LastDeals}}</td><td>{{.Products}}</td><td>{{.Observations}}</td><td>{{.Rejected}}</td><td>{{if .LastScan.IsZero}}—{{else}}{{tsv .LastScan}}{{end}}</td><td>{{if .Duration}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td><td>{{if .Breaker}}{{.Breaker}}{{else}}—{{end}}</td><td>{{if .MedianPricePerTB}}{{printf "%.2f" .MedianPricePerTB}}{{else}}—{{end}}</td></tr>{{else}}<tr><td colspan="10" class="empty">Aucun fournisseur configuré.</td></tr>{{end}}</tbody></table></div>{{if .Error}}<div class="warnbox">Erreur de statistiques : {{.Error}}</div>{{end}}</div>
 {{end}}`
 
 const logsTpl = `{{define "body"}}

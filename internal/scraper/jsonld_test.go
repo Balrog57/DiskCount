@@ -17,8 +17,7 @@ func TestParseJSONLDSingleProduct(t *testing.T) {
     "availability": "https://schema.org/InStock",
     "url": "https://example.com/exos"
   }
-}
-</script>
+}</script>
 </head><body></body></html>`
 
 	pd, ok := ParseJSONLD(html)
@@ -42,6 +41,20 @@ func TestParseJSONLDSingleProduct(t *testing.T) {
 	}
 	if pd.Availability != "https://schema.org/InStock" {
 		t.Fatalf("availability: got %q", pd.Availability)
+	}
+}
+
+func TestParseJSONLDImageString(t *testing.T) {
+	pd, ok := ParseJSONLD(`<script type="application/ld+json">{"@type":"Product","image":"https://example.com/disk.jpg"}</script>`)
+	if !ok || pd.Image != "https://example.com/disk.jpg" {
+		t.Fatalf("image: got %q, found=%v", pd.Image, ok)
+	}
+}
+
+func TestParseJSONLDImageArray(t *testing.T) {
+	pd, ok := ParseJSONLD(`<script type="application/ld+json">{"@type":"Product","image":[{"url":"https://example.com/one.jpg"},"https://example.com/two.jpg"]}</script>`)
+	if !ok || pd.Image != "https://example.com/one.jpg" {
+		t.Fatalf("image: got %q, found=%v", pd.Image, ok)
 	}
 }
 

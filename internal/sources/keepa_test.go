@@ -118,7 +118,10 @@ func TestKeepaNoPrice(t *testing.T) {
 }
 
 func TestKeepaDomainTLD(t *testing.T) {
-	cases := []struct{ domain int; want string }{
+	cases := []struct {
+		domain int
+		want   string
+	}{
 		{1, "com"}, {2, "co.uk"}, {3, "de"}, {4, "fr"},
 		{5, "co.jp"}, {6, "it"}, {7, "es"},
 		{99, "fr"}, // unknown defaults to fr

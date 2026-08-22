@@ -49,3 +49,35 @@ func TestScanLogEntriesColorLevelsAndSummary(t *testing.T) {
 		t.Fatalf("unexpected messages: %#v", logs)
 	}
 }
+
+func TestBlockedMetricsAreVisibleAsCaptcha(t *testing.T) {
+	report := &scanner.ScanReport{
+		FinishedAt: time.Unix(10, 0),
+		SourceMetrics: []scanner.SourceMetrics{{
+			Name:         "darty",
+			DealsFetched: 0,
+			Error:        "source[darty] fetch: blocked (keyword: \"captcha\")",
+		}},
+	}
+	logs := scanLogEntries(report)
+	if len(logs) != 2 || logs[1].Level != "error" || logs[1].Message != "darty: bloqué par CAPTCHA (0 offre)" {
+		t.Fatalf("unexpected blocked log: %#v", logs)
+	}
+	stats := buildSiteStats([]string{"darty"}, nil, nil, report)
+	if len(stats) != 1 || stats[0].Status != "captcha" {
+		t.Fatalf("unexpected blocked status: %#v", stats)
+	}
+}
+
+func TestBlockedKeywordMetricIsVisibleAsCaptcha(t *testing.T) {
+	report := &scanner.ScanReport{
+		SourceMetrics: []scanner.SourceMetrics{{
+			Name:             "darty",
+			BlockedByKeyword: "captcha",
+		}},
+	}
+	logs := scanLogEntries(report)
+	if logs[1].Level != "error" || !strings.Contains(logs[1].Message, "bloqué par CAPTCHA") {
+		t.Fatalf("unexpected blocked keyword log: %#v", logs)
+	}
+}

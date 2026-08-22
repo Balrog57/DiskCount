@@ -31,6 +31,13 @@ func (f failingSource) Fetch(context.Context) ([]domain.Deal, error) {
 	return nil, errors.New("boom")
 }
 
+type blockedSource struct{}
+
+func (blockedSource) Name() string { return "darty" }
+func (blockedSource) Fetch(context.Context) ([]domain.Deal, error) {
+	return nil, sources.Blocked("darty", errors.New("captcha challenge"))
+}
+
 func TestRunOnceStoresLastReport(t *testing.T) {
 	cfg := config.LoadWithAppValues(map[string]string{
 		"REQUEST_TIMEOUT_SECONDS": "1",
@@ -49,6 +56,23 @@ func TestRunOnceStoresLastReport(t *testing.T) {
 	}
 	if last.FinishedAt != report.FinishedAt {
 		t.Fatalf("last report mismatch")
+	}
+}
+
+func TestRunOncePersistsFetchErrorInSourceMetrics(t *testing.T) {
+	cfg := config.LoadWithAppValues(map[string]string{
+		"REQUEST_TIMEOUT_SECONDS": "1",
+	})
+	report := New(cfg, nil, []sources.Source{blockedSource{}}, nil).RunOnce(context.Background(), true)
+	if len(report.SourceMetrics) != 1 {
+		t.Fatalf("expected one source metric, got %#v", report.SourceMetrics)
+	}
+	metric := report.SourceMetrics[0]
+	if metric.Error == "" {
+		t.Fatal("fetch error was not persisted in source metrics")
+	}
+	if metric.BlockedByKeyword == "" {
+		t.Fatal("blocked keyword was not persisted in source metrics")
 	}
 }
 

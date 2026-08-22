@@ -144,8 +144,8 @@ func TestEbayTokenCaching(t *testing.T) {
 
 	fetcher := newTestHTTPFetcher(t)
 	s := &Ebay{
-		http:         fetcher,
-		clientID:     "c", secret: "s", queries: []string{"ssd", "hdd"},
+		http:     fetcher,
+		clientID: "c", secret: "s", queries: []string{"ssd", "hdd"},
 		marketplaces: []string{"EBAY_FR"},
 		apiBase:      srv.URL,
 		oauthBase:    srv.URL + "/identity/v1/oauth2/token",
@@ -163,9 +163,9 @@ func TestEbayTokenCaching(t *testing.T) {
 
 func TestEbayConditionMapping(t *testing.T) {
 	cases := []struct {
-		condID   string
-		display  string
-		want     domain.Condition
+		condID  string
+		display string
+		want    domain.Condition
 	}{
 		{"1000", "New", domain.ConditionNew},
 		{"1000", "Neuf", domain.ConditionNew},

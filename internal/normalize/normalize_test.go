@@ -174,3 +174,26 @@ func TestDealInfersConservativeStorageModel(t *testing.T) {
 		t.Fatalf("generic title must remain ungrouped: %q", *noModel.Deal.Model)
 	}
 }
+
+func TestDealPrefersManufacturerSKUForGrouping(t *testing.T) {
+	sku, img := "ST16000NM000J", "https://example.test/exos.jpg"
+	res := Deal(domain.Deal{
+		Source: "test", Title: "Seagate Exos 16 To HDD", URL: "https://example.test/exos",
+		CapacityTB: 16, PriceEUR: 280, SKU: &sku, ImageURL: &img,
+	})
+	if res.Reject != nil {
+		t.Fatalf("rejected: %#v", res.Reject)
+	}
+	if res.Deal.SKU == nil || *res.Deal.SKU != sku {
+		t.Fatalf("sku: %#v", res.Deal.SKU)
+	}
+	if res.Deal.Model == nil || *res.Deal.Model != sku {
+		t.Fatalf("model should be manufacturer sku, got %#v", res.Deal.Model)
+	}
+	if res.Deal.ImageURL == nil || *res.Deal.ImageURL != img {
+		t.Fatalf("image: %#v", res.Deal.ImageURL)
+	}
+	if res.Deal.CanonicalProductKey() != "seagate|st16000nm000j|16.000" {
+		t.Fatalf("canonical key: %q", res.Deal.CanonicalProductKey())
+	}
+}

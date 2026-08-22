@@ -97,7 +97,8 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	render(rec, productsTpl, map[string]any{
 		"Title": "Produits", "Active": "products", "Sources": []string{"diskprices"},
 		"Brands": []string{"Seagate"}, "Categories": []string{"nas"}, "Interfaces": []string{"sata"}, "Recordings": []string{"cmr"},
-		"Prices":     []db.CurrentPrice{{ProductID: "fixture", Title: "IronWolf", URL: "https://example.test", CapacityTB: 16, PriceEUR: 300, PricePerTB: 18.75}},
+		"Groups": []db.ProductGroup{{CanonicalKey: "fixture-key", Brand: "Seagate", Model: "IronWolf", CapacityTB: 16, BestPriceEUR: 300, BestPricePerTB: 18.75, BestProductID: "fixture", OfferCount: 1}},
+		"Total":  1, "Page": 1, "Pages": 1, "Sort": "eur_tb",
 		"Sparklines": map[string][]db.SparklinePoint{"fixture": {{PricePerTB: 20}, {PricePerTB: 18.75}}},
 	})
 	body := rec.Body.String()

@@ -250,20 +250,25 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		cancel()
 
 		metrics.FetchDuration = time.Since(now)
-		r.SourceMetrics = append(r.SourceMetrics, metrics)
 
 		if err != nil {
 			if errors.Is(err, gobreaker.ErrOpenState) || errors.Is(err, gobreaker.ErrTooManyRequests) {
+				r.SourceMetrics = append(r.SourceMetrics, metrics)
 				slog.Warn("source breaker open", "src", src.Name())
 				r.BreakerSkips[src.Name()] = "open"
 				r.Errors = append(r.Errors, src.Name()+": circuit open")
 				continue
 			}
+			metrics.Error = err.Error()
+			if sources.Classify(err) == sources.SeverityBlocked {
+				metrics.BlockedByKeyword = "CAPTCHA/WAF"
+			}
+			r.SourceMetrics = append(r.SourceMetrics, metrics)
 			slog.Error("fetch", "src", src.Name(), "err", err)
 			r.Errors = append(r.Errors, src.Name()+": "+err.Error())
-			metrics.Error = err.Error()
 			continue
 		}
+		r.SourceMetrics = append(r.SourceMetrics, metrics)
 		slog.Info("fetched", "src", src.Name(), "n", len(deals))
 		r.Fetched += len(deals)
 

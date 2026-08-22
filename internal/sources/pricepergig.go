@@ -163,6 +163,8 @@ func (s *PricePerGig) Fetch(ctx context.Context) ([]domain.Deal, error) {
 			Interfaces:    ifaces,
 			Brand:         strPtr(d.Brand),
 			Model:         strPtr(d.Model),
+			SKU:           amazonSKU(d.Model, parsing.ExtractASIN(url)),
+			ImageURL:      amazonImageFromASIN(parsing.ExtractASIN(url)),
 			Merchant:      strPtr(d.SellerName),
 			ExternalID:    parsing.ExtractASIN(url),
 			ObservedAt:    observedAt,

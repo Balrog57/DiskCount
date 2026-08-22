@@ -61,10 +61,10 @@ func NewRegistry(cfg *config.Config) *Registry {
 // configuration. Use RawHTTP() in the rare case a caller needs the
 // underlying *HTTPFetcher (e.g. to reach a private helper that is not on
 // the Fetcher interface).
-func (r *Registry) HTTP() scraper.Fetcher            { return r.http }
-func (r *Registry) Retry() *scraper.RetryingFetcher  { return r.retry }
-func (r *Registry) Byparr() *scraper.ByparrClient    { return r.byparr }
-func (r *Registry) Config() *config.Config           { return r.cfg }
+func (r *Registry) HTTP() scraper.Fetcher           { return r.http }
+func (r *Registry) Retry() *scraper.RetryingFetcher { return r.retry }
+func (r *Registry) Byparr() *scraper.ByparrClient   { return r.byparr }
+func (r *Registry) Config() *config.Config          { return r.cfg }
 
 func Register(fn SourceFactory) { registeredFactories = append(registeredFactories, fn) }
 
@@ -111,9 +111,9 @@ func wrapRateLimited(s Source, reqsPerPeriod int, period time.Duration) Source {
 	}
 }
 
-func (r *rateLimitSource) Name() string                                    { return r.inner.Name() }
-func (r *rateLimitSource) Info() SourceInfo                               { return infoOf(r.inner) }
-func (r *rateLimitSource) HealthCheck(ctx context.Context) error           { return healthCheckOf(r.inner, ctx) }
+func (r *rateLimitSource) Name() string                          { return r.inner.Name() }
+func (r *rateLimitSource) Info() SourceInfo                      { return infoOf(r.inner) }
+func (r *rateLimitSource) HealthCheck(ctx context.Context) error { return healthCheckOf(r.inner, ctx) }
 
 func (r *rateLimitSource) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	select {

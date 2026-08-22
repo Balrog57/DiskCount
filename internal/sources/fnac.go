@@ -95,7 +95,7 @@ func parseFnac(html, baseURL string) []domain.Deal {
 			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 		cond := domain.ConditionNew
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source:        "fnac",
 			Title:         title,
 			URL:           href,
@@ -107,7 +107,10 @@ func parseFnac(html, baseURL string) []domain.Deal {
 			DriveCategory: dc,
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
-		})
+		}
+		deal = withCardImage(deal, s, baseURL)
+		deal.SKU = cardSKU(s)
+		deals = append(deals, deal)
 	})
 	return deals
 }

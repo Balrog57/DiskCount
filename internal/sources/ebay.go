@@ -42,13 +42,13 @@ func init() {
 // client-credentials grant and searches for configured queries across one or
 // more eBay marketplaces, mapping each item summary to a domain.Deal.
 type Ebay struct {
-	http      scraper.Fetcher
-	clientID  string
-	secret    string
-	queries   []string
+	http         scraper.Fetcher
+	clientID     string
+	secret       string
+	queries      []string
 	marketplaces []string
-	apiBase   string
-	oauthBase string
+	apiBase      string
+	oauthBase    string
 
 	mu          sync.Mutex
 	token       string
@@ -133,10 +133,10 @@ func (s *Ebay) search(ctx context.Context, token, query, marketplace string) ([]
 	}
 	var result struct {
 		ItemSummaries []struct {
-			ItemID        string `json:"itemId"`
-			Title         string `json:"title"`
-			ItemWebURL    string `json:"itemWebUrl"`
-			Price         struct {
+			ItemID     string `json:"itemId"`
+			Title      string `json:"title"`
+			ItemWebURL string `json:"itemWebUrl"`
+			Price      struct {
 				Value    string `json:"value"`
 				Currency string `json:"currency"`
 			} `json:"price"`
@@ -183,7 +183,7 @@ func (s *Ebay) search(ctx context.Context, token, query, marketplace string) ([]
 			Condition: &cond, MediaType: media,
 			ExternalID:    extID,
 			DriveCategory: dc, Interfaces: ifaces,
-			Brand: strPtr(it.Brand),
+			Brand:      strPtr(it.Brand),
 			ObservedAt: domain.UTCNow(),
 		})
 	}

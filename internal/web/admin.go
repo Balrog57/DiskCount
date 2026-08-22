@@ -551,57 +551,113 @@ func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) products(w http.ResponseWriter, r *http.Request) {
-	prices, err := s.db.LatestPrices(r.Context(), 300)
-	filtered := filterPrices(prices, r)
-	// 7-day sparkline data per product. We ask for it even when filtered
-	// is empty so the page still renders (just with no sparklines).
-	sparklines := map[string][]db.SparklinePoint{}
-	if s.db != nil && len(filtered) > 0 {
-		ids := make([]string, 0, len(filtered))
-		seen := make(map[string]bool, len(filtered))
-		for _, p := range filtered {
-			if !seen[p.ProductID] {
-				seen[p.ProductID] = true
-				ids = append(ids, p.ProductID)
+	data := s.baseWithRequest(r, "Produits", "products")
+	data["Groups"] = []db.ProductGroup{}
+	data["Ungrouped"] = []db.CurrentPrice{}
+	data["Sparklines"] = map[string][]db.SparklinePoint{}
+	q := catalogQueryFromRequest(r)
+	data["Page"], data["Pages"], data["Total"] = q.Offset/q.Limit+1, 1, 0
+	if s.db != nil {
+		groups, total, err := s.db.CatalogGroups(r.Context(), q)
+		data["Groups"], data["Total"], data["Error"] = groups, total, err
+		if r.URL.Query().Get("ungrouped") == "1" {
+			data["Ungrouped"], err = s.db.UngroupedPrices(r.Context(), q)
+			if data["Error"] == nil {
+				data["Error"] = err
 			}
 		}
-		sparklines, _ = s.db.Sparklines(r.Context(), ids, 7, 24)
-	}
-	data := s.baseWithRequest(r, "Produits", "products")
-	data["Prices"] = filtered
-	data["Sparklines"] = sparklines
-	data["Error"] = err
-	data["Sources"] = uniqueSources(prices)
-	brands, categories, interfaces, recordings := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	for _, p := range prices {
-		if p.Brand != nil {
-			brands[*p.Brand] = true
+		ids := make([]string, 0, len(groups))
+		for _, g := range groups {
+			if g.BestProductID != "" {
+				ids = append(ids, g.BestProductID)
+			}
 		}
-		if p.DriveCategory != nil {
-			categories[*p.DriveCategory] = true
+		if len(ids) > 0 {
+			data["Sparklines"], _ = s.db.Sparklines(r.Context(), ids, 7, 24)
 		}
-		if p.RecordingMethod != nil {
-			recordings[*p.RecordingMethod] = true
-		}
-		for _, iface := range p.Interfaces {
-			interfaces[iface] = true
+		if total > 0 {
+			data["Pages"] = (total + q.Limit - 1) / q.Limit
 		}
 	}
-	data["Brands"], data["Categories"] = sortedSet(brands), sortedSet(categories)
-	data["Interfaces"], data["Recordings"] = sortedSet(interfaces), sortedSet(recordings)
-	data["SelectedSource"] = r.URL.Query().Get("source")
-	data["SelectedMedia"] = r.URL.Query().Get("media")
-	data["SelectedCondition"] = r.URL.Query().Get("condition")
-	data["SelectedAvailability"] = r.URL.Query().Get("availability")
-	data["SelectedBrand"] = r.URL.Query().Get("brand")
-	data["SelectedCategory"] = r.URL.Query().Get("category")
-	data["SelectedInterface"] = r.URL.Query().Get("interface")
-	data["SelectedRecording"] = r.URL.Query().Get("recording")
-	data["Query"] = r.URL.Query().Get("q")
-	data["MinTB"] = r.URL.Query().Get("min_tb")
-	data["MaxTB"] = r.URL.Query().Get("max_tb")
-	data["MaxPrice"] = r.URL.Query().Get("max_eur_tb")
+	if brands, categories, interfaces, recordings, sources, err := s.dbFacets(r.Context()); err == nil {
+		data["Brands"], data["Categories"], data["Interfaces"], data["Recordings"], data["Sources"] = brands, categories, interfaces, recordings, sources
+	}
+	data["SelectedSource"] = q.Source
+	data["SelectedMedia"] = q.Media
+	data["SelectedCondition"] = q.Condition
+	data["SelectedAvailability"] = q.Availability
+	data["SelectedBrand"] = q.Brand
+	data["SelectedCategory"] = q.Category
+	data["SelectedInterface"] = q.Interface
+	data["SelectedRecording"] = q.Recording
+	data["Query"] = q.Search
+	data["MinTB"], data["MaxTB"], data["MaxPrice"] = r.URL.Query().Get("min_tb"), r.URL.Query().Get("max_tb"), r.URL.Query().Get("max_eur_tb")
+	data["Sort"], data["UngroupedSelected"] = q.Sort, r.URL.Query().Get("ungrouped") == "1"
+	pages := data["Pages"].(int)
+	data["PageLinks"] = catalogPageLinks(r, pages)
 	render(w, productsTpl, data)
+}
+
+type catalogPageLink struct {
+	Number int
+	URL    string
+}
+
+func catalogPageLinks(r *http.Request, pages int) []catalogPageLink {
+	if pages < 1 {
+		return nil
+	}
+	current, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if current < 1 {
+		current = 1
+	}
+	start, end := 1, pages
+	if pages > 15 {
+		start = current - 7
+		if start < 1 {
+			start = 1
+		}
+		end = start + 14
+		if end > pages {
+			end = pages
+			start = pages - 14
+			if start < 1 {
+				start = 1
+			}
+		}
+	}
+	out := make([]catalogPageLink, 0, end-start+1)
+	for i := start; i <= end; i++ {
+		values := r.URL.Query()
+		values.Set("page", strconv.Itoa(i))
+		out = append(out, catalogPageLink{Number: i, URL: "/products?" + values.Encode()})
+	}
+	return out
+}
+
+func catalogQueryFromRequest(r *http.Request) db.CatalogQuery {
+	v := r.URL.Query()
+	q := db.CatalogQuery{Search: strings.TrimSpace(v.Get("q")), Source: v.Get("source"), Media: v.Get("media"), Condition: v.Get("condition"), Availability: v.Get("availability"), Brand: v.Get("brand"), Category: v.Get("category"), Interface: v.Get("interface"), Recording: v.Get("recording"), Sort: v.Get("sort"), Limit: 48}
+	if page, err := strconv.Atoi(v.Get("page")); err == nil && page > 1 {
+		q.Offset = (page - 1) * q.Limit
+	}
+	if n, ok := parseOptionalFloat(v.Get("min_tb")); ok {
+		q.MinTB = &n
+	}
+	if n, ok := parseOptionalFloat(v.Get("max_tb")); ok {
+		q.MaxTB = &n
+	}
+	if n, ok := parseOptionalFloat(v.Get("max_eur_tb")); ok {
+		q.MaxEURTB = &n
+	}
+	return q
+}
+
+func (s *Server) dbFacets(ctx context.Context) ([]string, []string, []string, []string, []string, error) {
+	if s.db == nil {
+		return nil, nil, nil, nil, nil, nil
+	}
+	return s.db.CatalogFacets(ctx)
 }
 
 func (s *Server) priceDrops(w http.ResponseWriter, r *http.Request) {
@@ -654,12 +710,23 @@ func (s *Server) europe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		http.Error(w, "database not available", http.StatusServiceUnavailable)
+		return
+	}
+	canonicalKey := strings.TrimSpace(r.URL.Query().Get("key"))
 	productID := strings.TrimSpace(r.URL.Query().Get("id"))
-	if productID == "" {
+	if canonicalKey == "" && productID == "" {
 		http.Redirect(w, r, "/products", http.StatusSeeOther)
 		return
 	}
-	product, err := s.db.GetProduct(r.Context(), productID)
+	var product *db.Product
+	var err error
+	if canonicalKey != "" {
+		product, err = s.db.GetProductByCanonicalKey(r.Context(), canonicalKey)
+	} else {
+		product, err = s.db.GetProduct(r.Context(), productID)
+	}
 	if err != nil {
 		data := s.baseWithRequest(r, "Produit", "products")
 		data["Error"] = err
@@ -670,13 +737,27 @@ func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/products", http.StatusSeeOther)
 		return
 	}
+	if canonicalKey == "" && product.CanonicalKey != nil && *product.CanonicalKey != "" {
+		target := "/product?key=" + url.QueryEscape(*product.CanonicalKey)
+		if days := r.URL.Query().Get("days"); days != "" {
+			target += "&days=" + url.QueryEscape(days)
+		}
+		http.Redirect(w, r, target, http.StatusSeeOther)
+		return
+	}
 	days := 30
 	if d := r.URL.Query().Get("days"); d != "" {
 		if v, err := strconv.Atoi(d); err == nil && v > 0 && v <= 365 {
 			days = v
 		}
 	}
-	history, histErr := s.db.PriceHistory(r.Context(), productID, days)
+	var history []db.PriceHistoryPoint
+	var histErr error
+	if canonicalKey != "" {
+		history, histErr = s.db.PriceHistoryByKey(r.Context(), canonicalKey, days)
+	} else {
+		history, histErr = s.db.PriceHistory(r.Context(), productID, days)
+	}
 	var offers []db.ProductOffer
 	var offersErr error
 	if product.CanonicalKey != nil {
@@ -715,6 +796,7 @@ func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
 	data["MaxPT"] = maxPT
 	data["AvgPT"] = avgPT
 	data["ChartPoints"] = computeChartPoints(history, minPT, maxPT)
+	data["CanonicalKey"] = canonicalKey
 	data["Error"] = firstErr(histErr, offersErr)
 	render(w, productDetailTpl, data)
 }
@@ -892,6 +974,8 @@ func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	data["CapacityPresets"] = rules.CapacityPresets
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
+	data["PrefillName"] = r.URL.Query().Get("name")
+	data["PrefillKeywords"] = r.URL.Query().Get("keywords")
 	render(w, alertsTpl, data)
 }
 
@@ -1485,8 +1569,9 @@ var tmplFuncs = template.FuncMap{
 		}
 		return fmt.Sprintf("%.2f", *v)
 	},
-	"price": func(v float64) string { return fmt.Sprintf("%.2f", v) },
-	"cap":   func(v float64) string { return fmt.Sprintf("%.1f To", v) },
+	"price":    func(v float64) string { return fmt.Sprintf("%.2f", v) },
+	"cap":      func(v float64) string { return fmt.Sprintf("%.1f To", v) },
+	"urlquery": url.QueryEscape,
 	"ptr": func(v *string) string {
 		if v == nil || *v == "" {
 			return "-"
@@ -1778,6 +1863,7 @@ const europeTpl = `{{define "body"}}
 
 const productsTpl = `{{define "body"}}
 <style>
+.drive-photo{width:100%;height:126px;object-fit:contain;background:var(--soft);border-radius:11px;border:1px solid var(--line)}
 .catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;margin-bottom:18px;background:linear-gradient(135deg,var(--nav),var(--nav2));color:#fff;border:1px solid #174f92;border-radius:16px}.catalog-hero h2{margin:0 0 4px;font-size:24px}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:28px;font-weight:850;color:#78bdff;white-space:nowrap}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(0,29,72,.08);transition:transform .15s ease,border-color .15s ease}.product-card:hover{transform:translateY(-2px);border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:11px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.drive-visual span{font-size:28px;font-weight:900;letter-spacing:.08em}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:16px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:24px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:999px;padding:4px 9px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff}.storage-tag.unavailable{background:rgba(232,121,114,.12);color:var(--bad)}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
 :root[data-theme=dark] .drive-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
 @media(max-width:1180px){.product-grid{grid-template-columns:1fr}}
@@ -1785,7 +1871,7 @@ const productsTpl = `{{define "body"}}
 @media(max-width:420px){.catalog-hero{display:block}.catalog-count{margin-top:10px}.product-card{grid-template-columns:82px minmax(0,1fr);gap:11px}.drive-visual{min-height:100px}.drive-visual span{font-size:22px}.storage-tag:nth-of-type(n+5){display:none}}
 </style>
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-<section id="catalog" class="catalog-hero"><div><h2>Le meilleur du stockage, au bon prix</h2><p>HDD, SSD et NVMe classés par coût réel au téraoctet.</p></div><div class="catalog-count">{{len .Prices}} offres</div></section>
+<section id="catalog" class="catalog-hero"><div><h2>Le meilleur du stockage, au bon prix</h2><p>HDD, SSD et NVMe classés par coût réel au téraoctet.</p></div><div class="catalog-count">{{.Total}} produits</div></section>
 <div class="catalog-layout">
 <aside id="filters" class="panel panel-body filter-drawer"><div class="filter-head"><h2>Filtres</h2><a class="filter-close" href="#catalog" aria-label="Fermer les filtres">×</a></div>
 <form method="get" action="/products" class="filter-form">
@@ -1800,31 +1886,34 @@ const productsTpl = `{{define "body"}}
 <div><label for="filter_recording">Enregistrement</label><select id="filter_recording" name="recording"><option value="">Tous</option>{{range .Recordings}}<option value="{{.}}" {{if eq $.SelectedRecording .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label>Capacité</label><div class="filter-range"><input aria-label="Capacité minimale" name="min_tb" value="{{.MinTB}}" inputmode="decimal" placeholder="Min To"><input aria-label="Capacité maximale" name="max_tb" value="{{.MaxTB}}" inputmode="decimal" placeholder="Max To"></div></div>
 <div><label for="filter_max_eur_tb">Prix maximum</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal" placeholder="EUR / To"></div>
-<div class="filter-actions"><button type="submit">Afficher les offres</button><a class="filter-reset" href="/products">Réinitialiser</a></div>
+<div><label for="filter_sort">Trier par</label><select id="filter_sort" name="sort"><option value="eur_tb" {{if eq .Sort "eur_tb"}}selected{{end}}>Prix/To</option><option value="price" {{if eq .Sort "price"}}selected{{end}}>Prix</option><option value="freshness" {{if eq .Sort "freshness"}}selected{{end}}>Fraîcheur</option><option value="sellers" {{if eq .Sort "sellers"}}selected{{end}}>Vendeurs</option></select></div><label class="check-chip"><input type="checkbox" name="ungrouped" value="1" {{if .UngroupedSelected}}checked{{end}}> Offres non référencées</label><div class="filter-actions"><button type="submit">Afficher les produits</button><a class="filter-reset" href="/products">Réinitialiser</a></div>
 </form></aside>
 <section><div class="catalog-toolbar"><div><h2>Produits référencés</h2><span class="hint">Prix et fraîcheur vérifiés lors du dernier scan.</span></div><a class="button" href="/alerts">Créer une alerte</a></div>
-<div class="product-grid">{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := Sparkline $pts}}
-<article class="product-card"><div class="drive-visual"><span>{{mediaLabel .MediaType}}</span><small>{{cap .CapacityTB}}</small></div><div class="product-copy">
-<a class="product-title" href="/product?id={{.ProductID}}">{{.Title}}</a>
-<div class="product-price">{{price .PriceEUR}} € <small>{{price .PricePerTB}} €/To</small></div>
-<div class="tag-row"><span class="storage-tag strong">{{mediaLabel .MediaType}}</span><span class="storage-tag {{if eq (printf "%s" .Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span>{{if .Brand}}<span class="storage-tag">{{ptr .Brand}}</span>{{end}}{{if .DriveCategory}}<span class="storage-tag">{{ptr .DriveCategory}}</span>{{end}}{{if .RecordingMethod}}<span class="storage-tag">{{ptr .RecordingMethod}}</span>{{end}}{{range .Interfaces}}<span class="storage-tag">{{.}}</span>{{end}}</div>
-<div class="product-meta"><span>{{.Source}} · Actualisé {{ago .ObservedAt}}</span>{{if $spark.Coords}}<svg class="sparkline trend" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{end}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">Site ↗</a></div>
-</div></article>{{else}}<div class="panel empty">Aucun produit ne correspond aux filtres.</div>{{end}}</div></section>
+<div class="product-grid">{{range .Groups}}{{$pts := index $.Sparklines .BestProductID}}{{$spark := Sparkline $pts}}
+<article class="product-card"><div>{{if .ImageURL}}<img class="drive-photo" src="{{ptr .ImageURL}}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">{{end}}<div class="drive-visual" {{if .ImageURL}}style="display:none"{{end}}><span>{{mediaLabel .MediaType}}</span><small>{{cap .CapacityTB}}</small></div></div><div class="product-copy">
+<a class="product-title" href="/product?key={{urlquery .CanonicalKey}}">{{.Brand}} {{.Model}} · {{cap .CapacityTB}}</a>{{if .SKU}}<div class="hint">SKU : {{ptr .SKU}}</div>{{end}}
+<div class="product-price">{{price .BestPriceEUR}} € <small>{{price .BestPricePerTB}} €/To</small></div>
+<div class="tag-row"><span class="storage-tag strong">{{.OfferCount}} vendeurs</span><span class="storage-tag {{if eq (printf "%s" .Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span><span class="storage-tag">{{mediaLabel .MediaType}}</span><span class="storage-tag">{{.Brand}}</span>{{if .DriveCategory}}<span class="storage-tag">{{ptr .DriveCategory}}</span>{{end}}{{if .RecordingMethod}}<span class="storage-tag">{{ptr .RecordingMethod}}</span>{{end}}{{range .Interfaces}}<span class="storage-tag">{{.}}</span>{{end}}</div>
+<div class="product-meta"><span>Actualisé {{ago .ObservedAt}}</span>{{if $spark.Coords}}<svg class="sparkline trend" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{end}}</div>
+</div></article>{{else}}<div class="panel empty">Aucun produit ne correspond aux filtres.</div>{{end}}</div>
+{{if .UngroupedSelected}}<h2>Offres non référencées</h2><div class="product-grid">{{range .Ungrouped}}<article class="product-card"><div class="product-copy"><a class="product-title" href="/product?id={{.ProductID}}">{{.Title}}</a><div class="hint">{{.Source}} · {{cap .CapacityTB}}</div><div class="product-price">{{price .PriceEUR}} € <small>{{price .PricePerTB}} €/To</small></div><div class="product-meta"><span>Actualisé {{ago .ObservedAt}}</span><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir l'offre ↗</a></div></div></article>{{end}}</div>{{end}}
+{{if gt .Pages 1}}<nav class="range-links" aria-label="Pagination">{{range .PageLinks}}<a href="{{.URL}}" {{if eq $.Page .Number}}class="active"{{end}}>{{.Number}}</a>{{end}}</nav>{{end}}</section>
 </div><a class="mobile-filter-button" href="#filters">⌁ &nbsp; Filtres</a>
 {{end}}`
 
 const productDetailTpl = `{{define "body"}}
 <style>
+.drive-photo{width:100%;height:180px;object-fit:contain;background:var(--soft);border-radius:14px;border:1px solid var(--line)}
 .detail-back{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:700;text-decoration:none}.detail-hero{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px;background:linear-gradient(135deg,var(--panel),var(--soft));border:1px solid var(--line);border-radius:16px}.detail-visual{min-height:180px;display:grid;place-content:center;text-align:center;border-radius:14px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.detail-visual span{font-size:44px;font-weight:950;letter-spacing:.08em}.detail-visual small{font-size:16px;font-weight:800}.detail-copy h2{margin:0 0 9px;font-size:25px;line-height:1.25}.detail-tags{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}.detail-tag{border-radius:999px;padding:5px 10px;background:var(--panel);border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:750}.detail-actions{display:flex;gap:9px;flex-wrap:wrap}.detail-actions .secondary-link{background:var(--panel);color:var(--brand);border:1px solid var(--line)}.detail-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:18px;margin-top:18px;align-items:start}.compare-panel{padding:22px}.compare-panel h2{margin:0;color:var(--brand);font-size:22px}.compare-sub{margin:4px 0 18px;color:var(--muted)}.offer-card{display:grid;grid-template-columns:minmax(0,1fr) auto 48px;gap:15px;align-items:center;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 10px 28px rgba(0,29,72,.08)}.offer-card+.offer-card{margin-top:12px}.merchant-name{font-size:19px;font-weight:900;text-transform:capitalize}.merchant-title{display:block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}.offer-state{display:inline-flex;margin-top:8px;padding:4px 9px;border-radius:999px;background:rgba(78,199,138,.12);color:var(--good);font-size:12px;font-weight:800}.offer-state.unavailable{background:rgba(232,121,114,.12);color:var(--bad)}.offer-price{text-align:right}.offer-price strong{display:block;color:var(--brand);font-size:28px}.offer-price span{color:var(--muted);font-size:12px}.offer-go{width:46px;height:46px;display:grid;place-content:center;border-radius:999px;background:var(--brand);color:#fff;font-size:28px;text-decoration:none}.spec-list{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}.spec{padding:14px;background:var(--panel)}.spec span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}.spec strong{display:block;margin-top:4px}.history-panel{margin-top:18px}.history-scroll{max-height:330px;overflow:auto}:root[data-theme=dark] .detail-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
 @media(max-width:900px){.detail-layout{grid-template-columns:1fr}}
 @media(max-width:620px){.detail-hero{grid-template-columns:100px minmax(0,1fr);gap:14px;padding:14px}.detail-visual{min-height:115px}.detail-visual span{font-size:28px}.detail-copy h2{font-size:18px}.detail-actions{display:grid}.detail-actions .button{width:100%}.compare-panel{padding:17px}.offer-card{grid-template-columns:1fr auto;gap:10px}.offer-go{grid-column:2;grid-row:1 / span 2}.offer-price{text-align:left}.offer-price strong{font-size:25px}.spec-list{grid-template-columns:1fr}.stats-row{grid-template-columns:1fr}.stat .value{font-size:23px}}
 </style>
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 {{if .Product}}<a class="detail-back" href="/products">← Retour aux produits</a>
-<section class="detail-hero"><div class="detail-visual"><span>{{mediaLabel .Product.MediaType}}</span><small>{{cap .Product.CapacityTB}}</small></div><div class="detail-copy"><h2>{{.Product.Title}}</h2><div class="hint">Référence suivie chez {{.Product.Source}} · actualisée {{ago .Product.LastSeenAt}}</div><div class="detail-tags"><span class="detail-tag">{{mediaLabel .Product.MediaType}}</span><span class="detail-tag">{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span>{{if .Product.Brand}}<span class="detail-tag">{{ptr .Product.Brand}}</span>{{end}}{{if .Product.DriveCategory}}<span class="detail-tag">{{ptr .Product.DriveCategory}}</span>{{end}}{{if .Product.RecordingMethod}}<span class="detail-tag">{{ptr .Product.RecordingMethod}}</span>{{end}}{{range .Product.Interfaces}}<span class="detail-tag">{{.}}</span>{{end}}</div><div class="detail-actions"><a class="button" href="/alerts">♧ &nbsp; Créer une alerte de prix</a><a class="button secondary-link" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer">Voir chez le marchand ↗</a></div></div></section>
+<section class="detail-hero"><div>{{if .Product.ImageURL}}<img class="drive-photo" src="{{ptr .Product.ImageURL}}" alt="" referrerpolicy="no-referrer" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">{{end}}<div class="detail-visual" {{if .Product.ImageURL}}style="display:none"{{end}}><span>{{mediaLabel .Product.MediaType}}</span><small>{{cap .Product.CapacityTB}}</small></div></div><div class="detail-copy"><h2>{{ptr .Product.Brand}} {{ptr .Product.Model}} · {{cap .Product.CapacityTB}}</h2>{{if .Product.SKU}}<div class="hint">SKU : {{ptr .Product.SKU}}</div>{{end}}<div class="hint">Référence suivie chez {{.Product.Source}} · actualisée {{ago .Product.LastSeenAt}}</div><div class="detail-tags"><span class="detail-tag">{{mediaLabel .Product.MediaType}}</span><span class="detail-tag">{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span>{{if .Product.Brand}}<span class="detail-tag">{{ptr .Product.Brand}}</span>{{end}}{{if .Product.DriveCategory}}<span class="detail-tag">{{ptr .Product.DriveCategory}}</span>{{end}}{{if .Product.RecordingMethod}}<span class="detail-tag">{{ptr .Product.RecordingMethod}}</span>{{end}}{{range .Product.Interfaces}}<span class="detail-tag">{{.}}</span>{{end}}</div><div class="detail-actions"><a class="button" href="/alerts?name={{urlquery (printf "%s %s" (ptr .Product.Brand) (ptr .Product.Model))}}&keywords={{urlquery (printf "%s,%s" (ptr .Product.Brand) (ptr .Product.Model))}}">♧ &nbsp; Créer une alerte de prix</a><a class="button secondary-link" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer">Voir chez le marchand ↗</a></div></div></section>
 <div class="detail-layout"><section class="panel compare-panel"><h2>Comparaison des prix</h2><p class="compare-sub">{{if gt (len .Offers) 1}}{{len .Offers}} offres regroupées par marque, modèle et capacité.{{else}}Dernière offre disponible pour cette référence.{{end}}</p>{{if .Offers}}{{range .Offers}}<article class="offer-card"><div><div class="merchant-name">{{.Source}}</div><span class="merchant-title">{{.Title}}</span><span class="offer-state {{if eq (printf "%s" .Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Availability) "unavailable"}}Indisponible{{else}}✓ {{conditionLabel .Condition}}{{end}}</span></div><div class="offer-price"><strong>{{price .PriceEUR}} €</strong><span>{{price .PricePerTB}} €/To · {{ago .ObservedAt}}</span></div><a class="offer-go" href="{{.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Source}}">›</a></article>{{end}}{{else if .Current}}<article class="offer-card"><div><div class="merchant-name">{{.Product.Source}}</div><span class="offer-state {{if eq (printf "%s" .Product.Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}✓ {{conditionLabel .Product.Condition}}{{end}}</span></div><div class="offer-price"><strong>{{price .Current.PriceEUR}} €</strong><span>{{price .Current.PricePerTB}} €/To · {{ago .Current.ObservedAt}}</span></div><a class="offer-go" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Product.Source}}">›</a></article>{{else}}<p class="empty">Aucun prix récent disponible.</p>{{end}}</section>
-<section class="panel"><div class="panel-head"><h2>Caractéristiques</h2></div><div class="spec-list"><div class="spec"><span>Capacité</span><strong>{{cap .Product.CapacityTB}}</strong></div><div class="spec"><span>Support</span><strong>{{mediaLabel .Product.MediaType}}</strong></div><div class="spec"><span>Marque</span><strong>{{ptr .Product.Brand}}</strong></div><div class="spec"><span>État</span><strong>{{conditionLabel .Product.Condition}}</strong></div><div class="spec"><span>Disponibilité</span><strong>{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</strong></div><div class="spec"><span>Disponibilité vérifiée</span><strong>{{tsv .Product.AvailabilityUpdatedAt}}</strong></div><div class="spec"><span>Première observation</span><strong>{{tsv .Product.FirstSeenAt}}</strong></div><div class="spec"><span>Dernier refresh</span><strong>{{tsv .Product.LastSeenAt}}</strong></div></div></section></div>
-<section class="panel history-panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a><a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a><a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a><a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1 an</a></div></div>
+<section class="panel"><div class="panel-head"><h2>Caractéristiques</h2></div><div class="spec-list"><div class="spec"><span>Capacité</span><strong>{{cap .Product.CapacityTB}}</strong></div><div class="spec"><span>SKU</span><strong>{{ptr .Product.SKU}}</strong></div><div class="spec"><span>Modèle</span><strong>{{ptr .Product.Model}}</strong></div><div class="spec"><span>Support</span><strong>{{mediaLabel .Product.MediaType}}</strong></div><div class="spec"><span>Marque</span><strong>{{ptr .Product.Brand}}</strong></div><div class="spec"><span>État</span><strong>{{conditionLabel .Product.Condition}}</strong></div><div class="spec"><span>Disponibilité</span><strong>{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</strong></div><div class="spec"><span>Disponibilité vérifiée</span><strong>{{tsv .Product.AvailabilityUpdatedAt}}</strong></div><div class="spec"><span>Première observation</span><strong>{{tsv .Product.FirstSeenAt}}</strong></div><div class="spec"><span>Dernier refresh</span><strong>{{tsv .Product.LastSeenAt}}</strong></div></div></section></div>
+<section class="panel history-panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?{{if .CanonicalKey}}key={{urlquery .CanonicalKey}}{{else}}id={{.Product.ID}}{{end}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a><a href="/product?{{if .CanonicalKey}}key={{urlquery .CanonicalKey}}{{else}}id={{.Product.ID}}{{end}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a><a href="/product?{{if .CanonicalKey}}key={{urlquery .CanonicalKey}}{{else}}id={{.Product.ID}}{{end}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a><a href="/product?{{if .CanonicalKey}}key={{urlquery .CanonicalKey}}{{else}}id={{.Product.ID}}{{end}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1 an</a></div></div>
 {{if .History}}<div class="stats-row"><div class="stat"><span class="label">Minimum EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moyenne EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Maximum EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div><div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none" aria-label="Évolution du prix au téraoctet"><polyline fill="none" stroke="#3b9cff" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de données pour un graphique.</p>{{end}}</div><div class="table-wrap history-scroll"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>{{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">Aucune observation sur cette période.</p>{{end}}</section>
 {{else}}<p class="empty">Produit introuvable. <a href="/products">Retour aux produits</a></p>{{end}}
 {{end}}`
@@ -1834,7 +1923,7 @@ const alertsTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><div><h2>Créer une alerte</h2><div class="hint">Tous les critères sont gérés ici. Discord reste optionnel pour la diffusion.</div></div></div><div class="panel-body">
 <form method="post" action="/alerts/add" class="alert-form">
-<div class="alert-grid"><div><label for="alert_name">Nom</label><input id="alert_name" name="name" required placeholder="NAS 20 To"></div><div><label for="alert_price">Prix max €/To</label><input id="alert_price" name="max_price_per_tb" inputmode="decimal" placeholder="20"></div><div><label for="alert_discount">Baisse minimale %</label><input id="alert_discount" name="min_discount_pct" type="number" min="0" max="100" step="0.1" value="5"></div><div><label for="alert_cooldown">Délai entre alertes (h)</label><input id="alert_cooldown" name="cooldown_hours" type="number" min="0" value="24"></div><div><label for="alert_keywords">Mots inclus</label><input id="alert_keywords" name="keywords" placeholder="IronWolf, Exos"></div><div><label for="alert_exclude">Mots exclus</label><input id="alert_exclude" name="exclude_keywords" placeholder="reconditionné"></div><div><label class="check-chip"><input type="checkbox" name="discord_enabled" value="1" {{if not .Status.DiscordConfigured}}disabled{{end}}> Diffuser cette alerte sur Discord</label>{{if not .Status.DiscordConfigured}}<div class="hint">Disponible après la configuration finale du bot.</div>{{end}}</div></div>
+<div class="alert-grid"><div><label for="alert_name">Nom</label><input id="alert_name" name="name" value="{{.PrefillName}}" required placeholder="NAS 20 To"></div><div><label for="alert_price">Prix max €/To</label><input id="alert_price" name="max_price_per_tb" inputmode="decimal" placeholder="20"></div><div><label for="alert_discount">Baisse minimale %</label><input id="alert_discount" name="min_discount_pct" type="number" min="0" max="100" step="0.1" value="5"></div><div><label for="alert_cooldown">Délai entre alertes (h)</label><input id="alert_cooldown" name="cooldown_hours" type="number" min="0" value="24"></div><div><label for="alert_keywords">Mots inclus</label><input id="alert_keywords" name="keywords" value="{{.PrefillKeywords}}" placeholder="IronWolf, Exos"></div><div><label for="alert_exclude">Mots exclus</label><input id="alert_exclude" name="exclude_keywords" placeholder="reconditionné"></div><div><label class="check-chip"><input type="checkbox" name="discord_enabled" value="1" {{if not .Status.DiscordConfigured}}disabled{{end}}> Diffuser cette alerte sur Discord</label>{{if not .Status.DiscordConfigured}}<div class="hint">Disponible après la configuration finale du bot.</div>{{end}}</div></div>
 <div><div class="label">Support</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="media" value="rotational"> HDD</label><label class="check-chip"><input type="checkbox" name="media" value="solid_state"> SSD</label></div></div>
 <div><div class="label">État</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="condition" value="new"> Neuf</label><label class="check-chip"><input type="checkbox" name="condition" value="used"> Occasion</label></div></div>
 <div><div class="label">Capacité</div><div class="check-grid">{{range $key, $preset := .CapacityPresets}}<label class="check-chip"><input type="checkbox" name="capacity" value="{{$key}}"> {{$preset.Label}}</label>{{end}}</div></div>

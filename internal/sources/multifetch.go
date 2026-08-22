@@ -2,6 +2,7 @@ package sources
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -18,6 +19,7 @@ type multiURLFetchResult struct {
 	errors  []error
 	failed  int
 	total   int
+	blocked bool
 }
 
 // fetchMultiURL fetches every URL for a source, applies the Byparr headless
@@ -52,8 +54,14 @@ func fetchMultiURL(
 		if err != nil {
 			slog.Warn(sourceName, "url", u, "err", err)
 			out.errors = append(out.errors, err)
+			if isBlockedError(err) {
+				out.blocked = true
+			}
 			out.failed++
 			continue
+		}
+		if isBlockedText(html) {
+			out.blocked = true
 		}
 		out.deals = append(out.deals, parse(html, u)...)
 	}
@@ -94,7 +102,27 @@ func (r multiURLFetchResult) asTransientError(sourceName string) error {
 	if firstErr == nil {
 		return nil
 	}
+	if r.blocked || isBlockedError(firstErr) {
+		return Blocked(sourceName, firstErr)
+	}
 	return Transient(sourceName, firstErr)
+}
+
+func isBlockedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrBlocked) || isBlockedText(err.Error())
+}
+
+func isBlockedText(text string) bool {
+	text = strings.ToLower(text)
+	for _, marker := range []string{"captcha", "access denied", "waf", "blocked"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // errorSummary returns a compact "; "-joined view of the accumulated errors,
@@ -138,6 +166,10 @@ func fetchWithByparrFallback(
 			ses, err := byparr.GetPage(ctx, u)
 			if err != nil {
 				slog.Warn(sourceName, "byparr", u, "err", err)
+				res.errors = append(res.errors, err)
+				if isBlockedError(err) {
+					res.blocked = true
+				}
 				continue
 			}
 			res.deals = append(res.deals, parse(ses.HTML, u)...)
@@ -148,6 +180,15 @@ func fetchWithByparrFallback(
 	// produced zero deals. Otherwise the circuit breaker never trips even
 	// though the source is effectively dead.
 	if len(res.deals) == 0 {
+		if res.blocked {
+			var cause error
+			if len(res.errors) > 0 {
+				cause = res.errors[0]
+			} else {
+				cause = errors.New("blocked page returned no deals")
+			}
+			return nil, Blocked(sourceName, cause)
+		}
 		if err := res.asTransientError(sourceName); err != nil {
 			return nil, err
 		}

@@ -128,10 +128,29 @@ func enrich(d domain.Deal) domain.Deal {
 			d.Brand = &b
 		}
 	}
+	if sku := strings.TrimSpace(str(d.SKU)); sku != "" {
+		d.SKU = &sku
+		if modelRE.MatchString(sku) {
+			d.Model = &sku
+		} else if d.Model == nil {
+			d.Model = &sku
+		}
+	} else {
+		d.SKU = nil
+	}
 	if d.Model == nil {
 		if m := modelRE.FindString(d.Title); m != "" {
 			d.Model = &m
 		}
+	}
+	if d.SKU == nil && d.Model != nil && modelRE.MatchString(*d.Model) {
+		m := *d.Model
+		d.SKU = &m
+	}
+	if img := strings.TrimSpace(str(d.ImageURL)); img != "" {
+		d.ImageURL = &img
+	} else {
+		d.ImageURL = nil
 	}
 	return d
 }

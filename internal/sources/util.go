@@ -46,3 +46,28 @@ func isAmazonURL(raw string) bool {
 		return false
 	}
 }
+
+func amazonImageURL(asin string) string {
+	asin = strings.ToUpper(strings.TrimSpace(asin))
+	if len(asin) != 10 {
+		return ""
+	}
+	return "https://m.media-amazon.com/images/P/" + asin + ".jpg"
+}
+
+func amazonSKU(model string, asin *string) *string {
+	if model = strings.TrimSpace(model); model != "" {
+		return &model
+	}
+	if asin != nil {
+		return strPtr(*asin)
+	}
+	return nil
+}
+
+func amazonImageFromASIN(asin *string) *string {
+	if asin == nil {
+		return nil
+	}
+	return strPtr(amazonImageURL(*asin))
+}

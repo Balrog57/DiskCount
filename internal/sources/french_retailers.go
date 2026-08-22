@@ -87,6 +87,68 @@ func retailerDeal(title, rawURL string, price float64, details string) (domain.D
 	return domain.Deal{Title: title, URL: rawURL, PriceEUR: round2(price), PricePerTB: round2(price / capacity), CapacityTB: round2(capacity), Condition: &condition, MediaType: media, DriveCategory: category, Interfaces: interfaces, ObservedAt: domain.UTCNow()}, true
 }
 
+func withCardImage(deal domain.Deal, card *goquery.Selection, baseURL string) domain.Deal {
+	var raw string
+	for _, selector := range []string{"img[src]", "img[data-src]", "img[data-lazy]", "source[srcset]"} {
+		card.Find(selector).EachWithBreak(func(_ int, el *goquery.Selection) bool {
+			attr := "src"
+			if strings.HasPrefix(selector, "img[data-src]") {
+				attr = "data-src"
+			} else if strings.HasPrefix(selector, "img[data-lazy]") {
+				attr = "data-lazy"
+			} else if strings.HasPrefix(selector, "source") {
+				attr = "srcset"
+			}
+			value := strings.TrimSpace(el.AttrOr(attr, ""))
+			if attr == "srcset" && value != "" {
+				value = strings.Fields(strings.Split(value, ",")[0])[0]
+			}
+			width, height := strings.TrimSpace(el.AttrOr("width", "")), strings.TrimSpace(el.AttrOr("height", ""))
+			tiny := (width == "1" && height == "1") || strings.Contains(strings.ToLower(value), "1x1")
+			if value != "" && !strings.HasPrefix(strings.ToLower(value), "data:") &&
+				!tiny &&
+				!strings.Contains(strings.ToLower(value), "pixel.gif") {
+				raw = value
+				return false
+			}
+			return true
+		})
+		if raw != "" {
+			break
+		}
+	}
+	if raw != "" {
+		if image := absolutizeURL(baseURL, raw); image != "" {
+			deal.ImageURL = strPtr(image)
+		}
+	}
+	return deal
+}
+
+func cardSKU(card *goquery.Selection) *string {
+	if value := strings.TrimSpace(card.AttrOr("data-sku", "")); value != "" {
+		return strPtr(value)
+	}
+	for _, selector := range []string{"[data-sku]", "[itemprop='sku']"} {
+		if value := strings.TrimSpace(card.Find(selector).First().AttrOr("data-sku", "")); value != "" {
+			return strPtr(value)
+		}
+		if selector == "[itemprop='sku']" {
+			if value := strings.TrimSpace(card.Find(selector).First().AttrOr("content", "")); value != "" {
+				return strPtr(value)
+			}
+			if value := strings.TrimSpace(card.Find(selector).First().Text()); value != "" {
+				return strPtr(value)
+			}
+		}
+	}
+	html, _ := card.Html()
+	if pd, ok := scraper.ParseJSONLD(html); ok {
+		return strPtr(pd.SKU)
+	}
+	return nil
+}
+
 func parseMateriel(html, baseURL string) []domain.Deal {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 	if err != nil {
@@ -101,6 +163,8 @@ func parseMateriel(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(card.Find(".c-product__title").First().Text(), absolutizeURL(baseURL, href), price, card.Find(".product-specs").First().Text()); ok {
+			deal = withCardImage(deal, card, baseURL)
+			deal.SKU = cardSKU(card)
 			out = append(out, deal)
 		}
 	})
@@ -126,6 +190,8 @@ func parseTopbiz(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(link.Text(), absolutizeURL(baseURL, href), price, card.Text()); ok {
+			deal = withCardImage(deal, card, baseURL)
+			deal.SKU = cardSKU(card)
 			out = append(out, deal)
 		}
 	})
@@ -148,6 +214,8 @@ func parseCorsair(html, baseURL string) []domain.Deal {
 		link := card.Find("a[href]").First()
 		href, _ := link.Attr("href")
 		if deal, ok := retailerDeal(title, absolutizeURL(baseURL, href), price, card.Text()); ok {
+			deal = withCardImage(deal, card, baseURL)
+			deal.SKU = cardSKU(card)
 			out = append(out, deal)
 		}
 	})
@@ -193,6 +261,8 @@ func parseGenericRetailer(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(title, absolutizeURL(baseURL, href), price, card.Text()); ok {
+			deal = withCardImage(deal, card, baseURL)
+			deal.SKU = cardSKU(card)
 			out = append(out, deal)
 		}
 	})

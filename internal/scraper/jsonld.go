@@ -10,13 +10,14 @@ import (
 // ProductData holds the structured fields extractable from schema.org/Product
 // JSON-LD markup. Any field may be empty/nil when the page does not declare it.
 type ProductData struct {
-	Name        string
-	Brand       string
-	SKU         string
-	Price       string
-	Currency    string
+	Name         string
+	Brand        string
+	SKU          string
+	Image        string
+	Price        string
+	Currency     string
 	Availability string
-	URL         string
+	URL          string
 }
 
 // ParseJSONLD extracts schema.org/Product (and nested Offer) data from the
@@ -105,9 +106,10 @@ func productFromObject(obj map[string]interface{}) (ProductData, bool) {
 		return ProductData{}, false
 	}
 	pd := ProductData{
-		Name: stringField(obj, "name"),
-		SKU:  stringField(obj, "sku"),
-		URL:  stringField(obj, "url"),
+		Name:  stringField(obj, "name"),
+		SKU:   stringField(obj, "sku"),
+		Image: imageField(obj["image"]),
+		URL:   stringField(obj, "url"),
 	}
 	if brand := obj["brand"]; brand != nil {
 		pd.Brand = brandString(brand)
@@ -116,6 +118,22 @@ func productFromObject(obj map[string]interface{}) (ProductData, bool) {
 		firstOffer(offers, &pd)
 	}
 	return pd, true
+}
+
+func imageField(raw interface{}) string {
+	switch v := raw.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []interface{}:
+		for _, item := range v {
+			if image := imageField(item); image != "" {
+				return image
+			}
+		}
+	case map[string]interface{}:
+		return stringField(v, "url")
+	}
+	return ""
 }
 
 func isProductType(obj map[string]interface{}) bool {

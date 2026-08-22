@@ -98,7 +98,7 @@ func parseTopachat(html, baseURL string) []domain.Deal {
 			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 		cond := domain.ConditionNew
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source:        "topachat",
 			Title:         title,
 			URL:           href,
@@ -110,7 +110,10 @@ func parseTopachat(html, baseURL string) []domain.Deal {
 			DriveCategory: dc,
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
-		})
+		}
+		deal = withCardImage(deal, article, baseURL)
+		deal.SKU = cardSKU(article)
+		deals = append(deals, deal)
 	})
 	return deals
 }

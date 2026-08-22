@@ -160,7 +160,10 @@ func TestExtractProductPriceThousandsSeparator(t *testing.T) {
 }
 
 func TestParseFrenchDecimal(t *testing.T) {
-	cases := []struct{ in string; want float64 }{
+	cases := []struct {
+		in   string
+		want float64
+	}{
 		{"289,99", 289.99},
 		{"289.99", 289.99},
 		{"1.299,00", 1299.0},

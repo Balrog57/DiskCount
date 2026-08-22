@@ -141,3 +141,44 @@ func TestMarketIndexComputesDailyCapacityMedian(t *testing.T) {
 		t.Fatalf("market median missing: %#v", points)
 	}
 }
+
+func TestUpsertPersistsSKUAndImageAndCatalogGroups(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	ids := []string{"sku-shop:st16", "sku-shop-b:st16"}
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM price_observations WHERE product_id=ANY($1)`, ids)
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM products WHERE id=ANY($1)`, ids)
+	t.Cleanup(func() {
+		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM price_observations WHERE product_id=ANY($1)`, ids)
+		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM products WHERE id=ANY($1)`, ids)
+	})
+	sku, img := "ST16000NM000J", "https://example.test/st16.jpg"
+	brand, model := "Seagate", sku
+	a := domain.Deal{Source: "sku-shop", ExternalID: strPtr("st16"), Title: "Exos 16 To", URL: "https://example.test/a", CapacityTB: 16, PriceEUR: 320, PricePerTB: 20, Brand: &brand, Model: &model, SKU: &sku, ImageURL: &img, QualityScore: 90}
+	b := domain.Deal{Source: "sku-shop-b", ExternalID: strPtr("st16"), Title: "Exos 16 To B", URL: "https://example.test/b", CapacityTB: 16, PriceEUR: 288, PricePerTB: 18, Brand: &brand, Model: &model, SKU: &sku, QualityScore: 90}
+	if err := d.RecordObservation(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordObservation(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	p, err := d.GetProduct(ctx, a.ProductID())
+	if err != nil || p == nil || p.SKU == nil || *p.SKU != sku || p.ImageURL == nil || *p.ImageURL != img {
+		t.Fatalf("upsert sku/image: %#v %v", p, err)
+	}
+	groups, total, err := d.CatalogGroups(ctx, CatalogQuery{Search: "ST16000", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, g := range groups {
+		if g.CanonicalKey == "seagate|st16000nm000j|16.000" {
+			found = g.OfferCount >= 2 && g.BestPricePerTB == 18 && g.SKU != nil && *g.SKU == sku
+		}
+	}
+	if !found || total < 1 {
+		t.Fatalf("catalog groups: total=%d groups=%#v", total, groups)
+	}
+}
+
+func strPtr(s string) *string { return &s }

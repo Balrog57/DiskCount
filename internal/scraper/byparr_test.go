@@ -22,11 +22,11 @@ func TestByparrReadsResponseField(t *testing.T) {
 			"status":  "ok",
 			"message": "Success",
 			"solution": map[string]any{
-				"url":    "https://example.test/",
-				"status": 200,
-				"body":   "", // <-- old field, empty on current Byparr
-				"response": pageHTML,
-				"cookies": []map[string]any{},
+				"url":       "https://example.test/",
+				"status":    200,
+				"body":      "", // <-- old field, empty on current Byparr
+				"response":  pageHTML,
+				"cookies":   []map[string]any{},
 				"userAgent": "Mozilla/5.0",
 			},
 		}
@@ -58,10 +58,10 @@ func TestByparrFallsBackToBodyField(t *testing.T) {
 			"status":  "ok",
 			"message": "Success",
 			"solution": map[string]any{
-				"url":    "https://example.test/",
-				"status": 200,
-				"body":   pageHTML, // <-- legacy field only
-				"cookies": []map[string]any{},
+				"url":       "https://example.test/",
+				"status":    200,
+				"body":      pageHTML, // <-- legacy field only
+				"cookies":   []map[string]any{},
 				"userAgent": "Mozilla/5.0",
 			},
 		}

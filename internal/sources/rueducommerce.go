@@ -99,7 +99,7 @@ func parseRueDuCommerce(html, baseURL string) []domain.Deal {
 		if id, ok := s.Attr("data-id"); ok && id != "" {
 			extID = &id
 		}
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source:        "rueducommerce",
 			Title:         title,
 			URL:           href,
@@ -112,7 +112,10 @@ func parseRueDuCommerce(html, baseURL string) []domain.Deal {
 			DriveCategory: dc,
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
-		})
+		}
+		deal = withCardImage(deal, s, baseURL)
+		deal.SKU = cardSKU(s)
+		deals = append(deals, deal)
 	})
 	return deals
 }

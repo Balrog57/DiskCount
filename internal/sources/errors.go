@@ -156,7 +156,7 @@ func Selector(source string, cause error, hint string) error {
 // The scraper package is responsible for triggering the headless
 // fallback when this is detected; sources just need to flag it.
 func Blocked(source string, cause error) error {
-	return Wrap(SeverityBlocked, "fetch", source, cause, "")
+	return Wrap(SeverityBlocked, "fetch", source, cause, "CAPTCHA ou WAF — Byparr n'a pas débloqué la page")
 }
 
 // Config signals that the source cannot run because of its own

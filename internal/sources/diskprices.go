@@ -141,6 +141,8 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 			PriceEUR: round2(priceEUR), PricePerTB: round2(pricePT), CapacityTB: round2(capacityTB),
 			Condition: cond, MediaType: media,
 			ExternalID: parsing.ExtractASIN(href),
+			SKU:        amazonSKU("", parsing.ExtractASIN(href)),
+			ImageURL:   amazonImageFromASIN(parsing.ExtractASIN(href)),
 			FormFactor: strPtr(texts[5]), Technology: strPtr(tech),
 			DriveCategory: dc, Interfaces: ifaces,
 			RecordingMethod: recording,

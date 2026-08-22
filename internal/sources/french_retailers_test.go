@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -33,6 +34,17 @@ func TestGenericRetailerDataAttributes(t *testing.T) {
 	deals := parseGenericRetailer(html, "https://www.pccomponentes.fr/")
 	if len(deals) != 1 || deals[0].PriceEUR != 79.99 || deals[0].URL != "https://www.pccomponentes.fr/ssd-1tb" {
 		t.Fatalf("unexpected product data: %#v", deals)
+	}
+}
+
+func TestLDLCExtractsCardImage(t *testing.T) {
+	html, err := os.ReadFile(filepath.Join("testdata", "ldlc_sample.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deals := parseLDLC(string(html), "https://www.ldlc.com/")
+	if len(deals) == 0 || deals[0].ImageURL == nil || *deals[0].ImageURL != "https://media.ldlc.com/r150/ld/products/00/06/00/95/LD0006009500.jpg" {
+		t.Fatalf("expected fixture image, got %#v", deals)
 	}
 }
 

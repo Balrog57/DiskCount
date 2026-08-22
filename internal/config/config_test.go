@@ -114,3 +114,21 @@ func TestIsSourceEnabled(t *testing.T) {
 		t.Fatal("explicit list should reject unlisted source")
 	}
 }
+
+func TestFrenchRetailerURLDefaults(t *testing.T) {
+	values := DefaultValues()
+	want := map[string]string{
+		"LDLC_URLS":          "https://www.ldlc.com/informatique/disque-dur-interne/c4684/,https://www.ldlc.com/informatique/ssd/c4686/",
+		"TOPACHAT_URLS":      "https://www.topachat.com/pages/produits_cat_est_micro_puis_rubrique_est_wdis.html,https://www.topachat.com/pages/produits_cat_est_micro_puis_rubrique_est_wsssd.html",
+		"GROSBILL_URLS":      "https://www.grosbill.com/2-disque_dur,https://www.grosbill.com/2-ssd",
+		"FNAC_URLS":          "https://www.fnac.com/Disques-durs-internes/s21528,https://www.fnac.com/SSD/s41228",
+		"BOULANGER_URLS":     "https://www.boulanger.com/c/disque-dur-interne,https://www.boulanger.com/c/ssd",
+		"CDISCOUNT_URLS":     "https://www.cdiscount.com/informatique/disques-durs-internes/l-1072201.html,https://www.cdiscount.com/informatique/ssd/l-1072208.html",
+		"RUEDUCOMMERCE_URLS": "https://www.rueducommerce.fr/rayon/informatique-3/disque-dur-interne-6082,https://www.rueducommerce.fr/rayon/informatique-3/ssd-6083",
+	}
+	for key, expected := range want {
+		if values[key] != expected {
+			t.Errorf("%s default = %q, want %q", key, values[key], expected)
+		}
+	}
+}

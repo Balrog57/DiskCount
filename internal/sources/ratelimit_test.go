@@ -51,9 +51,9 @@ type testRateLimitedSource struct {
 	name string
 }
 
-func (s *testRateLimitedSource) Name() string                  { return s.name }
+func (s *testRateLimitedSource) Name() string                    { return s.name }
 func (s *testRateLimitedSource) RateLimit() (int, time.Duration) { return 1, time.Second }
-func (s *testRateLimitedSource) Info() SourceInfo              { return SourceInfo{Name: s.name, Version: "test"} }
+func (s *testRateLimitedSource) Info() SourceInfo                { return SourceInfo{Name: s.name, Version: "test"} }
 func (s *testRateLimitedSource) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	return nil, nil
 }

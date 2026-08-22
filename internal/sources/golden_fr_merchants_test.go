@@ -29,15 +29,18 @@ func TestParseLDLCGoldenFile(t *testing.T) {
 }
 
 func TestParseLDLCPriceFormat(t *testing.T) {
-	cases := []struct{ in string; want float64 }{
+	cases := []struct {
+		in   string
+		want float64
+	}{
 		{"219€95", 219.95},
 		{"359€95", 359.95},
 		{"1 199€95", 1199.95},
 		{"59€99", 59.99},
 		{"1199€95", 1199.95},
 		{"129€90", 129.90},
-		{"€129,90", 129.90},  // fallback to parseFloatClean
-		{"129.90", 129.90},   // fallback to parseFloatClean
+		{"€129,90", 129.90}, // fallback to parseFloatClean
+		{"129.90", 129.90},  // fallback to parseFloatClean
 	}
 	for _, c := range cases {
 		got, err := parseLDLCPrice(c.in)

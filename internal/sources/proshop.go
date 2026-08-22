@@ -46,7 +46,7 @@ type Proshop struct {
 	useFB  bool
 }
 
-func (s *Proshop) Name() string  { return "proshop" }
+func (s *Proshop) Name() string                    { return "proshop" }
 func (s *Proshop) RateLimit() (int, time.Duration) { return 1, 2 * time.Second }
 
 func (s *Proshop) Info() SourceInfo {
@@ -101,14 +101,14 @@ func parseProshop(html, baseURL string) []domain.Deal {
 		}
 		cond := domain.ConditionNew
 		deals = append(deals, domain.Deal{
-			Source:        "proshop",
-			Title:         title, URL: href,
-			PriceEUR:      round2(priceEUR),
-			PricePerTB:    round2(priceEUR / tb),
-			CapacityTB:    round2(tb),
-			Condition:     &cond, MediaType: media,
+			Source: "proshop",
+			Title:  title, URL: href,
+			PriceEUR:   round2(priceEUR),
+			PricePerTB: round2(priceEUR / tb),
+			CapacityTB: round2(tb),
+			Condition:  &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
-			ObservedAt:    domain.UTCNow(),
+			ObservedAt: domain.UTCNow(),
 		})
 	})
 	return deals

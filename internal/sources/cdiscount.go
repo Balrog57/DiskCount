@@ -134,16 +134,19 @@ func parseCdiscount(html, baseURL string) []domain.Deal {
 			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 		cond := domain.ConditionNew
-		deals = append(deals, domain.Deal{
-			Source:        "cdiscount",
-			Title:         title, URL: href,
-			PriceEUR:      round2(priceEUR),
-			PricePerTB:    round2(priceEUR / tb),
-			CapacityTB:    round2(tb),
-			Condition:     &cond, MediaType: media,
+		deal := domain.Deal{
+			Source: "cdiscount",
+			Title:  title, URL: href,
+			PriceEUR:   round2(priceEUR),
+			PricePerTB: round2(priceEUR / tb),
+			CapacityTB: round2(tb),
+			Condition:  &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
-			ObservedAt:    domain.UTCNow(),
-		})
+			ObservedAt: domain.UTCNow(),
+		}
+		deal = withCardImage(deal, s, baseURL)
+		deal.SKU = cardSKU(s)
+		deals = append(deals, deal)
 	})
 	return deals
 }

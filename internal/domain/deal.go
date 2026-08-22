@@ -94,6 +94,8 @@ type Deal struct {
 	Merchant             *string
 	Brand                *string
 	Model                *string
+	SKU                  *string
+	ImageURL             *string
 	RawTitle             string
 }
 

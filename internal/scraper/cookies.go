@@ -14,8 +14,8 @@ import (
 // need to read-modify-write in one critical section when merging Byparr
 // cookies with the jar's current state.
 type CookieStore struct {
-	mu   sync.Mutex
-	jar  *cookiejar.Jar
+	mu  sync.Mutex
+	jar *cookiejar.Jar
 }
 
 // NewCookieStore returns a CookieStore with an empty in-memory jar.

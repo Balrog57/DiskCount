@@ -94,10 +94,14 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 
 	var result struct {
 		Products []struct {
-			ASIN       string `json:"asin"`
-			Brand      string `json:"brand"`
-			Title      string `json:"title"`
-			Stats      struct {
+			ASIN                   string   `json:"asin"`
+			Brand                  string   `json:"brand"`
+			Model                  string   `json:"model"`
+			PartNumber             string   `json:"partNumber"`
+			ManufacturerPartNumber string   `json:"manufacturerPartNumber"`
+			Images                 []string `json:"images"`
+			Title                  string   `json:"title"`
+			Stats                  struct {
 				Current []float64 `json:"current"`
 			} `json:"stats"`
 			CategoryID int `json:"categoryTypeId"`
@@ -137,6 +141,17 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 	// Build the Amazon product URL from the domain and ASIN.
 	amazonTLD := keepaDomainTLD(kd)
 	productURL := fmt.Sprintf("https://www.amazon.%s/dp/%s", amazonTLD, asin)
+	imageURL := ""
+	for _, image := range p.Images {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(image)), "https://") {
+			imageURL = strings.TrimSpace(image)
+			break
+		}
+	}
+	if imageURL == "" {
+		imageURL = amazonImageURL(asin)
+	}
+	sku := firstNonEmpty(p.ManufacturerPartNumber, p.PartNumber, p.Model, asin)
 
 	return &domain.Deal{
 		Source: "keepa", Title: p.Title, URL: productURL,
@@ -145,7 +160,8 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 		ExternalID:    &asin,
 		DriveCategory: dc, Interfaces: ifaces,
 		Brand: strPtr(p.Brand),
-		ObservedAt:     domain.UTCNow(),
+		SKU:   strPtr(sku), ImageURL: strPtr(imageURL),
+		ObservedAt: domain.UTCNow(),
 	}, nil
 }
 

@@ -38,7 +38,7 @@ type Backmarket struct {
 	useFB  bool
 }
 
-func (s *Backmarket) Name() string  { return "backmarket" }
+func (s *Backmarket) Name() string                    { return "backmarket" }
 func (s *Backmarket) RateLimit() (int, time.Duration) { return 1, 2 * time.Second }
 
 func (s *Backmarket) Info() SourceInfo {
@@ -93,14 +93,14 @@ func parseBackmarket(html, baseURL string) []domain.Deal {
 		}
 		cond := domain.ConditionUsed
 		deals = append(deals, domain.Deal{
-			Source:        "backmarket",
-			Title:         title, URL: href,
-			PriceEUR:      round2(priceEUR),
-			PricePerTB:    round2(priceEUR / tb),
-			CapacityTB:    round2(tb),
-			Condition:     &cond, MediaType: media,
+			Source: "backmarket",
+			Title:  title, URL: href,
+			PriceEUR:   round2(priceEUR),
+			PricePerTB: round2(priceEUR / tb),
+			CapacityTB: round2(tb),
+			Condition:  &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
-			ObservedAt:    domain.UTCNow(),
+			ObservedAt: domain.UTCNow(),
 		})
 	})
 	return deals

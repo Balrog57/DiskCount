@@ -54,6 +54,8 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 2. Terminé : regroupement multi-vendeurs fiable par marque + référence modèle + capacité, et vue des baisses de prix actuelles.
 3. Terminé : disponibilité explicite après trois scans source réussis manquants, retour en stock, et test Discord depuis le site.
 4. Terminé : indice quotidien par tranche de capacité et comparaison européenne. Les messages privés Discord ne sont pas retenus : le salon configuré couvre le besoin actuel sans complexité ni permission supplémentaire.
+5. Terminé : catalogue regroupé par marque + SKU/modèle + capacité, avec image, nombre de vendeurs, filtres SQL, pagination et fiche famille multi-vendeurs.
+6. Terminé : URLs de listing par défaut pour LDLC, TopAchat, Grosbill, Fnac, Boulanger, Cdiscount et Rue du Commerce ; un CAPTCHA (Darty) apparaît en erreur rouge sur Sites et Logs plutôt qu'en zéro silencieux. Discord reste en attente, sans identifiants.
 
 ## Disponibilité — version actuelle
 
@@ -91,11 +93,11 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 
 - `go test ./...`, `go vet ./...` et `docker compose config` passent.
 - Une alerte créée sur `/alerts` est persistée et peut être mise en pause ou supprimée.
-- `/products` montre un lien marchand et la date de fraîcheur pour chaque offre.
+- `/products` montre une carte par famille (image ou placeholder, SKU, meilleur prix, nombre de vendeurs) et un lien vers la fiche ; `/product` compare les marchands.
 - Sans configuration Discord, les scans, l'historique et les déclenchements locaux continuent ; une erreur de relais reste visible.
 - L'interface est vérifiée en thème sombre et clair aux largeurs desktop et mobile.
 
 ## Validation opérationnelle
 
-- Déploiement ZimaOS validé après sauvegarde PostgreSQL : migration 3 appliquée, données conservées, 17 sources actives et scan complet sans erreur.
+- Déploiement ZimaOS validé après sauvegarde PostgreSQL : migration 7 (sku, image_url) appliquée, données conservées. Discord reste dormant.
 - L'envoi Discord réel se valide depuis `/discord` dès qu'un token et un salon sont renseignés ; aucun identifiant Discord de production n'est stocké dans le dépôt.

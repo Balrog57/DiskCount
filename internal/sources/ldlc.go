@@ -53,9 +53,11 @@ func (s *LDLC) Fetch(ctx context.Context) ([]domain.Deal, error) {
 
 // parseLDLCPrice handles the LDLC price format "219€95" where the euro sign
 // separates euros from centimes (no decimal comma). Examples:
-//   "219€95"    → 219.95
-//   "1 199€95"  → 1199.95
-//   "59€99"     → 59.99
+//
+//	"219€95"    → 219.95
+//	"1 199€95"  → 1199.95
+//	"59€99"     → 59.99
+//
 // Falls back to parseFloatClean for standard formats.
 func parseLDLCPrice(s string) (float64, error) {
 	s = strings.TrimSpace(s)
@@ -146,7 +148,7 @@ func parseLDLC(html, baseURL string) []domain.Deal {
 			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 		cond := domain.ConditionNew
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source:        "ldlc",
 			Title:         title,
 			URL:           href,
@@ -158,7 +160,10 @@ func parseLDLC(html, baseURL string) []domain.Deal {
 			DriveCategory: dc,
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
-		})
+		}
+		deal = withCardImage(deal, s, baseURL)
+		deal.SKU = cardSKU(s)
+		deals = append(deals, deal)
 	})
 	return deals
 }
