@@ -114,6 +114,9 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 
 		link := cells.Eq(cells.Length() - 1).Find("a")
 		href, _ := link.Attr("href")
+		if !isAmazonURL(href) {
+			return
+		}
 		title := strings.TrimSpace(link.Text())
 		if title == "" {
 			title = texts[cells.Length()-1]
@@ -141,7 +144,7 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 			FormFactor: strPtr(texts[5]), Technology: strPtr(tech),
 			DriveCategory: dc, Interfaces: ifaces,
 			RecordingMethod: recording,
-			ObservedAt: domain.UTCNow(),
+			ObservedAt:      domain.UTCNow(),
 		})
 	})
 	slog.Debug("diskprices", "deals", len(deals))
@@ -151,8 +154,8 @@ func parseDiskPrices(html string) ([]domain.Deal, error) {
 // Internal sentinel errors so parseDiskPrices can wrap a meaningful
 // message without re-importing errors just to call errors.New.
 var (
-	errEmptyHTML   = stringError("empty HTML body")
-	errEmptyTable  = stringError("no <tr> rows in diskprices.com table")
+	errEmptyHTML  = stringError("empty HTML body")
+	errEmptyTable = stringError("no <tr> rows in diskprices.com table")
 )
 
 type stringError string

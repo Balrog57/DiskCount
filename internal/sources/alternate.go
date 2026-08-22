@@ -33,13 +33,13 @@ type Alternate struct {
 	useFB  bool
 }
 
-func (s *Alternate) Name() string                          { return "alternate" }
-func (s *Alternate) RateLimit() (int, time.Duration)       { return 1, 2 * time.Second }
+func (s *Alternate) Name() string                    { return "alternate" }
+func (s *Alternate) RateLimit() (int, time.Duration) { return 1, 2 * time.Second }
 
 func (s *Alternate) Info() SourceInfo {
 	return SourceInfo{
 		Name:        "alternate",
-		Description: "Alternate.de (HDD/SSD, EUR)",
+		Description: "Alternate France (HDD/SSD, EUR)",
 		Categories:  []string{"scraping"},
 		Requires:    []string{"ALTERNATE_URLS"},
 		Version:     "2",
@@ -54,7 +54,7 @@ func (s *Alternate) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	return res.deals, nil
 }
 
-// parseAlternate scrapes Alternate.de listing pages. Verified against the real
+// parseAlternate scrapes Alternate listing pages. Verified against the real
 // HTML structure: each product is an <a class="productBox"> wrapping the whole
 // card. Title lives in .product-name, price in span.price (format "€ 129,90"),
 // and the capacity is the <li> starting with "Kapazität:" inside the bullet list.

@@ -295,6 +295,8 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/", s.stats)
 	muxAdmin.HandleFunc("/quality", s.quality)
 	muxAdmin.HandleFunc("/products", s.products)
+	muxAdmin.HandleFunc("/sites", s.sites)
+	muxAdmin.HandleFunc("/logs", s.logs)
 	muxAdmin.HandleFunc("/drops", s.priceDrops)
 	muxAdmin.HandleFunc("/market", s.market)
 	muxAdmin.HandleFunc("/api/market", s.apiMarket)
@@ -1645,15 +1647,13 @@ input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--
 <div class="brand">DiskCount</div>
 <nav class="nav">
 <a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.dashboard"}}</a>
-<a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.quality"}}</a>
 <a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.products"}}</a>
-<a href="/drops" class="{{if eq .Active "drops"}}active{{end}}" {{if eq .Active "drops"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Baisses</a>
-<a href="/market" class="{{if eq .Active "market"}}active{{end}}" {{if eq .Active "market"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Marche</a>
-<a href="/europe" class="{{if eq .Active "europe"}}active{{end}}" {{if eq .Active "europe"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Europe</a>
-<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.alerts"}}</a>
-<a href="/discord" class="{{if eq .Active "discord"}}active{{end}}" {{if eq .Active "discord"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Discord</a>
+<a href="/sites" class="{{if eq .Active "sites"}}active{{end}}" {{if eq .Active "sites"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.sites"}}</a>
+<a href="/logs" class="{{if eq .Active "logs"}}active{{end}}" {{if eq .Active "logs"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.logs"}}</a>
+<a href="/drops" class="{{if eq .Active "drops"}}active{{end}}" {{if eq .Active "drops"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.drops"}}</a>
+<a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.create_alert"}}</a>
+<a href="/discord" class="{{if eq .Active "discord"}}active{{end}}" {{if eq .Active "discord"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.discord"}}</a>
 <a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.config"}}</a>
-<a href="/metrics/dashboard" class="{{if eq .Active "metrics"}}active{{end}}" {{if eq .Active "metrics"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.metrics"}}</a>
 </nav>
 <div class="lang-switch">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
 <div class="theme-switch"><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "light"}}class="active"{{end}}>☀ Light</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "dark"}}class="active"{{end}}>🌙 Dark</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "auto"}}class="active"{{end}}>🖥 Auto</button></form></div>
@@ -1717,6 +1717,7 @@ const statsTpl = `{{define "body"}}
 <div class="card"><div class="label">Sources</div><div class="value">{{.Status.SourceCount}}</div></div>
 <div class="card"><div class="label">Rejets donnees</div><div class="value">{{if .Stats}}{{.Stats.RejectedDeals}}{{else}}0{{end}}</div></div>
 </div>
+<div class="section" style="display:flex;gap:9px;flex-wrap:wrap"><a class="button" href="/products">Voir les produits</a><a class="button" href="/sites">État des sites</a><a class="button" href="/drops">Baisses de prix</a><a class="button" href="/alerts">Créer une alerte</a><a class="offer-link" href="/market">Indice du marché</a><a class="offer-link" href="/europe">Comparaison européenne</a><a class="offer-link" href="/metrics/dashboard">Métriques techniques</a></div>
 <section class="section panel"><div class="panel-head"><h2>Sources actives</h2></div><div class="panel-body"><div class="source-list">{{range .Sources}}<span class="badge">{{.}}</span>{{else}}<span class="muted">Aucune source active</span>{{end}}</div></div></section>
 <section class="section panel"><div class="panel-head"><h2>Derniers evenements</h2></div><div class="table-wrap"><table><tbody>
 <tr><th>Demarrage Web</th><td>{{tsv .StartedAt}}</td></tr>

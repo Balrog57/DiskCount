@@ -65,8 +65,8 @@ func parseGrosbill(html, baseURL string) []domain.Deal {
 		return nil
 	}
 	var deals []domain.Deal
-	doc.Find("div.grb__liste-produit__liste__produit").Each(func(_ int, s *goquery.Selection) {
-		href, _ := s.Find("a.prod_txt_left").First().Attr("href")
+	doc.Find(".grb__liste-produit__liste__produit").Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Find("a.prod_txt_left, a.grb__liste-produit__liste__produit__link").First().Attr("href")
 		href = absolutizeURL(baseURL, strings.TrimSpace(href))
 		if href == "" {
 			return

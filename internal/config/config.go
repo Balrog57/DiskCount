@@ -45,7 +45,7 @@ var AppSettings = []SettingMeta{
 	{"EBAY_MARKETPLACES", "eBay marketplaces (CSV: EBAY_FR, EBAY_DE, EBAY_IT, EBAY_ES)", false, true, "EBAY_FR"},
 	{"KEEPA_DOMAINS", "Keepa domains (CSV: 3=DE, 4=FR, 6=IT, 7=ES)", false, true, ""},
 	{"MINDFACTORY_URLS", "Mindfactory URLs (CSV)", false, true, ""},
-	{"ALTERNATE_URLS", "Alternate URLs (CSV)", false, true, ""},
+	{"ALTERNATE_URLS", "Alternate France URLs (CSV)", false, true, "https://www.alternate.fr/listing.xhtml?q=hdd,https://www.alternate.fr/listing.xhtml?q=ssd"},
 	{"COMPUTERUNIVERSE_URLS", "Computeruniverse URLs (CSV)", false, true, ""},
 	{"PROSHOP_URLS", "ProShop URLs (CSV)", false, true, ""},
 	{"GEIZHALS_URLS", "Geizhals URLs (CSV)", false, true, ""},
@@ -58,6 +58,12 @@ var AppSettings = []SettingMeta{
 	{"RAKUTEN_URLS", "Rakuten FR URLs (CSV)", false, true, ""},
 	{"RUEDUCOMMERCE_URLS", "Rue du Commerce URLs (CSV)", false, true, ""},
 	{"BACKMARKET_URLS", "Back Market URLs (CSV)", false, true, ""},
+	{"DARTY_URLS", "Darty storage URLs (CSV)", false, true, "https://www.darty.com/nav/q/informatique-disque-dur-ssd.html"},
+	{"MATERIEL_URLS", "Materiel.net storage URLs (CSV)", false, true, "https://www.materiel.net/disque-dur-interne/l430/,https://www.materiel.net/disque-ssd/l429/"},
+	{"CYBERTEK_URLS", "Cybertek storage URLs (CSV)", false, true, "https://www.cybertek.fr/disque-ssd-49.aspx,https://www.cybertek.fr/disque-dur-3-5-interne-3.aspx"},
+	{"CORSAIR_URLS", "Corsair France storage URLs (CSV)", false, true, "https://www.corsair.com/fr/fr/c/data-storage"},
+	{"PCCOMPONENTES_URLS", "PCComponentes France storage URLs (CSV)", false, true, "https://www.pccomponentes.fr/categories/disques-durs/disque-ssd"},
+	{"TOPBIZ_URLS", "Topbiz storage URLs (CSV)", false, true, "https://www.topbiz.fr/95-disques-durs-ssd,https://www.topbiz.fr/96-disques-durs-internes"},
 	{"SOURCE_HEADLESS_FALLBACK", "Headless fallback", false, true, "true"},
 	{"BYPARR_URL", "Byparr URL", false, true, "http://byparr:8191"},
 	{"NOTIFICATION_PRICE_DROP_PCT", "Notification price drop percent", false, true, "2.0"},
@@ -116,6 +122,12 @@ type Config struct {
 	RakutenURLs              []string
 	RueDuCommerceURLs        []string
 	BackmarketURLs           []string
+	DartyURLs                []string
+	MaterielURLs             []string
+	CybertekURLs             []string
+	CorsairURLs              []string
+	PCComponentesURLs        []string
+	TopbizURLs               []string
 	HeadlessFallback         bool
 	ByparrURL                string
 	NotificationPriceDropPct float64
@@ -197,6 +209,12 @@ func loadConfig(values map[string]string) *Config {
 		RakutenURLs:           splitCSV(values["RAKUTEN_URLS"]),
 		RueDuCommerceURLs:     splitCSV(values["RUEDUCOMMERCE_URLS"]),
 		BackmarketURLs:        splitCSV(values["BACKMARKET_URLS"]),
+		DartyURLs:             splitCSV(values["DARTY_URLS"]),
+		MaterielURLs:          splitCSV(values["MATERIEL_URLS"]),
+		CybertekURLs:          splitCSV(values["CYBERTEK_URLS"]),
+		CorsairURLs:           splitCSV(values["CORSAIR_URLS"]),
+		PCComponentesURLs:     splitCSV(values["PCCOMPONENTES_URLS"]),
+		TopbizURLs:            splitCSV(values["TOPBIZ_URLS"]),
 		HeadlessFallback:      parseBool(values["SOURCE_HEADLESS_FALLBACK"], true),
 		ByparrURL:             value(values, "BYPARR_URL", "http://byparr:8191"),
 		NotificationPriceDropPct: parseFloat(

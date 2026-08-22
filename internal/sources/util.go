@@ -2,6 +2,7 @@ package sources
 
 import (
 	"math"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -29,4 +30,19 @@ func parseFloatClean(s string) (float64, error) {
 	s = strings.ReplaceAll(s, " ", "")
 	s = strings.ReplaceAll(s, ",", ".")
 	return strconv.ParseFloat(s, 64)
+}
+
+func isAmazonURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	host = strings.TrimPrefix(host, "www.")
+	switch host {
+	case "amazon.fr", "amazon.de", "amazon.es", "amazon.it", "amazon.nl", "amazon.pl", "amazon.se", "amazon.com", "amazon.ca", "amazon.co.uk", "amazon.com.au", "amazon.co.jp":
+		return true
+	default:
+		return false
+	}
 }

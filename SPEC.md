@@ -14,8 +14,11 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 ## Expérience web
 
 - Direction visuelle : interface sombre premium inspirée de DropReference, avec navigation structurée, cartes arrondies et forts contrastes, transposée en bleu. Aucun contenu, logo ou actif de DropReference n'est repris.
+- Navigation principale : Tableau de bord, Produits, Sites, Logs, Baisses de prix, Créer une alerte, Discord, Configuration. Marché, Europe, Qualité et Métriques restent accessibles depuis le tableau de bord sans surcharger le menu.
 - Tableau de bord : état du service, sources, dernier et prochain scan, produits, observations et notifications.
 - Produits : filtres, prix actuel, prix par To, tendance, source, date du dernier refresh, fiche d'historique et lien direct vers le marchand.
+- Sites : état du dernier scan, offres, produits, observations, rejets, durée, breaker, erreur et médiane EUR/To par fournisseur.
+- Logs : succès en vert, informations en bleu, avertissements en orange et erreurs en rouge pour le dernier scan.
 - Alertes : création directe dans l'app, seuil de prix, remise, délai, support, état, capacités, sources et mots-clés ; pause, reprise, suppression et activation Discord depuis le site.
 - Configuration : secrets masqués et paramètres persistés en base.
 - Responsive : ordinateur, tablette et mobile sans dépendance JavaScript obligatoire.
@@ -59,6 +62,14 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 - Une erreur, un circuit breaker, un scan vide ou un lot entièrement rejeté ne modifie jamais la disponibilité.
 - Une nouvelle observation restaure immédiatement l'offre et le mécanisme existant de retour en stock peut déclencher l'alerte.
 - L'état `discontinued` n'est pas déduit : aucune source actuelle ne permet de distinguer de façon fiable un retrait définitif d'une absence prolongée.
+
+## Fournisseurs — version actuelle
+
+- Marchands français directs : Alternate FR, Boulanger, Cdiscount, Corsair FR, Cybertek, Darty, Fnac, Grosbill, LDLC, Materiel.net, PCComponentes FR, Rue du Commerce, TopAchat et Topbiz.
+- Amazon FR/DE/ES/IT : Keepa et agrégateurs autorisés, avec validation stricte du domaine final `amazon.*`.
+- DiskPrices, PricePerGig et PricePerTB ne peuvent jamais introduire un marchand non Amazon.
+- PricePerGig utilise son API PostgREST filtrée par `marketplace=eq.amazon.fr`, conserve le lien exact fourni, importe la date `last_updated` et rafraîchit les données toutes les quatre heures, donc sous la limite de cache de 24 heures.
+- AliExpress est exclu. Asus Shop FR ne propose que des boîtiers dans la catégorie stockage observée et Nvidia FR ne vend pas de HDD/SSD grand public ; ils apparaissent comme hors périmètre plutôt que comme de faux fournisseurs de prix.
 
 ## Alertes — version actuelle
 

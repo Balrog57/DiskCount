@@ -101,6 +101,9 @@ func parsePTB(html, baseURL string) []domain.Deal {
 		link := row.Find("a").First()
 		href, _ := link.Attr("href")
 		href = absolutizeURL(baseURL, strings.TrimSpace(href))
+		if !isAmazonURL(href) {
+			return
+		}
 		title := strings.TrimSpace(link.Text())
 		if title == "" && len(texts) > 2 {
 			title = strings.TrimSpace(texts[2])

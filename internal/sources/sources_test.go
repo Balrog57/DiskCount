@@ -11,7 +11,7 @@ import (
 
 func TestParsePricePerTBRequiresTitleAndURL(t *testing.T) {
 	html := `<table>
-<tr class="disk" data-product-type="internal_hdd" data-condition="new" data-capacity="10000.0"><td class="price-per-gb hidden">€0,015</td><td class="price-per-tb">€15,00</td><td>€150</td><td>10 TB</td><td>5 years</td><td>Internal 3.5&quot;</td><td>HDD</td><td>New</td><td class="name"><a href="/drive">Seagate 10 To SATA</a></td></tr>
+<tr class="disk" data-product-type="internal_hdd" data-condition="new" data-capacity="10000.0"><td class="price-per-gb hidden">€0,015</td><td class="price-per-tb">€15,00</td><td>€150</td><td>10 TB</td><td>5 years</td><td>Internal 3.5&quot;</td><td>HDD</td><td>New</td><td class="name"><a href="https://www.amazon.fr/dp/B012345678">Seagate 10 To SATA</a></td></tr>
 <tr><td class="price-per-gb hidden">€0,001</td><td class="price-per-tb">€1,00</td><td>€1</td><td>1 TB</td><td>-</td><td>Internal 3.5&quot;</td><td>HDD</td><td>New</td><td></td></tr>
 </table>`
 	deals := parsePTB(html, "https://pricepertb.test/")
@@ -21,11 +21,25 @@ func TestParsePricePerTBRequiresTitleAndURL(t *testing.T) {
 	if deals[0].Title == "" || deals[0].URL == "" {
 		t.Fatalf("invalid deal accepted: %#v", deals[0])
 	}
-	if deals[0].URL != "https://pricepertb.test/drive" {
-		t.Fatalf("relative URL not resolved: %q", deals[0].URL)
+	if deals[0].URL != "https://www.amazon.fr/dp/B012345678" {
+		t.Fatalf("Amazon URL not preserved: %q", deals[0].URL)
 	}
 	if deals[0].PriceEUR != 150 || deals[0].PricePerTB != 15 || deals[0].CapacityTB != 10 {
 		t.Fatalf("price/capacity mismatch: %#v", deals[0])
+	}
+}
+
+func TestAggregatorsRejectNonAmazonMerchants(t *testing.T) {
+	html := `<table><tr><td>1</td><td>x</td><td>49,99 €</td><td>1 To</td><td>x</td><td>Portable</td><td>SSD</td><td>New</td><td><a href="https://www.ldlc.com/fiche/PB1.html">SSD 1 To</a></td></tr></table>`
+	deals, err := parseDiskPrices(html)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deals) != 0 {
+		t.Fatalf("non-Amazon deal accepted: %#v", deals)
+	}
+	if isAmazonURL("https://amazon.evil.test/dp/x") || !isAmazonURL("https://www.amazon.de/dp/x") {
+		t.Fatal("Amazon host validation is incorrect")
 	}
 }
 
