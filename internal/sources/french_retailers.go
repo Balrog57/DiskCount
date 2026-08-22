@@ -130,27 +130,87 @@ func withCardImage(deal domain.Deal, card *goquery.Selection, baseURL string) do
 }
 
 func cardSKU(card *goquery.Selection) *string {
-	if value := strings.TrimSpace(card.AttrOr("data-sku", "")); value != "" {
-		return strPtr(value)
-	}
-	for _, selector := range []string{"[data-sku]", "[itemprop='sku']"} {
-		if value := strings.TrimSpace(card.Find(selector).First().AttrOr("data-sku", "")); value != "" {
+	for _, attr := range []string{"data-product-sku", "data-sku"} {
+		if value := strings.TrimSpace(card.AttrOr(attr, "")); value != "" {
 			return strPtr(value)
 		}
-		if selector == "[itemprop='sku']" {
-			if value := strings.TrimSpace(card.Find(selector).First().AttrOr("content", "")); value != "" {
-				return strPtr(value)
-			}
-			if value := strings.TrimSpace(card.Find(selector).First().Text()); value != "" {
-				return strPtr(value)
-			}
+	}
+	for _, selector := range []string{"[data-sku]", "[data-product-sku]", "[itemprop='sku']", "[itemprop='mpn']"} {
+		el := card.Find(selector).First()
+		if value := strings.TrimSpace(el.AttrOr("data-sku", "")); value != "" {
+			return strPtr(value)
+		}
+		if value := strings.TrimSpace(el.AttrOr("data-product-sku", "")); value != "" {
+			return strPtr(value)
+		}
+		if value := strings.TrimSpace(el.AttrOr("content", "")); value != "" {
+			return strPtr(value)
+		}
+		if value := strings.TrimSpace(el.Text()); value != "" {
+			return strPtr(value)
 		}
 	}
 	html, _ := card.Html()
 	if pd, ok := scraper.ParseJSONLD(html); ok {
-		return strPtr(pd.SKU)
+		if pd.MPN != "" {
+			return strPtr(pd.MPN)
+		}
+		if pd.SKU != "" {
+			return strPtr(pd.SKU)
+		}
 	}
 	return nil
+}
+
+func cardEAN(card *goquery.Selection) *string {
+	for _, attr := range []string{"data-ean", "data-gtin", "data-gtin13", "data-gtin14"} {
+		if value := strings.TrimSpace(card.AttrOr(attr, "")); value != "" {
+			return strPtr(value)
+		}
+	}
+	for _, selector := range []string{"[itemprop='gtin13']", "[itemprop='gtin']", "[itemprop='gtin14']", "[itemprop='ean']"} {
+		el := card.Find(selector).First()
+		if value := strings.TrimSpace(el.AttrOr("content", "")); value != "" {
+			return strPtr(value)
+		}
+		if value := strings.TrimSpace(el.Text()); value != "" {
+			return strPtr(value)
+		}
+	}
+	return nil
+}
+
+// enrichCardDeal attaches image, EAN, SKU, external id and JSON-LD hints from a listing card.
+func enrichCardDeal(deal domain.Deal, card *goquery.Selection, baseURL string) domain.Deal {
+	deal = withCardImage(deal, card, baseURL)
+	if id := strings.TrimSpace(card.AttrOr("data-product-id", "")); id != "" {
+		deal.ExternalID = strPtr(id)
+	} else if id := strings.TrimSpace(card.AttrOr("data-id", "")); id != "" {
+		deal.ExternalID = strPtr(id)
+	}
+	deal.EAN = cardEAN(card)
+	deal.SKU = cardSKU(card)
+	html, _ := card.Html()
+	if pd, ok := scraper.ParseJSONLD(html); ok {
+		if pd.GTIN != "" {
+			deal.EAN = strPtr(pd.GTIN)
+		}
+		if pd.MPN != "" {
+			deal.SKU = strPtr(pd.MPN)
+		} else if pd.SKU != "" && deal.SKU == nil {
+			deal.SKU = strPtr(pd.SKU)
+		}
+		if deal.Brand == nil && pd.Brand != "" {
+			deal.Brand = strPtr(pd.Brand)
+		}
+		if deal.ImageURL == nil && pd.Image != "" {
+			deal.ImageURL = strPtr(pd.Image)
+		}
+		if pd.GTIN != "" || pd.MPN != "" {
+			deal.ClassificationSource = "jsonld"
+		}
+	}
+	return deal
 }
 
 func parseMateriel(html, baseURL string) []domain.Deal {
@@ -167,9 +227,7 @@ func parseMateriel(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(card.Find(".c-product__title").First().Text(), absolutizeURL(baseURL, href), price, card.Find(".product-specs").First().Text()); ok {
-			deal = withCardImage(deal, card, baseURL)
-			deal.SKU = cardSKU(card)
-			out = append(out, deal)
+			out = append(out, enrichCardDeal(deal, card, baseURL))
 		}
 	})
 	return out
@@ -194,9 +252,7 @@ func parseTopbiz(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(link.Text(), absolutizeURL(baseURL, href), price, card.Text()); ok {
-			deal = withCardImage(deal, card, baseURL)
-			deal.SKU = cardSKU(card)
-			out = append(out, deal)
+			out = append(out, enrichCardDeal(deal, card, baseURL))
 		}
 	})
 	return out
@@ -218,9 +274,7 @@ func parseCorsair(html, baseURL string) []domain.Deal {
 		link := card.Find("a[href]").First()
 		href, _ := link.Attr("href")
 		if deal, ok := retailerDeal(title, absolutizeURL(baseURL, href), price, card.Text()); ok {
-			deal = withCardImage(deal, card, baseURL)
-			deal.SKU = cardSKU(card)
-			out = append(out, deal)
+			out = append(out, enrichCardDeal(deal, card, baseURL))
 		}
 	})
 	return out
@@ -265,9 +319,7 @@ func parseGenericRetailer(html, baseURL string) []domain.Deal {
 			return
 		}
 		if deal, ok := retailerDeal(title, absolutizeURL(baseURL, href), price, card.Text()); ok {
-			deal = withCardImage(deal, card, baseURL)
-			deal.SKU = cardSKU(card)
-			out = append(out, deal)
+			out = append(out, enrichCardDeal(deal, card, baseURL))
 		}
 	})
 	return out

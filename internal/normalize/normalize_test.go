@@ -6,6 +6,28 @@ import (
 	"github.com/Balrog57/DiskCount/internal/domain"
 )
 
+func testSKU(s string) *string { return &s }
+
+func withSKU(d domain.Deal) domain.Deal {
+	if d.SKU == nil && d.EAN == nil {
+		d.SKU = testSKU("ST16000NM000J")
+	}
+	return d
+}
+
+func TestDealRejectsMissingIdentifier(t *testing.T) {
+	res := Deal(domain.Deal{
+		Source:     "test",
+		Title:      "Samsung 990 PRO SSD 2 To",
+		URL:        "https://example.test/p",
+		CapacityTB: 2,
+		PriceEUR:   149.99,
+	})
+	if res.Reject == nil || res.Reject.Reason != "missing_identifier" {
+		t.Fatalf("expected missing_identifier, got %#v", res.Reject)
+	}
+}
+
 func TestDealRejectsIncompleteData(t *testing.T) {
 	res := Deal(domain.Deal{Source: "test", Title: "", URL: "", CapacityTB: 0, PriceEUR: 0})
 	if res.Reject == nil || res.Reject.Reason != "missing_title" {
@@ -14,13 +36,13 @@ func TestDealRejectsIncompleteData(t *testing.T) {
 }
 
 func TestDealEnrichesAndScoresValidData(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "Samsung 990 PRO SSD 2 To M.2 NVMe",
 		URL:        "https://example.test/product?utm_source=x",
 		CapacityTB: 2,
 		PriceEUR:   149.99,
-	})
+	}))
 	if res.Reject != nil {
 		t.Fatalf("valid deal rejected: %#v", res.Reject)
 	}
@@ -39,13 +61,13 @@ func TestDealEnrichesAndScoresValidData(t *testing.T) {
 }
 
 func TestDealRejectsAberrantPricePerTB(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "Bad Drive 1 To",
 		URL:        "https://example.test/bad",
 		CapacityTB: 1,
 		PriceEUR:   9000,
-	})
+	}))
 	if res.Reject == nil || res.Reject.Reason != "invalid_price_per_tb" {
 		t.Fatalf("expected invalid price per TB, got %#v", res.Reject)
 	}
@@ -64,42 +86,42 @@ func TestDealRejectsUnknownMedia(t *testing.T) {
 		t.Fatalf("expected invalid capacity before media acceptance, got %#v", res.Reject)
 	}
 
-	res = Deal(domain.Deal{
+	res = Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "DDR5 RAM kit 1 To",
 		URL:        "https://example.test/ram",
 		CapacityTB: 1,
 		PriceEUR:   99,
 		PricePerTB: 99,
-	})
+	}))
 	if res.Reject == nil || res.Reject.Reason != "unsupported_product" {
 		t.Fatalf("expected unsupported product rejection, got %#v", res.Reject)
 	}
 }
 
 func TestDealRejectsMemoryCards(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "Lexar Professional CFexpress 128 Go Type B Carte Memoire PCIe NVMe",
 		URL:        "https://example.test/cfexpress",
 		CapacityTB: 0.128,
 		PriceEUR:   180,
 		PricePerTB: 1406.25,
-	})
+	}))
 	if res.Reject == nil || res.Reject.Reason != "unsupported_product" {
 		t.Fatalf("expected unsupported memory card rejection, got %#v", res.Reject)
 	}
 }
 
 func TestDealAdjustsPackCapacity(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "Gigastone SSD 1To NAS SSD Disque Lot de 12 SATA",
 		URL:        "https://example.test/pack",
 		CapacityTB: 1,
 		PriceEUR:   1200,
 		PricePerTB: 1200,
-	})
+	}))
 	if res.Reject != nil {
 		t.Fatalf("pack deal rejected: %#v", res.Reject)
 	}
@@ -109,14 +131,14 @@ func TestDealAdjustsPackCapacity(t *testing.T) {
 }
 
 func TestDealDoesNotTreatXboxAsPack(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "Seagate Game Drive pour Xbox 5To HDD Portable USB",
 		URL:        "https://example.test/xbox-drive",
 		CapacityTB: 5,
 		PriceEUR:   153,
 		PricePerTB: 30.6,
-	})
+	}))
 	if res.Reject != nil {
 		t.Fatalf("xbox drive rejected: %#v", res.Reject)
 	}
@@ -149,13 +171,13 @@ func TestInferBrandMatchesMidTitle(t *testing.T) {
 // TestDealEnrichesBrandFromTitle verifies the canonical pipeline actually
 // populates Deal.Brand via inferBrand for a realistic title.
 func TestDealEnrichesBrandFromTitle(t *testing.T) {
-	res := Deal(domain.Deal{
+	res := Deal(withSKU(domain.Deal{
 		Source:     "test",
 		Title:      "2 To Seagate IronWolf HDD",
 		URL:        "https://example.test/ironwolf",
 		CapacityTB: 2,
 		PriceEUR:   60,
-	})
+	}))
 	if res.Reject != nil {
 		t.Fatalf("deal rejected: %#v", res.Reject)
 	}
@@ -165,13 +187,14 @@ func TestDealEnrichesBrandFromTitle(t *testing.T) {
 }
 
 func TestDealInfersConservativeStorageModel(t *testing.T) {
-	res := Deal(domain.Deal{Source: "test", Title: "Seagate Exos 7E8 8TB ST8000NM000A HDD", URL: "https://example.test/d", CapacityTB: 8, PriceEUR: 120})
+	sku := "ST8000NM000A"
+	res := Deal(domain.Deal{Source: "test", Title: "Seagate Exos 7E8 8TB ST8000NM000A HDD", URL: "https://example.test/d", CapacityTB: 8, PriceEUR: 120, SKU: &sku})
 	if res.Reject != nil || res.Deal.Model == nil || *res.Deal.Model != "ST8000NM000A" {
 		t.Fatalf("expected part number model, got %#v (%v)", res.Deal.Model, res.Reject)
 	}
-	noModel := Deal(domain.Deal{Source: "test", Title: "Disque dur 8 To pas de reference", URL: "https://example.test/e", CapacityTB: 8, PriceEUR: 120})
-	if noModel.Deal.Model != nil {
-		t.Fatalf("generic title must remain ungrouped: %q", *noModel.Deal.Model)
+	noID := Deal(domain.Deal{Source: "test", Title: "Disque dur 8 To pas de reference", URL: "https://example.test/e", CapacityTB: 8, PriceEUR: 120})
+	if noID.Reject == nil || noID.Reject.Reason != "missing_identifier" {
+		t.Fatalf("missing identifier must reject: %#v", noID.Reject)
 	}
 }
 
@@ -193,7 +216,7 @@ func TestDealPrefersManufacturerSKUForGrouping(t *testing.T) {
 	if res.Deal.ImageURL == nil || *res.Deal.ImageURL != img {
 		t.Fatalf("image: %#v", res.Deal.ImageURL)
 	}
-	if res.Deal.CanonicalProductKey() != "seagate|st16000nm000j|16.000" {
+	if res.Deal.CanonicalProductKey() != "mpn:st16000nm000j" {
 		t.Fatalf("canonical key: %q", res.Deal.CanonicalProductKey())
 	}
 }

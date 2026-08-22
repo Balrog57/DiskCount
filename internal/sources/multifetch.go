@@ -63,7 +63,8 @@ func fetchMultiURL(
 		if isBlockedText(html) {
 			out.blocked = true
 		}
-		out.deals = append(out.deals, parse(html, u)...)
+		parsed := parse(html, u)
+		out.deals = append(out.deals, applyListingJSONLD(html, parsed)...)
 	}
 	slog.Debug(sourceName, "deals", len(out.deals), "failed_urls", out.failed, "total_urls", out.total)
 	return out
@@ -187,7 +188,8 @@ func fetchWithByparrFallback(
 				}
 				continue
 			}
-			res.deals = append(res.deals, parse(ses.HTML, u)...)
+			parsed := parse(ses.HTML, u)
+			res.deals = append(res.deals, applyListingJSONLD(ses.HTML, parsed)...)
 		}
 		slog.Info("byparr retry done", "src", sourceName, "n_urls", len(urls), "n_deals", len(res.deals))
 	}

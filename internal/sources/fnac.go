@@ -45,11 +45,7 @@ func (s *Fnac) Info() SourceInfo {
 }
 
 func (s *Fnac) Fetch(ctx context.Context) ([]domain.Deal, error) {
-	res := fetchMultiURL(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseFnac)
-	if err := res.asTransientError(s.Name()); err != nil {
-		return nil, err
-	}
-	return res.deals, nil
+	return fetchWithByparrFallback(ctx, s.Name(), s.http, s.byparr, s.urls, s.useFB, parseFnac)
 }
 
 // parseFnac scrapes Fnac listing pages. Fnac blocks non-browser requests
@@ -115,8 +111,10 @@ func parseFnac(html, baseURL string) []domain.Deal {
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
 		}
-		deal = withCardImage(deal, s, baseURL)
-		deal.SKU = cardSKU(s)
+		if ext := externalIDFromHref(href, "/p/a", "/a/"); ext != nil {
+			deal.ExternalID = ext
+		}
+		deal = enrichCardDeal(deal, s, baseURL)
 		seen[href] = true
 		deals = append(deals, deal)
 	})

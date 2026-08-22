@@ -92,7 +92,7 @@ func parseMindfactory(html, baseURL string) []domain.Deal {
 		}
 		cond := domain.ConditionNew
 
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source:        "mindfactory",
 			Title:         title,
 			URL:           href,
@@ -104,7 +104,8 @@ func parseMindfactory(html, baseURL string) []domain.Deal {
 			DriveCategory: dc,
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
-		})
+		}
+		deals = append(deals, enrichCardDeal(deal, s, baseURL))
 	})
 	return deals
 }

@@ -4,10 +4,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 type Condition string
@@ -95,6 +93,7 @@ type Deal struct {
 	Brand                *string
 	Model                *string
 	SKU                  *string
+	EAN                  *string
 	ImageURL             *string
 	RawTitle             string
 }
@@ -150,35 +149,9 @@ func (d Deal) ProductID() string {
 	return fmt.Sprintf("%s:url:%x", d.Source, digest[:12])
 }
 
-// CanonicalProductKey identifies equivalent offers only when the three stable
-// product attributes are known. An empty key is intentional: title text is
-// too seller-specific to be a safe grouping fallback.
+// CanonicalProductKey identifies equivalent offers by EAN or SKU (never by title).
 func (d Deal) CanonicalProductKey() string {
-	return CanonicalProductKey(d.Brand, d.Model, d.CapacityTB)
-}
-
-func CanonicalProductKey(brand, model *string, capacityTB float64) string {
-	if brand == nil || model == nil || capacityTB <= 0 {
-		return ""
-	}
-	b, m := canonicalPart(*brand), canonicalPart(*model)
-	if b == "wd" || b == "westerndigital" {
-		b = "westerndigital"
-	}
-	if b == "" || m == "" {
-		return ""
-	}
-	return b + "|" + m + "|" + strconv.FormatFloat(capacityTB, 'f', 3, 64)
-}
-
-func canonicalPart(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return CanonicalProductKey(d.EAN, d.SKU)
 }
 
 func CanonicalURL(rawURL string) string { return canonicalURL(rawURL) }

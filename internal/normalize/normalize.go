@@ -24,7 +24,7 @@ var packRE = regexp.MustCompile(`(?i)(?:lot\s+de|pack\s+of|pack\s+de)\s*(\d{1,2}
 
 // Storage part numbers are safer than guessing a model from arbitrary title
 // words. Keep this deliberately narrow; an unknown model remains ungrouped.
-var modelRE = regexp.MustCompile(`(?i)\b(?:ST\d{3,}[A-Z0-9-]{2,}|WD[A-Z0-9][A-Z0-9-]{3,}|WDS[A-Z0-9-]{4,}|CT\d{3,}[A-Z0-9-]{3,}|MZ[A-Z0-9-]{4,}|SK[A-Z0-9-]{4,}|HUS\d{3,}[A-Z0-9-]*|MG\d{3,}[A-Z0-9-]*)\b`)
+var modelRE = regexp.MustCompile(`(?i)\b(?:ST\d{3,}[A-Z0-9-]{2,}|WD[A-Z0-9][A-Z0-9-]{3,}|WDS[A-Z0-9-]{4,}|CT\d{3,}[A-Z0-9-]{3,}|MZ[A-Z0-9-]{4,}|SK[A-Z0-9-]{4,}|HUS\d{3,}[A-Z0-9-]*|MG\d{3,}[A-Z0-9-]*|SSDSC[A-Z0-9-]{3,}|D3-S\d{4,}[A-Z0-9-]*|900[A-Z0-9-]{4,})\b`)
 
 type Result struct {
 	Deal   domain.Deal
@@ -77,6 +77,12 @@ func Deal(raw domain.Deal) Result {
 
 	raw.CanonicalURL = domain.CanonicalURL(raw.URL)
 	raw = enrich(raw)
+	if domain.NeedsConcreteMerchant(raw) {
+		return rejected(raw, "aggregator_without_merchant", raw.Source+" "+raw.URL)
+	}
+	if !domain.HasProductIdentifier(raw.EAN, raw.SKU) {
+		return rejected(raw, "missing_identifier", "ean or sku required")
+	}
 	if unsupportedProduct(raw.Title) {
 		return rejected(raw, "unsupported_product", "item is not a standalone HDD or SSD")
 	}
@@ -118,9 +124,12 @@ func enrich(d domain.Deal) domain.Deal {
 			d.ClassificationSource = "unknown"
 		}
 	}
+	domain.ResolveMerchant(&d)
 	if d.Merchant == nil {
-		if host := host(d.URL); host != "" {
-			d.Merchant = &host
+		if display := domain.DisplayForSlug(d.Source); display != "" {
+			d.Merchant = &display
+		} else if h := host(d.URL); h != "" {
+			d.Merchant = &h
 		}
 	}
 	if d.Brand == nil {
@@ -128,24 +137,22 @@ func enrich(d domain.Deal) domain.Deal {
 			d.Brand = &b
 		}
 	}
+	if ean := domain.NormalizeEAN(d.EAN); ean != "" {
+		d.EAN = &ean
+	} else {
+		d.EAN = nil
+	}
 	if sku := strings.TrimSpace(str(d.SKU)); sku != "" {
 		d.SKU = &sku
-		if modelRE.MatchString(sku) {
-			d.Model = &sku
-		} else if d.Model == nil {
-			d.Model = &sku
-		}
 	} else {
 		d.SKU = nil
 	}
-	if d.Model == nil {
-		if m := modelRE.FindString(d.Title); m != "" {
-			d.Model = &m
+	if d.SKU != nil && d.Model == nil && domain.IsManufacturerPartNumber(*d.SKU) {
+		m := modelRE.FindString(*d.SKU)
+		if m == "" {
+			m = *d.SKU
 		}
-	}
-	if d.SKU == nil && d.Model != nil && modelRE.MatchString(*d.Model) {
-		m := *d.Model
-		d.SKU = &m
+		d.Model = &m
 	}
 	if img := strings.TrimSpace(str(d.ImageURL)); img != "" {
 		d.ImageURL = &img
@@ -186,6 +193,15 @@ func qualityScore(d domain.Deal) int {
 	}
 	if d.RecordingMethod != nil {
 		score += 5
+	}
+	if d.SKU != nil && *d.SKU != "" {
+		score += 10
+		if domain.IsManufacturerPartNumber(*d.SKU) {
+			score += 5
+		}
+	}
+	if d.EAN != nil && *d.EAN != "" {
+		score += 10
 	}
 	if score > 100 {
 		score = 100

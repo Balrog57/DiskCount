@@ -125,6 +125,60 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS availability_updated_at TIMESTAMPT
 ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(180);
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
 `},
+	{n: 8, sql: `
+WITH normalized AS (
+	SELECT id,
+		CASE WHEN regexp_replace(lower(trim(brand)), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital')
+			THEN 'westerndigital'
+			ELSE regexp_replace(lower(trim(brand)), '[^[:alnum:]]+', '', 'g') END AS brand_key,
+		regexp_replace(lower(trim(COALESCE(sku, model, ''))), '[^[:alnum:]]+', '', 'g') AS sku_key,
+		capacity_tb::text AS capacity_key
+	FROM products
+	WHERE brand IS NOT NULL AND capacity_tb > 0
+		AND trim(COALESCE(sku, model, '')) <> ''
+)
+UPDATE products p SET canonical_key = n.brand_key||'|'||n.sku_key||'|'||n.capacity_key
+FROM normalized n
+WHERE p.id = n.id
+	AND n.brand_key <> ''
+	AND n.sku_key <> ''
+	AND (
+		n.sku_key ~ '^(st|wd|wds|ct|mz|sk|hus|mg|ssdsc|d3s|900)'
+		OR n.sku_key ~ '^b0[a-z0-9]{8}$'
+	);
+`},
+	{n: 9, sql: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS ean VARCHAR(14);
+CREATE TABLE IF NOT EXISTS product_catalog (
+  canonical_key TEXT PRIMARY KEY,
+  ean VARCHAR(14),
+  sku VARCHAR(180),
+  brand VARCHAR(120),
+  model VARCHAR(180),
+  capacity_tb NUMERIC(10,3) DEFAULT 0,
+  media_type VARCHAR(30),
+  drive_category VARCHAR(40),
+  recording_method VARCHAR(20),
+  form_factor VARCHAR(120),
+  technology VARCHAR(120),
+  interfaces JSONB DEFAULT '[]',
+  image_url TEXT,
+  spec_source VARCHAR(40) DEFAULT 'heuristic',
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_catalog_ean ON product_catalog(ean) WHERE ean IS NOT NULL;
+UPDATE products SET canonical_key = 'ean:' || regexp_replace(ean, '[^0-9]', '', 'g')
+WHERE ean IS NOT NULL AND regexp_replace(ean, '[^0-9]', '', 'g') <> '';
+UPDATE products SET canonical_key = 'mpn:' || regexp_replace(lower(trim(sku)), '[^[:alnum:]]+', '', 'g')
+WHERE canonical_key IS NULL OR canonical_key NOT LIKE 'ean:%'
+  AND sku IS NOT NULL AND trim(sku) <> ''
+  AND regexp_replace(lower(trim(sku)), '[^[:alnum:]]+', '', 'g') ~ '^(st|wd|wds|ct|mz|sk|hus|mg|ssdsc|d3s|900)';
+UPDATE products SET canonical_key = 'asin:' || regexp_replace(lower(trim(sku)), '[^[:alnum:]]+', '', 'g')
+WHERE canonical_key IS NULL
+  AND sku IS NOT NULL AND regexp_replace(lower(trim(sku)), '[^[:alnum:]]+', '', 'g') ~ '^b0[a-z0-9]{8}$';
+UPDATE products SET canonical_key = 'sku:' || regexp_replace(lower(trim(sku)), '[^[:alnum:]]+', '', 'g')
+WHERE canonical_key IS NULL AND sku IS NOT NULL AND trim(sku) <> '';
+`},
 }
 
 // Migrate applies every pending migration in order. Each migration runs in
@@ -206,7 +260,7 @@ type Product struct {
 	ID, Source, Title, URL                                                             string
 	ExternalID, Condition, MediaType, FormFactor, Technology, DriveCategory            *string
 	ClassificationSource, CanonicalURL, CanonicalKey, Merchant, Brand, Model, RawTitle *string
-	RecordingMethod, SKU, ImageURL                                                     *string
+	RecordingMethod, SKU, EAN, ImageURL                                                     *string
 	CapacityTB                                                                         float64
 	Interfaces                                                                         []string
 	QualityScore                                                                       int
@@ -254,7 +308,7 @@ type ProductOffer struct {
 type ProductGroup struct {
 	CanonicalKey                 string
 	Brand, Model                 string
-	SKU, ImageURL                *string
+	EAN, SKU, ImageURL           *string
 	MediaType, DriveCategory     *string
 	RecordingMethod              *string
 	Interfaces                   []string
@@ -385,7 +439,7 @@ func (db *DB) DeleteAlert(ctx context.Context, aID int64) error {
 // productUpsertSQL is the shared INSERT...ON CONFLICT statement used by
 // UpsertProduct, RecordObservation, and RecordNotification. Centralizing it
 // keeps the three call sites in sync as columns are added.
-const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,sku,image_url,availability,availability_miss_count,availability_updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,'available',0,NOW()) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,canonical_key=$16,merchant=$17,brand=$18,model=$19,raw_title=$20,recording_method=$21,sku=COALESCE($22,products.sku),image_url=COALESCE($23,products.image_url),availability='available',availability_miss_count=0,availability_updated_at=NOW(),last_seen_at=NOW()`
+const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,sku,ean,image_url,availability,availability_miss_count,availability_updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,'available',0,NOW()) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,canonical_key=$16,merchant=$17,brand=$18,model=$19,raw_title=$20,recording_method=$21,sku=CASE WHEN $22 IS NOT NULL AND (products.sku IS NULL OR products.sku = '' OR regexp_replace(lower(trim($22)), '[^[:alnum:]]+', '', 'g') ~ '^(st|wd|wds|ct|mz|sk|hus|mg|ssdsc|d3s|900|b0[a-z0-9]{8})$') THEN $22 ELSE products.sku END,ean=COALESCE($23,products.ean),image_url=COALESCE($24,products.image_url),availability='available',availability_miss_count=0,availability_updated_at=NOW(),last_seen_at=NOW()`
 
 // productUpsertArgs builds the positional arguments for productUpsertSQL.
 // Extracted so the three call sites cannot drift out of sync.
@@ -395,7 +449,7 @@ func productUpsertArgs(deal domain.Deal, ifaces []string) []any {
 		ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory),
 		ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL),
 		nilIfEmpty(deal.CanonicalProductKey()), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod),
-		deal.SKU, deal.ImageURL,
+		deal.SKU, deal.EAN, deal.ImageURL,
 	}
 }
 
@@ -409,6 +463,7 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	if err := validateObservationDeal(deal); err != nil {
 		return err
 	}
+	db.EnrichDealFromCatalog(ctx, &deal)
 	tx, _ := db.Pool.Begin(ctx)
 	if tx == nil {
 		return fmt.Errorf("tx begin failed")
@@ -428,7 +483,10 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	if err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return db.UpsertCatalogEntry(ctx, deal)
 }
 
 // RecordObservationNoUpsert records a price observation without re-upserting
@@ -744,8 +802,8 @@ ORDER BY (p.availability='available') DESC,l.price_per_tb,l.observed_at DESC`, c
 // GetProduct fetches a single product by its ID for the detail page.
 func (db *DB) GetProduct(ctx context.Context, productID string) (*Product, error) {
 	p := &Product{}
-	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,sku,image_url,availability,availability_miss_count,availability_updated_at,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
-		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.CanonicalKey, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.SKU, &p.ImageURL, &p.Availability, &p.AvailabilityMissCount, &p.AvailabilityUpdatedAt, &p.FirstSeenAt, &p.LastSeenAt)
+	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,sku,ean,image_url,availability,availability_miss_count,availability_updated_at,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
+		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.CanonicalKey, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.SKU, &p.EAN, &p.ImageURL, &p.Availability, &p.AvailabilityMissCount, &p.AvailabilityUpdatedAt, &p.FirstSeenAt, &p.LastSeenAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -791,7 +849,7 @@ func catalogWhere(q CatalogQuery, grouped bool) (string, []any) {
 		add("l.source=$%d", q.Source)
 	}
 	if q.Media != "" {
-		add("p.media_type=$%d", q.Media)
+		add("COALESCE(c.media_type, p.media_type)=$%d", q.Media)
 	}
 	if q.Condition != "" {
 		add("p.condition=$%d", q.Condition)
@@ -801,20 +859,20 @@ func catalogWhere(q CatalogQuery, grouped bool) (string, []any) {
 	}
 	if q.Brand != "" {
 		add(`(
-  CASE WHEN regexp_replace(lower(trim(COALESCE(p.brand,''))), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital')
+  CASE WHEN regexp_replace(lower(trim(COALESCE(c.brand, p.brand,''))), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital')
   THEN 'westerndigital'
-  ELSE regexp_replace(lower(trim(COALESCE(p.brand,''))), '[^[:alnum:]]+', '', 'g')
+  ELSE regexp_replace(lower(trim(COALESCE(c.brand, p.brand,''))), '[^[:alnum:]]+', '', 'g')
   END
 )=$%d`, brandFacetKey(q.Brand))
 	}
 	if q.Category != "" {
-		add("p.drive_category=$%d", q.Category)
+		add("COALESCE(c.drive_category, p.drive_category)=$%d", q.Category)
 	}
 	if q.Recording != "" {
-		add("p.recording_method=$%d", q.Recording)
+		add("COALESCE(c.recording_method, p.recording_method)=$%d", q.Recording)
 	}
 	if q.Interface != "" {
-		add("p.interfaces ? $%d", q.Interface)
+		add("COALESCE(c.interfaces, p.interfaces) ? $%d", q.Interface)
 	}
 	if q.MinTB != nil {
 		add("p.capacity_tb>=$%d", *q.MinTB)
@@ -853,7 +911,7 @@ func (db *DB) CatalogGroups(ctx context.Context, q CatalogQuery) ([]ProductGroup
 	where, args := catalogWhere(q, true)
 	if s := strings.TrimSpace(q.Search); s != "" {
 		args = append(args, "%"+s+"%")
-		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(p.brand,'') ILIKE $%d OR COALESCE(p.model,'') ILIKE $%d OR COALESCE(p.sku,'') ILIKE $%d)", len(args), len(args), len(args), len(args))
+		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(c.brand, p.brand,'') ILIKE $%d OR COALESCE(c.model, p.model,'') ILIKE $%d OR COALESCE(c.sku, p.sku,'') ILIKE $%d OR COALESCE(c.ean, p.ean,'') ILIKE $%d)", len(args), len(args), len(args), len(args), len(args))
 	}
 	countSQL := `
 WITH latest AS (
@@ -864,6 +922,7 @@ WITH latest AS (
 )
 SELECT COUNT(DISTINCT p.canonical_key)
 FROM latest l JOIN products p ON p.id=l.product_id
+LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
 WHERE p.quality_score >= 50` + where
 	var total int
 	if err := db.Pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
@@ -883,22 +942,24 @@ WITH latest AS (
   (ARRAY_AGG(l.price_eur ORDER BY l.price_per_tb, l.observed_at DESC))[1] AS best_price_eur,
   COUNT(*) AS offer_count,
   MAX(l.observed_at) AS observed_at,
-  (ARRAY_AGG(p.brand ORDER BY l.price_per_tb))[1] AS brand,
-  (ARRAY_AGG(p.model ORDER BY l.price_per_tb))[1] AS model,
-  (ARRAY_AGG(p.sku ORDER BY l.price_per_tb) FILTER (WHERE p.sku IS NOT NULL))[1] AS sku,
-  (ARRAY_AGG(p.image_url ORDER BY l.price_per_tb) FILTER (WHERE p.image_url IS NOT NULL))[1] AS image_url,
-  (ARRAY_AGG(p.media_type ORDER BY l.price_per_tb))[1] AS media_type,
-  (ARRAY_AGG(p.drive_category ORDER BY l.price_per_tb))[1] AS drive_category,
-  (ARRAY_AGG(p.recording_method ORDER BY l.price_per_tb))[1] AS recording_method,
-  (ARRAY_AGG(p.interfaces ORDER BY l.price_per_tb))[1] AS interfaces,
-  (ARRAY_AGG(p.capacity_tb ORDER BY l.price_per_tb))[1] AS capacity_tb,
+  (ARRAY_AGG(COALESCE(c.brand, p.brand) ORDER BY l.price_per_tb))[1] AS brand,
+  (ARRAY_AGG(COALESCE(c.model, p.model) ORDER BY l.price_per_tb))[1] AS model,
+  (ARRAY_AGG(COALESCE(c.ean, p.ean) ORDER BY l.price_per_tb) FILTER (WHERE COALESCE(c.ean, p.ean) IS NOT NULL))[1] AS ean,
+  (ARRAY_AGG(COALESCE(c.sku, p.sku) ORDER BY l.price_per_tb) FILTER (WHERE COALESCE(c.sku, p.sku) IS NOT NULL))[1] AS sku,
+  (ARRAY_AGG(COALESCE(c.image_url, p.image_url) ORDER BY l.price_per_tb) FILTER (WHERE COALESCE(c.image_url, p.image_url) IS NOT NULL))[1] AS image_url,
+  (ARRAY_AGG(COALESCE(c.media_type, p.media_type) ORDER BY l.price_per_tb))[1] AS media_type,
+  (ARRAY_AGG(COALESCE(c.drive_category, p.drive_category) ORDER BY l.price_per_tb))[1] AS drive_category,
+  (ARRAY_AGG(COALESCE(c.recording_method, p.recording_method) ORDER BY l.price_per_tb))[1] AS recording_method,
+  (ARRAY_AGG(COALESCE(c.interfaces, p.interfaces) ORDER BY l.price_per_tb))[1] AS interfaces,
+  (ARRAY_AGG(COALESCE(c.capacity_tb, p.capacity_tb) ORDER BY l.price_per_tb))[1] AS capacity_tb,
   (ARRAY_AGG(p.availability ORDER BY (p.availability='available') DESC, l.price_per_tb))[1] AS availability,
   (ARRAY_AGG(l.product_id ORDER BY l.price_per_tb))[1] AS best_product_id
  FROM latest l JOIN products p ON p.id=l.product_id
+ LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
  WHERE p.quality_score >= 50%s
  GROUP BY p.canonical_key
 )
-SELECT canonical_key,brand,model,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id
+SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id
 FROM grouped g
 ORDER BY %s
 LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
@@ -911,7 +972,7 @@ LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
 	for rows.Next() {
 		var g ProductGroup
 		var offerCount int64
-		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID); err != nil {
+		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID); err != nil {
 			return nil, 0, err
 		}
 		g.OfferCount = int(offerCount)
@@ -927,7 +988,7 @@ func (db *DB) UngroupedPrices(ctx context.Context, q CatalogQuery) ([]CurrentPri
 	where, args := catalogWhere(q, false)
 	if s := strings.TrimSpace(q.Search); s != "" {
 		args = append(args, "%"+s+"%")
-		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(p.brand,'') ILIKE $%d OR COALESCE(p.model,'') ILIKE $%d OR COALESCE(p.sku,'') ILIKE $%d)", len(args), len(args), len(args), len(args))
+		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(c.brand, p.brand,'') ILIKE $%d OR COALESCE(c.model, p.model,'') ILIKE $%d OR COALESCE(c.sku, p.sku,'') ILIKE $%d OR COALESCE(c.ean, p.ean,'') ILIKE $%d)", len(args), len(args), len(args), len(args), len(args))
 	}
 	args = append(args, q.Limit)
 	sql := fmt.Sprintf(`
@@ -937,8 +998,9 @@ WITH latest AS (
  WHERE o.price_per_tb > 0 AND o.quality_score >= 70
  ORDER BY o.product_id,o.observed_at DESC
 )
-SELECT l.product_id,l.source,p.title,p.url,p.condition,p.media_type,p.drive_category,p.canonical_key,p.brand,p.recording_method,p.sku,p.image_url,p.model,p.interfaces,p.capacity_tb,l.price_eur,l.price_per_tb,l.observed_at,p.availability
+SELECT l.product_id,l.source,p.title,p.url,p.condition,COALESCE(c.media_type,p.media_type),COALESCE(c.drive_category,p.drive_category),p.canonical_key,COALESCE(c.brand,p.brand),COALESCE(c.recording_method,p.recording_method),COALESCE(c.sku,p.sku),COALESCE(c.image_url,p.image_url),COALESCE(c.model,p.model),COALESCE(c.interfaces,p.interfaces),COALESCE(c.capacity_tb,p.capacity_tb),l.price_eur,l.price_per_tb,l.observed_at,p.availability
 FROM latest l JOIN products p ON p.id=l.product_id
+LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
 WHERE p.quality_score >= 50%s
 ORDER BY (p.availability='available') DESC, l.price_per_tb ASC
 LIMIT $%d`, where, len(args))

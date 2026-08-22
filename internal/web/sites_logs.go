@@ -104,7 +104,8 @@ func isBlockedMetric(metric scanner.SourceMetrics) bool {
 
 func siteLabel(name string) string {
 	labels := map[string]string{
-		"alternate": "Alternate FR", "diskprices": "Amazon via DiskPrices", "pricepergig": "Amazon via PricePerGig", "pricepertb": "Amazon via PricePerTB", "keepa": "Amazon via Keepa",
+		"alternate": "Alternate FR", "amazon.fr": "Amazon France", "amazon.de": "Amazon Germany",
+		"diskprices": "DiskPrices (Amazon)", "pricepergig": "PricePerGig (Amazon)", "pricepertb": "PricePerTB (Amazon)", "keepa": "Keepa (Amazon)",
 		"materiel": "Materiel.net", "pccomponentes": "PCComponentes FR", "topachat": "TopAchat", "rueducommerce": "Rue du Commerce", "asus-shop-fr": "Asus Shop FR", "nvidia-fr": "Nvidia FR",
 	}
 	if label := labels[name]; label != "" {

@@ -2,27 +2,22 @@ package domain
 
 import "testing"
 
-func TestCanonicalProductKeyRequiresStableIdentity(t *testing.T) {
-	brand, model := "Seagate", "IronWolf Pro ST16000NE000"
-	if got := CanonicalProductKey(&brand, &model, 16); got != "seagate|ironwolfprost16000ne000|16.000" {
+func TestDealCanonicalProductKeyRequiresIdentifier(t *testing.T) {
+	ean := "5901234123457"
+	d := Deal{EAN: &ean, CapacityTB: 16}
+	if got := d.CanonicalProductKey(); got != "ean:5901234123457" {
 		t.Fatalf("unexpected key: %q", got)
 	}
-	if got := CanonicalProductKey(&brand, nil, 16); got != "" {
-		t.Fatalf("missing model must not group: %q", got)
-	}
-}
-
-func TestCanonicalProductKeyNormalizesWesternDigitalAlias(t *testing.T) {
-	wd, westernDigital, model := "WD", "Western Digital", "WD161KFGX"
-	if a, b := CanonicalProductKey(&wd, &model, 16), CanonicalProductKey(&westernDigital, &model, 16); a != b {
-		t.Fatalf("brand aliases produced different keys: %q != %q", a, b)
+	d.EAN = nil
+	if got := d.CanonicalProductKey(); got != "" {
+		t.Fatalf("missing identifier must not group: %q", got)
 	}
 }
 
 func TestDealCarriesSKUAndImageURL(t *testing.T) {
-	sku, img := "ST16000NM000J", "https://example.test/drive.jpg"
-	d := Deal{SKU: &sku, ImageURL: &img}
-	if d.SKU == nil || *d.SKU != sku || d.ImageURL == nil || *d.ImageURL != img {
-		t.Fatalf("sku/image not retained: %#v", d)
+	sku, ean, img := "ST16000NM000J", "5901234123457", "https://example.test/drive.jpg"
+	d := Deal{SKU: &sku, EAN: &ean, ImageURL: &img}
+	if d.SKU == nil || *d.SKU != sku || d.EAN == nil || *d.EAN != ean || d.ImageURL == nil || *d.ImageURL != img {
+		t.Fatalf("sku/ean/image not retained: %#v", d)
 	}
 }

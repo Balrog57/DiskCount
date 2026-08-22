@@ -315,10 +315,15 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		s.recordScanResult(src.Name(), len(deals), r)
 
 		if len(deals) > 0 {
-			seen := s.proc(ctx, deals, now, dryRun, r)
-			if !dryRun && s.db != nil && len(seen) > 0 {
-				if err := s.db.MarkSourceMissing(ctx, src.Name(), mapKeys(seen), 3); err != nil {
-					r.Errors = append(r.Errors, "availability: "+err.Error())
+			seenByMerchant := s.proc(ctx, deals, now, dryRun, r)
+			if !dryRun && s.db != nil {
+				for merchant, ids := range seenByMerchant {
+					if len(ids) == 0 {
+						continue
+					}
+					if err := s.db.MarkSourceMissing(ctx, merchant, ids, 3); err != nil {
+						r.Errors = append(r.Errors, "availability: "+err.Error())
+					}
 				}
 			}
 		}
@@ -407,8 +412,8 @@ func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (Sou
 	return metrics, deals, nil
 }
 
-func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) map[string]struct{} {
-	seen := make(map[string]struct{}, len(deals))
+func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) map[string][]string {
+	seenByMerchant := make(map[string][]string)
 	var alerts []db.Alert
 	if s.db != nil {
 		var err error
@@ -491,7 +496,11 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			continue
 		}
 		deal := res.Deal
-		seen[deal.ProductID()] = struct{}{}
+		if !dryRun && s.db != nil {
+			s.db.EnrichDealFromCatalog(ctx, &deal)
+		}
+		pid := deal.ProductID()
+		seenByMerchant[deal.Source] = append(seenByMerchant[deal.Source], pid)
 		r.Accepted++
 		// Point lookup into the pre-fetched baseline map; nil out when
 		// the product has no history so ShouldNotify behaves as before.
@@ -507,6 +516,10 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				slog.Warn("upsert product", "src", deal.Source, "pid", deal.ProductID(), "err", err)
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
+			}
+			if err := s.db.UpsertCatalogEntry(ctx, deal); err != nil {
+				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
+				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}
 		}
 		if !normalize.IsAlertQuality(deal) {
@@ -580,15 +593,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			}
 		}
 	}
-	return seen
-}
-
-func mapKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
+	return seenByMerchant
 }
 
 func ScheduleLoop(ctx context.Context, s *Scanner, cron string) error {

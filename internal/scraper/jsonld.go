@@ -13,6 +13,8 @@ type ProductData struct {
 	Name         string
 	Brand        string
 	SKU          string
+	MPN          string
+	GTIN         string
 	Image        string
 	Price        string
 	Currency     string
@@ -108,6 +110,8 @@ func productFromObject(obj map[string]interface{}) (ProductData, bool) {
 	pd := ProductData{
 		Name:  stringField(obj, "name"),
 		SKU:   stringField(obj, "sku"),
+		MPN:   stringField(obj, "mpn"),
+		GTIN:  firstNonEmpty(stringField(obj, "gtin13"), stringField(obj, "gtin14"), stringField(obj, "gtin")),
 		Image: imageField(obj["image"]),
 		URL:   stringField(obj, "url"),
 	}

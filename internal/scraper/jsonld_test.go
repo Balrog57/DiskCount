@@ -148,6 +148,14 @@ func TestParseJSONLDEmptyHTML(t *testing.T) {
 	}
 }
 
+func TestParseJSONLDMPN(t *testing.T) {
+	html := `<script type="application/ld+json">{"@type":"Product","name":"Exos","mpn":"ST18000NM000J","sku":"shop-123"}</script>`
+	pd, ok := ParseJSONLD(html)
+	if !ok || pd.MPN != "ST18000NM000J" {
+		t.Fatalf("mpn: got %q found=%v", pd.MPN, ok)
+	}
+}
+
 func TestParseJSONLDArrayTypeField(t *testing.T) {
 	// Some sites put @type as an array including Product.
 	html := `<script type="application/ld+json">

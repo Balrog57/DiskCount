@@ -99,6 +99,7 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 			Model                  string   `json:"model"`
 			PartNumber             string   `json:"partNumber"`
 			ManufacturerPartNumber string   `json:"manufacturerPartNumber"`
+			EANList                []string `json:"eanList"`
 			Images                 []string `json:"images"`
 			Title                  string   `json:"title"`
 			Stats                  struct {
@@ -152,6 +153,14 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 		imageURL = amazonImageURL(asin)
 	}
 	sku := firstNonEmpty(p.ManufacturerPartNumber, p.PartNumber, p.Model, asin)
+	var ean *string
+	for _, raw := range p.EANList {
+		e := strings.TrimSpace(raw)
+		if e != "" {
+			ean = strPtr(e)
+			break
+		}
+	}
 
 	return &domain.Deal{
 		Source: "keepa", Title: p.Title, URL: productURL,
@@ -159,9 +168,12 @@ func (s *Keepa) fetchProduct(ctx context.Context, asin string, kd int) (*domain.
 		Condition: &cond, MediaType: media,
 		ExternalID:    &asin,
 		DriveCategory: dc, Interfaces: ifaces,
-		Brand: strPtr(p.Brand),
-		SKU:   strPtr(sku), ImageURL: strPtr(imageURL),
-		ObservedAt: domain.UTCNow(),
+		Brand:                strPtr(p.Brand),
+		SKU:                  strPtr(sku),
+		EAN:                  ean,
+		ImageURL:             strPtr(imageURL),
+		ClassificationSource: "keepa",
+		ObservedAt:           domain.UTCNow(),
 	}, nil
 }
 

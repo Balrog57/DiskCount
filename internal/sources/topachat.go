@@ -111,9 +111,7 @@ func parseTopachat(html, baseURL string) []domain.Deal {
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
 		}
-		deal = withCardImage(deal, article, baseURL)
-		deal.SKU = cardSKU(article)
-		deals = append(deals, deal)
+		deals = append(deals, enrichCardDeal(deal, article, baseURL))
 	})
 	return deals
 }

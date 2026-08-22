@@ -88,15 +88,27 @@ func TestParseGeizhalsGoldenFile(t *testing.T) {
 		t.Skipf("fixture missing: %v", err)
 	}
 	deals := parseGeizhals(string(html), "https://geizhals.de/")
+	if len(deals) != 0 {
+		t.Fatalf("listing-only HTML should not emit deals without merchant offers, got %d: %+v", len(deals), deals)
+	}
+}
+
+func TestParseGeizhalsOffersGoldenFile(t *testing.T) {
+	html, err := os.ReadFile(filepath.Join("testdata", "geizhals_offers_sample.html"))
+	if err != nil {
+		t.Skipf("fixture missing: %v", err)
+	}
+	deals := parseGeizhals(string(html), "https://geizhals.de/")
 	if len(deals) != 2 {
-		t.Fatalf("expected 2 deals, got %d: %+v", len(deals), deals)
+		t.Fatalf("expected 2 merchant offers, got %d: %+v", len(deals), deals)
 	}
-	// Lexar NM790 2TB SSD at €241,90
-	if deals[0].PriceEUR != 241.90 || deals[0].CapacityTB != 2 {
-		t.Errorf("deal 0: price=%.2f capacity=%.2f", deals[0].PriceEUR, deals[0].CapacityTB)
+	if deals[0].URL != "https://www.mindfactory.de/product/123456.html" {
+		t.Errorf("offer 0 URL: %q", deals[0].URL)
 	}
-	// Seagate IronWolf Pro 20TB HDD at €1.284,00 (thousands separator)
-	if deals[1].PriceEUR != 1284.00 || deals[1].CapacityTB != 20 {
-		t.Errorf("deal 1: price=%.2f capacity=%.2f", deals[1].PriceEUR, deals[1].CapacityTB)
+	if deals[0].PriceEUR != 241.90 {
+		t.Errorf("offer 0 price: %.2f", deals[0].PriceEUR)
+	}
+	if deals[1].URL != "https://www.amazon.de/dp/B0TESTDE12" {
+		t.Errorf("offer 1 URL: %q", deals[1].URL)
 	}
 }

@@ -85,7 +85,7 @@ func parseRakuten(html, baseURL string) []domain.Deal {
 			ifaces = parsing.DefaultInterfacesForCategory(*dc)
 		}
 		cond := domain.ConditionNew
-		deals = append(deals, domain.Deal{
+		deal := domain.Deal{
 			Source: "rakuten",
 			Title:  title, URL: href,
 			PriceEUR:   round2(priceEUR),
@@ -94,7 +94,11 @@ func parseRakuten(html, baseURL string) []domain.Deal {
 			Condition:  &cond, MediaType: media,
 			DriveCategory: dc, Interfaces: ifaces,
 			ObservedAt: domain.UTCNow(),
-		})
+		}
+		if ext := externalIDFromHref(href, "/p/", "/product/"); ext != nil {
+			deal.ExternalID = ext
+		}
+		deals = append(deals, enrichCardDeal(deal, s, baseURL))
 	})
 	return deals
 }

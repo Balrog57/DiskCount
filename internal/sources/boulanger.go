@@ -123,9 +123,7 @@ func parseBoulanger(html, baseURL string) []domain.Deal {
 			Interfaces:    ifaces,
 			ObservedAt:    domain.UTCNow(),
 		}
-		deal = withCardImage(deal, s, baseURL)
-		deal.SKU = cardSKU(s)
-		deals = append(deals, deal)
+		deals = append(deals, enrichCardDeal(deal, s, baseURL))
 	})
 	return deals
 }

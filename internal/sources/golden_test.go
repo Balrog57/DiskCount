@@ -69,12 +69,14 @@ func TestParseDiskPricesEmptyHTMLReturnsTypedError(t *testing.T) {
 // scanner). The previous version of this test targeted a second,
 // parallel sources.Normalize pipeline that has been removed.
 func TestNormalizeRoundTrip(t *testing.T) {
+	sku := "ST8000NM000A"
 	res := normalize.Deal(domain.Deal{
 		Source:     "test",
 		Title:      "Seagate Exos 7E8 8TB HDD",
 		URL:        "https://example.com/exos-8tb",
 		PriceEUR:   119.99,
 		CapacityTB: 8.0,
+		SKU:        &sku,
 	})
 	if res.Reject != nil {
 		t.Fatalf("unexpected rejection: %+v", res.Reject)

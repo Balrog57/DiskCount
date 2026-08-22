@@ -56,8 +56,8 @@ func TestProductOffersGroupsOnlyCanonicalIdentity(t *testing.T) {
 		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM products WHERE id=ANY($1)`, ids)
 	})
 	_, err := d.Pool.Exec(ctx, `INSERT INTO products(id,source,title,url,capacity_tb,condition,quality_score,brand,model,canonical_key) VALUES
-		('test-group-a','shop-a','Drive A','https://example.test/a',16,'new',90,'Seagate','ST16000NM000J','seagate|st16000nm000j|16.000'),
-		('test-group-b','shop-b','Drive B','https://example.test/b',16,'used',90,'Seagate','ST16000NM000J','seagate|st16000nm000j|16.000')`)
+		('test-group-a','shop-a','Drive A','https://example.test/a',16,'new',90,'Seagate','ST16000NM000J','mpn:st16000nm000j'),
+		('test-group-b','shop-b','Drive B','https://example.test/b',16,'used',90,'Seagate','ST16000NM000J','mpn:st16000nm000j')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestProductOffersGroupsOnlyCanonicalIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	offers, err := d.ProductOffers(ctx, "seagate|st16000nm000j|16.000")
+	offers, err := d.ProductOffers(ctx, "mpn:st16000nm000j")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestUpsertPersistsSKUAndImageAndCatalogGroups(t *testing.T) {
 	}
 	found := false
 	for _, g := range groups {
-		if g.CanonicalKey == "seagate|st16000nm000j|16.000" {
+		if g.CanonicalKey == "mpn:st16000nm000j" {
 			found = g.OfferCount >= 2 && g.BestPricePerTB == 18 && g.SKU != nil && *g.SKU == sku
 		}
 	}
