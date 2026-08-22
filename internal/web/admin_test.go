@@ -112,6 +112,45 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	if !strings.Contains(body, "Tendance 7 jours") || strings.Contains(body, "template:") {
 		t.Fatalf("sparkline did not render: %s", body)
 	}
+	for _, required := range []string{"product-card", "filter-drawer", "Actualisé", "Créer une alerte"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing catalogue UI %q", required)
+		}
+	}
+}
+
+func TestRelativeTimeAt(t *testing.T) {
+	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		at   time.Time
+		want string
+	}{
+		{now.Add(-30 * time.Second), "à l'instant"},
+		{now.Add(-12 * time.Minute), "il y a 12 min"},
+		{now.Add(-3 * time.Hour), "il y a 3 h"},
+		{now.Add(-48 * time.Hour), "il y a 2 j"},
+	} {
+		if got := relativeTimeAt(tc.at, now); got != tc.want {
+			t.Fatalf("relativeTimeAt() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestProductDetailTemplateRendersComparison(t *testing.T) {
+	now := time.Now()
+	media, condition := "solid_state", "new"
+	rec := httptest.NewRecorder()
+	render(rec, productDetailTpl, map[string]any{
+		"Title": "Produit", "Active": "products", "Days": 30,
+		"Product": &db.Product{ID: "fixture", Title: "SSD Fixture", Source: "merchant", URL: "https://example.test", MediaType: &media, Condition: &condition, CapacityTB: 4, LastSeenAt: now},
+		"Current": &db.PriceHistoryPoint{ObservedAt: now, PriceEUR: 200, PricePerTB: 50, Source: "merchant"},
+	})
+	body := rec.Body.String()
+	for _, required := range []string{"Comparaison des prix", "Créer une alerte de prix", "200.00 €", "Dernier refresh"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing product detail UI %q", required)
+		}
+	}
 }
 
 func TestDashboardRendersRecentNotifications(t *testing.T) {

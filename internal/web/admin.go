@@ -514,6 +514,23 @@ func durationHuman(d time.Duration) string {
 	return fmt.Sprintf("%dj %dh", days, int(rem.Hours()))
 }
 
+func relativeTimeAt(t, now time.Time) string {
+	if t.IsZero() {
+		return "inconnu"
+	}
+	d := now.Sub(t)
+	if d < time.Minute {
+		return "à l'instant"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("il y a %d min", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("il y a %d h", int(d.Hours()))
+	}
+	return fmt.Sprintf("il y a %d j", int(d.Hours()/24))
+}
+
 func (s *Server) quality(w http.ResponseWriter, r *http.Request) {
 	qs, err := s.db.QualityStats(r.Context())
 	data := s.baseWithRequest(r, "Qualite donnees", "quality")
@@ -599,6 +616,10 @@ func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	history, histErr := s.db.PriceHistory(r.Context(), productID, days)
+	var current *db.PriceHistoryPoint
+	if len(history) > 0 {
+		current = &history[len(history)-1]
+	}
 
 	// Compute stats.
 	var minPT, maxPT, avgPT float64
@@ -621,6 +642,7 @@ func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
 	data := s.baseWithRequest(r, "Produit", "products")
 	data["Product"] = product
 	data["History"] = history
+	data["Current"] = current
 	data["Days"] = days
 	data["MinPT"] = minPT
 	data["MaxPT"] = maxPT
@@ -1394,6 +1416,31 @@ var tmplFuncs = template.FuncMap{
 		return computeSparklinePoints(points)
 	},
 	"durationHuman": durationHuman,
+	"ago":           func(t time.Time) string { return relativeTimeAt(t, time.Now()) },
+	"mediaLabel": func(v *string) string {
+		if v == nil {
+			return "Stockage"
+		}
+		if *v == "solid_state" {
+			return "SSD"
+		}
+		if *v == "rotational" {
+			return "HDD"
+		}
+		return *v
+	},
+	"conditionLabel": func(v *string) string {
+		if v == nil {
+			return "État inconnu"
+		}
+		if *v == "new" {
+			return "Neuf"
+		}
+		if *v == "used" {
+			return "Occasion"
+		}
+		return *v
+	},
 }
 
 // templateCache memoises the parsed template for each body string. The
@@ -1470,8 +1517,8 @@ const layoutTpl = `<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}a{color:inherit}
 .app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px}.shell{min-width:0}.topbar{min-height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:10px 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:var(--panel);color:var(--muted);font-size:12px}.badge.good{color:var(--good)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line)}.card{padding:18px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.table-wrap{overflow:auto}.config-row{display:grid;grid-template-columns:1fr 2fr auto;gap:16px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line2)}.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px}.stat{padding:14px;border-radius:10px;background:var(--soft)}.chart-wrap{padding:18px}.price-chart{width:100%;height:220px}.range-links{display:flex;gap:8px}.range-links a{padding:5px 9px;border-radius:999px;text-decoration:none}.range-links a.active{background:var(--brand);color:#fff}
 .lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#3b9cff;border-color:#3b9cff;color:#061326;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#0b3568}
-@media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto;gap:12px}.nav{grid-template-columns:repeat(3,minmax(0,1fr))}.topbar{position:relative;height:auto;align-items:flex-start;gap:10px;flex-direction:column;padding:16px}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
-@media (max-width:560px){.nav{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.status{display:grid;width:100%}.truncate{max-width:240px}}
+@media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;z-index:8;height:auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:11px 14px}.brand{font-size:19px;white-space:nowrap}.nav{display:flex;gap:5px;overflow-x:auto;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav a{flex:0 0 auto;padding:8px 10px}.lang-switch,.theme-switch{display:none}.topbar{position:relative;height:auto;padding:12px 16px}.topbar .status>span{display:none}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
+@media (max-width:560px){.sidebar{grid-template-columns:1fr}.brand{display:none}.grid{grid-template-columns:1fr}.topbar{min-height:54px}.topbar h1{font-size:18px}.status{margin-left:auto}.truncate{max-width:240px}}
 .sparkline{width:80px;height:24px;display:block}
 .muted{color:var(--muted)}
 :root[data-theme=dark] .topbar{background:var(--panel);color:var(--ink)}
@@ -1596,54 +1643,55 @@ const qualityTpl = `{{define "body"}}
 {{end}}`
 
 const productsTpl = `{{define "body"}}
+<style>
+.catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;margin-bottom:18px;background:linear-gradient(135deg,var(--nav),var(--nav2));color:#fff;border:1px solid #174f92;border-radius:16px}.catalog-hero h2{margin:0 0 4px;font-size:24px}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:28px;font-weight:850;color:#78bdff;white-space:nowrap}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(0,29,72,.08);transition:transform .15s ease,border-color .15s ease}.product-card:hover{transform:translateY(-2px);border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:11px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.drive-visual span{font-size:28px;font-weight:900;letter-spacing:.08em}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:16px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:24px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:999px;padding:4px 9px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
+:root[data-theme=dark] .drive-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
+@media(max-width:1180px){.product-grid{grid-template-columns:1fr}}
+@media(max-width:760px){main{padding-bottom:94px}.catalog-hero{align-items:flex-start;padding:17px}.catalog-hero h2{font-size:20px}.catalog-count{font-size:20px}.catalog-layout{display:block}.filter-drawer{display:none;position:fixed;inset:0;z-index:20;overflow:auto;border-radius:0;padding:22px;background:var(--bg)}.filter-drawer:target{display:block}.filter-close{display:block}.filter-form{padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:14px}.catalog-toolbar .button{display:none}.product-card{grid-template-columns:96px minmax(0,1fr);padding:12px}.drive-visual{min-height:112px}.product-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.product-price{font-size:22px}.product-meta{align-items:flex-end}.mobile-filter-button{display:flex;position:fixed;left:16px;right:16px;bottom:14px;z-index:15;min-height:58px;align-items:center;justify-content:center;border-radius:13px;background:var(--brand);color:#fff;text-decoration:none;font-size:18px;font-weight:850;box-shadow:0 12px 35px rgba(0,65,160,.35)}}
+@media(max-width:420px){.catalog-hero{display:block}.catalog-count{margin-top:10px}.product-card{grid-template-columns:82px minmax(0,1fr);gap:11px}.drive-visual{min-height:100px}.drive-visual span{font-size:22px}.storage-tag:nth-of-type(n+5){display:none}}
+</style>
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-<section class="panel"><div class="panel-head"><h2>Filtres</h2></div><div class="panel-body">
-<form method="get" action="/products" class="filters">
-<div><label for="filter_q">Recherche</label><input id="filter_q" name="q" value="{{.Query}}" placeholder="Exos, IronWolf, NVMe..."></div>
-<div><label for="filter_source">Source</label><select id="filter_source" name="source"><option value="">Toutes</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
-<div><label for="filter_media">Media</label><select id="filter_media" name="media"><option value="">Tous</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
+<section id="catalog" class="catalog-hero"><div><h2>Le meilleur du stockage, au bon prix</h2><p>HDD, SSD et NVMe classés par coût réel au téraoctet.</p></div><div class="catalog-count">{{len .Prices}} offres</div></section>
+<div class="catalog-layout">
+<aside id="filters" class="panel panel-body filter-drawer"><div class="filter-head"><h2>Filtres</h2><a class="filter-close" href="#catalog" aria-label="Fermer les filtres">×</a></div>
+<form method="get" action="/products" class="filter-form">
+<div><label for="filter_q">Rechercher</label><input id="filter_q" name="q" value="{{.Query}}" placeholder="Exos, IronWolf, NVMe..."></div>
+<div><label for="filter_source">Marchand</label><select id="filter_source" name="source"><option value="">Tous</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_media">Support</label><select id="filter_media" name="media"><option value="">HDD et SSD</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
 <div><label for="filter_condition">État</label><select id="filter_condition" name="condition"><option value="">Tous</option><option value="new" {{if eq .SelectedCondition "new"}}selected{{end}}>Neuf</option><option value="used" {{if eq .SelectedCondition "used"}}selected{{end}}>Occasion</option></select></div>
 <div><label for="filter_brand">Marque</label><select id="filter_brand" name="brand"><option value="">Toutes</option>{{range .Brands}}<option value="{{.}}" {{if eq $.SelectedBrand .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_category">Usage</label><select id="filter_category" name="category"><option value="">Tous</option>{{range .Categories}}<option value="{{.}}" {{if eq $.SelectedCategory .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_interface">Interface</label><select id="filter_interface" name="interface"><option value="">Toutes</option>{{range .Interfaces}}<option value="{{.}}" {{if eq $.SelectedInterface .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_recording">Enregistrement</label><select id="filter_recording" name="recording"><option value="">Tous</option>{{range .Recordings}}<option value="{{.}}" {{if eq $.SelectedRecording .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
-<div><label for="filter_min_tb">Min To</label><input id="filter_min_tb" name="min_tb" value="{{.MinTB}}" inputmode="decimal"></div>
-<div><label for="filter_max_tb">Max To</label><input id="filter_max_tb" name="max_tb" value="{{.MaxTB}}" inputmode="decimal"></div>
-<div><label for="filter_max_eur_tb">Max EUR/To</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal"></div>
-<div class="actions"><button type="submit">Filtrer</button><a class="badge" href="/products">Reinitialiser</a></div>
-</form></div></section>
-<section class="section panel"><div class="panel-head"><div><h2>Meilleures offres récentes</h2><span class="hint">Classées par coût réel au téraoctet.</span></div><a class="button" href="/alerts">Créer une alerte</a></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Profil stockage</th><th>Source</th><th>Capacité</th><th>Prix</th><th>€/To</th><th>7j</th><th>Dernier refresh</th><th>Offre</th></tr></thead><tbody>
-{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := Sparkline $pts}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td><strong>{{ptr .Brand}}</strong><br><span class="muted">{{ptr .MediaType}}{{if .DriveCategory}} · {{ptr .DriveCategory}}{{end}}{{if .RecordingMethod}} · {{ptr .RecordingMethod}}{{end}}{{if .Interfaces}} · {{csv .Interfaces}}{{end}}</span></td><td>{{.Source}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{if $spark.Coords}}<svg class="sparkline" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{else}}<span class="muted">-</span>{{end}}</td><td>{{tsv .ObservedAt}}</td><td><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir le site ↗</a></td></tr>{{else}}<tr><td colspan="9" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
-</tbody></table></div></section>
+<div><label>Capacité</label><div class="filter-range"><input aria-label="Capacité minimale" name="min_tb" value="{{.MinTB}}" inputmode="decimal" placeholder="Min To"><input aria-label="Capacité maximale" name="max_tb" value="{{.MaxTB}}" inputmode="decimal" placeholder="Max To"></div></div>
+<div><label for="filter_max_eur_tb">Prix maximum</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal" placeholder="EUR / To"></div>
+<div class="filter-actions"><button type="submit">Afficher les offres</button><a class="filter-reset" href="/products">Réinitialiser</a></div>
+</form></aside>
+<section><div class="catalog-toolbar"><div><h2>Produits référencés</h2><span class="hint">Prix et fraîcheur vérifiés lors du dernier scan.</span></div><a class="button" href="/alerts">Créer une alerte</a></div>
+<div class="product-grid">{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := Sparkline $pts}}
+<article class="product-card"><div class="drive-visual"><span>{{mediaLabel .MediaType}}</span><small>{{cap .CapacityTB}}</small></div><div class="product-copy">
+<a class="product-title" href="/product?id={{.ProductID}}">{{.Title}}</a>
+<div class="product-price">{{price .PriceEUR}} € <small>{{price .PricePerTB}} €/To</small></div>
+<div class="tag-row"><span class="storage-tag strong">{{mediaLabel .MediaType}}</span>{{if .Brand}}<span class="storage-tag">{{ptr .Brand}}</span>{{end}}{{if .DriveCategory}}<span class="storage-tag">{{ptr .DriveCategory}}</span>{{end}}{{if .RecordingMethod}}<span class="storage-tag">{{ptr .RecordingMethod}}</span>{{end}}{{range .Interfaces}}<span class="storage-tag">{{.}}</span>{{end}}</div>
+<div class="product-meta"><span>{{.Source}} · Actualisé {{ago .ObservedAt}}</span>{{if $spark.Coords}}<svg class="sparkline trend" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{end}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">Site ↗</a></div>
+</div></article>{{else}}<div class="panel empty">Aucun produit ne correspond aux filtres.</div>{{end}}</div></section>
+</div><a class="mobile-filter-button" href="#filters">⌁ &nbsp; Filtres</a>
 {{end}}`
 
 const productDetailTpl = `{{define "body"}}
+<style>
+.detail-back{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:700;text-decoration:none}.detail-hero{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px;background:linear-gradient(135deg,var(--panel),var(--soft));border:1px solid var(--line);border-radius:16px}.detail-visual{min-height:180px;display:grid;place-content:center;text-align:center;border-radius:14px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.detail-visual span{font-size:44px;font-weight:950;letter-spacing:.08em}.detail-visual small{font-size:16px;font-weight:800}.detail-copy h2{margin:0 0 9px;font-size:25px;line-height:1.25}.detail-tags{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}.detail-tag{border-radius:999px;padding:5px 10px;background:var(--panel);border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:750}.detail-actions{display:flex;gap:9px;flex-wrap:wrap}.detail-actions .secondary-link{background:var(--panel);color:var(--brand);border:1px solid var(--line)}.detail-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:18px;margin-top:18px;align-items:start}.compare-panel{padding:22px}.compare-panel h2{margin:0;color:var(--brand);font-size:22px}.compare-sub{margin:4px 0 18px;color:var(--muted)}.offer-card{display:grid;grid-template-columns:minmax(0,1fr) auto 48px;gap:15px;align-items:center;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 10px 28px rgba(0,29,72,.08)}.merchant-name{font-size:19px;font-weight:900;text-transform:capitalize}.offer-state{display:inline-flex;margin-top:12px;padding:4px 9px;border-radius:999px;background:rgba(78,199,138,.12);color:var(--good);font-size:12px;font-weight:800}.offer-price{text-align:right}.offer-price strong{display:block;color:var(--brand);font-size:28px}.offer-price span{color:var(--muted);font-size:12px}.offer-go{width:46px;height:46px;display:grid;place-content:center;border-radius:999px;background:var(--brand);color:#fff;font-size:28px;text-decoration:none}.spec-list{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}.spec{padding:14px;background:var(--panel)}.spec span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}.spec strong{display:block;margin-top:4px}.history-panel{margin-top:18px}.history-scroll{max-height:330px;overflow:auto}:root[data-theme=dark] .detail-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
+@media(max-width:900px){.detail-layout{grid-template-columns:1fr}}
+@media(max-width:620px){.detail-hero{grid-template-columns:100px minmax(0,1fr);gap:14px;padding:14px}.detail-visual{min-height:115px}.detail-visual span{font-size:28px}.detail-copy h2{font-size:18px}.detail-actions{display:grid}.detail-actions .button{width:100%}.compare-panel{padding:17px}.offer-card{grid-template-columns:1fr auto;gap:10px}.offer-go{grid-column:2;grid-row:1 / span 2}.offer-price{text-align:left}.offer-price strong{font-size:25px}.spec-list{grid-template-columns:1fr}.stats-row{grid-template-columns:1fr}.stat .value{font-size:23px}}
+</style>
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-{{if .Product}}
-<section class="panel"><div class="panel-head"><h2>{{.Product.Title}}</h2></div><div class="table-wrap"><table><tbody>
-<tr><th>Source</th><td>{{.Product.Source}}</td></tr>
-<tr><th>Capacite</th><td>{{cap .Product.CapacityTB}}</td></tr>
-<tr><th>Media</th><td>{{ptr .Product.MediaType}}</td></tr>
-<tr><th>Marque</th><td>{{ptr .Product.Brand}}</td></tr>
-{{if .Product.RecordingMethod}}<tr><th>Enregistrement</th><td>{{ptr .Product.RecordingMethod}}</td></tr>{{end}}
-{{if .Product.DriveCategory}}<tr><th>Categorie</th><td>{{ptr .Product.DriveCategory}}</td></tr>{{end}}
-<tr><th>Qualite</th><td>{{.Product.QualityScore}}/100</td></tr>
-<tr><th>Premiere observation</th><td>{{tsv .Product.FirstSeenAt}}</td></tr>
-<tr><th>Derniere observation</th><td>{{tsv .Product.LastSeenAt}}</td></tr>
-<tr><th>Lien</th><td><a href="{{.Product.URL}}" target="_blank" rel="noreferrer">Ouvrir l'offre</a></td></tr>
-</tbody></table></div></section>
-
-<section class="panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a> <a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a> <a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a> <a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1an</a></div></div>
-{{if .History}}
-<div class="stats-row"><div class="stat"><span class="label">Min EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moy EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Max EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div>
-<div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none"><polyline fill="none" stroke="#3b9cff" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de donnees pour un graphique.</p>{{end}}</div>
-<div class="table-wrap"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>
-{{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}
-</tbody></table></div>
-{{else}}<p class="empty">Aucune observation sur cette periode.</p>{{end}}
-</section>
+{{if .Product}}<a class="detail-back" href="/products">← Retour aux produits</a>
+<section class="detail-hero"><div class="detail-visual"><span>{{mediaLabel .Product.MediaType}}</span><small>{{cap .Product.CapacityTB}}</small></div><div class="detail-copy"><h2>{{.Product.Title}}</h2><div class="hint">Référence suivie chez {{.Product.Source}} · actualisée {{ago .Product.LastSeenAt}}</div><div class="detail-tags"><span class="detail-tag">{{mediaLabel .Product.MediaType}}</span>{{if .Product.Brand}}<span class="detail-tag">{{ptr .Product.Brand}}</span>{{end}}{{if .Product.DriveCategory}}<span class="detail-tag">{{ptr .Product.DriveCategory}}</span>{{end}}{{if .Product.RecordingMethod}}<span class="detail-tag">{{ptr .Product.RecordingMethod}}</span>{{end}}{{range .Product.Interfaces}}<span class="detail-tag">{{.}}</span>{{end}}</div><div class="detail-actions"><a class="button" href="/alerts">♧ &nbsp; Créer une alerte de prix</a><a class="button secondary-link" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer">Voir chez le marchand ↗</a></div></div></section>
+<div class="detail-layout"><section class="panel compare-panel"><h2>Comparaison des prix</h2><p class="compare-sub">Dernière offre disponible pour cette référence.</p>{{if .Current}}<article class="offer-card"><div><div class="merchant-name">{{.Product.Source}}</div><span class="offer-state">✓ {{conditionLabel .Product.Condition}}</span></div><div class="offer-price"><strong>{{price .Current.PriceEUR}} €</strong><span>{{price .Current.PricePerTB}} €/To · {{ago .Current.ObservedAt}}</span></div><a class="offer-go" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Product.Source}}">›</a></article>{{else}}<p class="empty">Aucun prix récent disponible.</p>{{end}}</section>
+<section class="panel"><div class="panel-head"><h2>Caractéristiques</h2></div><div class="spec-list"><div class="spec"><span>Capacité</span><strong>{{cap .Product.CapacityTB}}</strong></div><div class="spec"><span>Support</span><strong>{{mediaLabel .Product.MediaType}}</strong></div><div class="spec"><span>Marque</span><strong>{{ptr .Product.Brand}}</strong></div><div class="spec"><span>État</span><strong>{{conditionLabel .Product.Condition}}</strong></div><div class="spec"><span>Première observation</span><strong>{{tsv .Product.FirstSeenAt}}</strong></div><div class="spec"><span>Dernier refresh</span><strong>{{tsv .Product.LastSeenAt}}</strong></div></div></section></div>
+<section class="panel history-panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a><a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a><a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a><a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1 an</a></div></div>
+{{if .History}}<div class="stats-row"><div class="stat"><span class="label">Minimum EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moyenne EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Maximum EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div><div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none" aria-label="Évolution du prix au téraoctet"><polyline fill="none" stroke="#3b9cff" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de données pour un graphique.</p>{{end}}</div><div class="table-wrap history-scroll"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>{{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">Aucune observation sur cette période.</p>{{end}}</section>
 {{else}}<p class="empty">Produit introuvable. <a href="/products">Retour aux produits</a></p>{{end}}
-<p><a href="/products">&larr; Retour aux produits</a></p>
 {{end}}`
 
 const alertsTpl = `{{define "body"}}
