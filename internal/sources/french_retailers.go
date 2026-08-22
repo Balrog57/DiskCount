@@ -162,14 +162,24 @@ func parseGenericRetailer(html, baseURL string) []domain.Deal {
 	var out []domain.Deal
 	doc.Find("article, li.product, li.product-list__item, [data-product-id]").Each(func(_ int, card *goquery.Selection) {
 		link := card.Find("a[href]").First()
+		if card.Is("a[href]") {
+			link = card
+		}
 		href, _ := link.Attr("href")
-		title := strings.TrimSpace(card.Find("[itemprop='name'], h2, h3, .product-name, .product-title").First().Text())
+		title, _ := card.Attr("data-product-name")
+		title = strings.TrimSpace(title)
+		if title == "" {
+			title = strings.TrimSpace(card.Find("[itemprop='name'], h2, h3, .product-name, .product-title").First().Text())
+		}
 		if title == "" {
 			title = strings.TrimSpace(link.Text())
 		}
-		priceText := ""
+		priceText, _ := card.Attr("data-product-price")
 		priceEl := card.Find("[itemprop='price'], [data-price], .price, [class*='price']").First()
 		for _, attr := range []string{"content", "data-price"} {
+			if priceText != "" {
+				break
+			}
 			if value, ok := priceEl.Attr(attr); ok && value != "" {
 				priceText = value
 				break

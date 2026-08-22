@@ -28,6 +28,14 @@ func TestFrenchRetailerParsers(t *testing.T) {
 	}
 }
 
+func TestGenericRetailerDataAttributes(t *testing.T) {
+	html := `<a href="/ssd-1tb" data-product-id="1" data-product-name="SSD NVMe 1TB" data-product-price="79.99"><div>SSD NVMe</div></a>`
+	deals := parseGenericRetailer(html, "https://www.pccomponentes.fr/")
+	if len(deals) != 1 || deals[0].PriceEUR != 79.99 || deals[0].URL != "https://www.pccomponentes.fr/ssd-1tb" {
+		t.Fatalf("unexpected product data: %#v", deals)
+	}
+}
+
 func TestLiveFrenchRetailerParsers(t *testing.T) {
 	if os.Getenv("DISKCOUNT_LIVE_SOURCES") != "1" {
 		t.Skip("set DISKCOUNT_LIVE_SOURCES=1")
