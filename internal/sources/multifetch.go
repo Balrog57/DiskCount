@@ -82,6 +82,21 @@ func fetchMultiURL(
 //	}
 //	return res.deals, nil
 func (r multiURLFetchResult) asTransientError(sourceName string) error {
+	// CAPTCHA/WAF pages that parse to zero deals must surface as Blocked
+	// (Sites/Logs show "captcha") instead of a silent empty scan.
+	if r.blocked && len(r.deals) == 0 {
+		var cause error
+		for _, e := range r.errors {
+			if e != nil {
+				cause = e
+				break
+			}
+		}
+		if cause == nil {
+			cause = errors.New("CAPTCHA/WAF page with no extractable deals")
+		}
+		return Blocked(sourceName, cause)
+	}
 	if r.failed == 0 || r.failed < r.total {
 		return nil
 	}

@@ -136,19 +136,19 @@ func TestAlertMatchesRecordingMethod(t *testing.T) {
 	})
 }
 
-func TestAlertMatchesSource(t *testing.T) {
-	deal := baseDeal()
+func TestAlertMatchesCapacityPresetMedia(t *testing.T) {
+	hdd := baseDeal()
+	hdd.CapacityTB = 1.0
+	ssd := baseDeal()
+	ssd.CapacityTB = 1.0
+	m := domain.MediaTypeSolidState
+	ssd.MediaType = &m
 
-	t.Run("source match", func(t *testing.T) {
-		a := &db.Alert{Sources: []string{"diskprices"}}
-		if !AlertMatches(a, deal) {
-			t.Fatal("diskprices deal should match diskprices-restricted alert")
-		}
-	})
-	t.Run("source mismatch", func(t *testing.T) {
-		a := &db.Alert{Sources: []string{"dealabs"}}
-		if AlertMatches(a, deal) {
-			t.Fatal("diskprices deal should not match dealabs-only alert")
-		}
-	})
+	a := &db.Alert{CapacityPresets: []string{"ssd_1"}}
+	if AlertMatches(a, hdd) {
+		t.Fatal("SSD ~1 To preset must not match a 1 To HDD")
+	}
+	if !AlertMatches(a, ssd) {
+		t.Fatal("SSD ~1 To preset must match a 1 To SSD")
+	}
 }

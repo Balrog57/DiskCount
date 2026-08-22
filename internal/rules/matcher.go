@@ -61,7 +61,7 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 			return false
 		}
 	}
-	if !capMatch(alert, deal.CapacityTB) {
+	if !capMatch(alert, deal) {
 		return false
 	}
 	if alert.MaxPricePerTB != nil && deal.PricePerTB > *alert.MaxPricePerTB {
@@ -135,12 +135,18 @@ func contIns(s []string, v string) bool {
 	return false
 }
 
-func capMatch(a *db.Alert, tb float64) bool {
+func capMatch(a *db.Alert, deal domain.Deal) bool {
+	tb := deal.CapacityTB
 	if len(a.CapacityPresets) > 0 {
 		for _, k := range a.CapacityPresets {
 			p, ok := CapacityPresets[k]
 			if !ok {
 				continue
+			}
+			if p.MediaType != "" && p.MediaType != "all" {
+				if deal.MediaType == nil || string(*deal.MediaType) != p.MediaType {
+					continue
+				}
 			}
 			if p.MinTB != nil && tb < *p.MinTB {
 				continue

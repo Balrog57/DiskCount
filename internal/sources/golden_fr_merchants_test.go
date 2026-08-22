@@ -102,8 +102,8 @@ func TestParseFnacGoldenFile(t *testing.T) {
 		t.Skipf("fixture missing: %v", err)
 	}
 	deals := parseFnac(string(html), "https://www.fnac.com/")
-	if len(deals) != 2 {
-		t.Fatalf("expected 2 deals, got %d: %+v", len(deals), deals)
+	if len(deals) != 3 {
+		t.Fatalf("expected 3 deals, got %d: %+v", len(deals), deals)
 	}
 	// Samsung 870 EVO 2To SSD at 139,90€
 	if deals[0].PriceEUR != 139.90 || deals[0].CapacityTB != 2 {

@@ -71,6 +71,8 @@ type Scanner struct {
 	srcs  []sources.Source
 	ntf   Notifier
 	ntfMu sync.RWMutex
+	cfgMu sync.RWMutex
+	srcsMu sync.RWMutex
 
 	mu        sync.RWMutex
 	last      *ScanReport
@@ -109,6 +111,42 @@ func (s *Scanner) SetNotifier(n Notifier) {
 	s.ntfMu.Lock()
 	s.ntf = n
 	s.ntfMu.Unlock()
+}
+
+// SetSources replaces the active scrape sources after ENABLED_SOURCES changes.
+func (s *Scanner) SetSources(srcs []sources.Source) {
+	s.srcsMu.Lock()
+	defer s.srcsMu.Unlock()
+	s.srcs = srcs
+}
+
+// SetConfig replaces the live scanner config.
+func (s *Scanner) SetConfig(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	s.cfgMu.Lock()
+	s.cfg = cfg
+	s.cfgMu.Unlock()
+	if cfg.SourceHealthThreshold >= 1 {
+		s.zeroStreakMu.Lock()
+		s.zeroStreakThreshold = cfg.SourceHealthThreshold
+		s.zeroStreakMu.Unlock()
+	}
+}
+
+func (s *Scanner) config() *config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+func (s *Scanner) sourceList() []sources.Source {
+	s.srcsMu.RLock()
+	defer s.srcsMu.RUnlock()
+	out := make([]sources.Source, len(s.srcs))
+	copy(out, s.srcs)
+	return out
 }
 
 func (s *Scanner) notifier() Notifier {
@@ -151,7 +189,7 @@ func (s *Scanner) SourceHealth() []SourceHealthEntry {
 	return out
 }
 
-func (s *Scanner) Sources() []sources.Source { return s.srcs }
+func (s *Scanner) Sources() []sources.Source { return s.sourceList() }
 func (s *Scanner) LastReport() *ScanReport {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -239,13 +277,14 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		s.mu.Unlock()
 	}()
 
-	for _, src := range s.srcs {
+	for _, src := range s.sourceList() {
 		// Apply a small randomised jitter between sources to avoid the
 		// pattern of every source firing at the same instant, which is
 		// easy to fingerprint.
 		s.jitterBefore(ctx)
 
-		ctx2, cancel := context.WithTimeout(ctx, time.Duration(s.cfg.RequestTimeoutSeconds)*time.Second)
+		cfg := s.config()
+		ctx2, cancel := context.WithTimeout(ctx, time.Duration(cfg.RequestTimeoutSeconds)*time.Second)
 		metrics, deals, err := s.fetchWithBreaker(ctx2, src)
 		cancel()
 

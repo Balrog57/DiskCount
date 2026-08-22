@@ -2,12 +2,15 @@ package web
 
 import (
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
+	"github.com/Balrog57/DiskCount/internal/i18n"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 )
 
@@ -20,6 +23,11 @@ type siteStat struct {
 	LastDeals                           int
 	LastScan                            time.Time
 	Duration                            time.Duration
+}
+
+type merchantToggle struct {
+	Name, Label string
+	Enabled     bool
 }
 
 func buildSiteStats(names []string, quality *db.QualityStats, health []scanner.SourceHealthEntry, report *scanner.ScanReport) []siteStat {
@@ -116,10 +124,119 @@ func (s *Server) sites(w http.ResponseWriter, r *http.Request) {
 		health = s.scanner.SourceHealth()
 	}
 	data := s.baseWithRequest(r, "Sites", "sites")
-	names := append(append([]string(nil), s.sourceNames...), "asus-shop-fr", "nvidia-fr")
+	loc := i18n.ParseLocale(fmtSprint(data["Locale"]))
+	data["Title"] = i18n.T("web.sites.title", loc)
+	names := append(append([]string(nil), s.liveSourceNames()...), "asus-shop-fr", "nvidia-fr")
 	data["Sites"] = buildSiteStats(names, quality, health, lastReport(s.scanner))
 	data["Error"] = err
+	data["Saved"] = r.URL.Query().Get("saved") == "1"
+	cfg := s.liveConfig()
+	byparrOK := cfg != nil && strings.TrimSpace(cfg.ByparrURL) != ""
+	data["ByparrOK"] = byparrOK
+	enabled := map[string]bool{}
+	if cfg != nil {
+		if len(cfg.EnabledSources) == 0 {
+			for _, name := range config.FrenchMerchantNames {
+				enabled[name] = true
+			}
+		} else {
+			for _, name := range cfg.EnabledSources {
+				enabled[name] = true
+			}
+		}
+	}
+	toggles := make([]merchantToggle, 0, len(config.FrenchMerchantNames))
+	for _, name := range config.FrenchMerchantNames {
+		toggles = append(toggles, merchantToggle{Name: name, Label: siteLabel(name), Enabled: enabled[name]})
+	}
+	data["MerchantToggles"] = toggles
 	render(w, sitesTpl, data)
+}
+
+func fmtSprint(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func (s *Server) saveSiteSources(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	selected := cleanValues(r.Form["merchant"])
+	allowed := map[string]bool{}
+	for _, name := range config.FrenchMerchantNames {
+		allowed[name] = true
+	}
+	frSelected := map[string]bool{}
+	enabledFR := make([]string, 0, len(selected))
+	for _, name := range selected {
+		if allowed[name] {
+			frSelected[name] = true
+			enabledFR = append(enabledFR, name)
+		}
+	}
+	out := make([]string, 0)
+	for _, name := range s.liveSourceNames() {
+		if allowed[name] {
+			if frSelected[name] {
+				out = append(out, name)
+			}
+			continue
+		}
+		out = append(out, name)
+	}
+	for _, name := range enabledFR {
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	existing, err := s.db.ListAppConfig(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	existing["ENABLED_SOURCES"] = strings.Join(out, ",")
+	ensureMerchantDefaults(existing, enabledFR)
+	if err := s.db.SetAppConfig(r.Context(), existing); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.reloadSources(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/sites?saved=1", http.StatusSeeOther)
+}
+
+func ensureMerchantDefaults(values map[string]string, enabled []string) {
+	defaults := config.DefaultValues()
+	keyFor := map[string]string{
+		"alternate": "ALTERNATE_URLS", "boulanger": "BOULANGER_URLS", "cdiscount": "CDISCOUNT_URLS",
+		"corsair": "CORSAIR_URLS", "cybertek": "CYBERTEK_URLS", "darty": "DARTY_URLS",
+		"fnac": "FNAC_URLS", "grosbill": "GROSBILL_URLS", "ldlc": "LDLC_URLS",
+		"materiel": "MATERIEL_URLS", "pccomponentes": "PCCOMPONENTES_URLS", "rueducommerce": "RUEDUCOMMERCE_URLS",
+		"topachat": "TOPACHAT_URLS", "topbiz": "TOPBIZ_URLS",
+	}
+	for _, name := range enabled {
+		key := keyFor[name]
+		if key == "" {
+			continue
+		}
+		if strings.TrimSpace(values[key]) == "" {
+			values[key] = defaults[key]
+		}
+	}
 }
 
 type logEntry struct {
@@ -149,25 +266,28 @@ func scanLogEntries(report *scanner.ScanReport) []logEntry {
 		} else if metric.Error != "" {
 			entryLevel, message = "error", metric.Name+": "+metric.Error
 		} else if metric.DealsFetched == 0 {
-			entryLevel, message = "warning", metric.Name+": aucune offre"
+			entryLevel = "warning"
+			message = metric.Name + ": 0 offres"
 		}
 		out = append(out, logEntry{Level: entryLevel, At: at, Message: message})
 	}
-	for _, warning := range report.SourceWarnings {
-		out = append(out, logEntry{Level: "warning", At: at, Message: warning.Name + ": " + warning.Message})
+	for _, warn := range report.SourceWarnings {
+		out = append(out, logEntry{Level: "warning", At: at, Message: warn.Name + ": " + warn.Message})
 	}
-	for _, message := range report.Errors {
-		out = append(out, logEntry{Level: "error", At: at, Message: message})
+	for _, err := range report.Errors {
+		out = append(out, logEntry{Level: "error", At: at, Message: err})
 	}
 	return out
 }
 
 func formatScanSummary(report *scanner.ScanReport) string {
-	return "fetched=" + strconv.Itoa(report.Fetched) + ", accepted=" + strconv.Itoa(report.Accepted) + ", rejected=" + strconv.Itoa(report.Rejected) + ", erreurs=" + strconv.Itoa(len(report.Errors))
+	return "fetched=" + strconv.Itoa(report.Fetched) + ", accepted=" + strconv.Itoa(report.Accepted) + ", rejected=" + strconv.Itoa(report.Rejected) + ", matched=" + strconv.Itoa(report.Matched) + ", notified=" + strconv.Itoa(report.Notified)
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	data := s.baseWithRequest(r, "Logs", "logs")
+	loc := i18n.ParseLocale(fmtSprint(data["Locale"]))
+	data["Title"] = i18n.T("web.nav.logs", loc)
 	if s.scanner != nil {
 		data["Logs"] = scanLogEntries(s.scanner.LastReport())
 	}
@@ -175,10 +295,16 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 }
 
 const sitesTpl = `{{define "body"}}
-<div class="panel"><div class="panel-head"><h2>Statistiques des sites</h2><span class="hint">État du dernier scan et qualité des offres par fournisseur</span></div><div class="table-wrap"><table><thead><tr><th>Site</th><th>Statut</th><th>Offres</th><th>Produits</th><th>Observations</th><th>Rejets</th><th>Dernier refresh</th><th>Durée</th><th>Breaker</th><th>Médiane €/To</th></tr></thead><tbody>{{range .Sites}}<tr><td><strong>{{.Label}}</strong>{{if ne .Label .Name}}<div class="hint">{{.Name}}</div>{{end}}{{if .Error}}<div class="hint">{{.Error}}</div>{{end}}</td><td><span class="badge {{if eq .Status "actif"}}good{{else if or (eq .Status "erreur") (eq .Status "captcha")}}bad{{else}}warn{{end}}">{{.Status}}</span></td><td>{{.LastDeals}}</td><td>{{.Products}}</td><td>{{.Observations}}</td><td>{{.Rejected}}</td><td>{{if .LastScan.IsZero}}—{{else}}{{tsv .LastScan}}{{end}}</td><td>{{if .Duration}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td><td>{{if .Breaker}}{{.Breaker}}{{else}}—{{end}}</td><td>{{if .MedianPricePerTB}}{{printf "%.2f" .MedianPricePerTB}}{{else}}—{{end}}</td></tr>{{else}}<tr><td colspan="10" class="empty">Aucun fournisseur configuré.</td></tr>{{end}}</tbody></table></div>{{if .Error}}<div class="warnbox">Erreur de statistiques : {{.Error}}</div>{{end}}</div>
+{{if .Saved}}<div class="notice">{{call .T "web.common.config_saved"}}</div>{{end}}
+<section class="panel"><div class="panel-head"><div><h2>{{call .T "web.sites.merchants_toggle_title"}}</h2><div class="hint">{{call .T "web.sites.merchants_toggle_hint"}}</div></div>
+<span class="badge {{if .ByparrOK}}good{{else}}warn{{end}}">{{if .ByparrOK}}{{call .T "web.sites.byparr_ok"}}{{else}}{{call .T "web.sites.byparr_off"}}{{end}}</span></div>
+<form method="post" action="/sites/sources" class="panel-body"><div class="check-grid">{{range .MerchantToggles}}<label class="check-chip"><input type="checkbox" name="merchant" value="{{.Name}}" {{if .Enabled}}checked{{end}}> {{.Label}}</label>{{end}}</div>
+<div style="margin-top:14px"><button type="submit">{{call .T "web.sites.save_merchants"}}</button></div></form></section>
+<div class="panel section"><div class="panel-head"><h2>{{call .T "web.sites.title"}}</h2><span class="hint">{{call .T "web.sites.subtitle"}}</span></div><div class="table-wrap"><table><thead><tr><th>{{call .T "web.sites.site"}}</th><th>{{call .T "web.sites.status"}}</th><th>{{call .T "web.sites.offers"}}</th><th>{{call .T "web.sites.products"}}</th><th>{{call .T "web.sites.observations"}}</th><th>{{call .T "web.sites.rejects"}}</th><th>{{call .T "web.sites.last_refresh"}}</th><th>{{call .T "web.sites.duration"}}</th><th>{{call .T "web.sites.breaker"}}</th><th>{{call .T "web.sites.median"}}</th></tr></thead><tbody>{{range .Sites}}<tr><td><strong>{{.Label}}</strong>{{if ne .Label .Name}}<div class="hint">{{.Name}}</div>{{end}}{{if .Error}}<div class="hint">{{.Error}}</div>{{end}}</td><td><span class="badge {{if eq .Status "actif"}}good{{else if or (eq .Status "erreur") (eq .Status "captcha")}}bad{{else}}warn{{end}}">{{.Status}}</span></td><td>{{.LastDeals}}</td><td>{{.Products}}</td><td>{{.Observations}}</td><td>{{.Rejected}}</td><td>{{if .LastScan.IsZero}}—{{else}}{{tsv .LastScan}}{{end}}</td><td>{{if .Duration}}{{.Duration.Round 1000000}}{{else}}—{{end}}</td><td>{{if .Breaker}}{{.Breaker}}{{else}}—{{end}}</td><td>{{if .MedianPricePerTB}}{{printf "%.2f" .MedianPricePerTB}}{{else}}—{{end}}</td></tr>{{else}}<tr><td colspan="10" class="empty">{{call $.T "web.sites.none"}}</td></tr>{{end}}</tbody></table></div>{{if .Error}}<div class="warnbox">{{call .T "web.common.error_prefix"}} {{.Error}}</div>{{end}}</div>
 {{end}}`
 
 const logsTpl = `{{define "body"}}
-<div class="panel"><div class="panel-head"><h2>Journal du dernier scan</h2><span class="hint">Les erreurs sont rouges, les avertissements orange.</span></div><div class="panel-body log-list">{{range .Logs}}<div class="log-entry log-{{.Level}}"><span class="badge">{{.Level}}</span><time>{{tsv .At}}</time><span>{{.Message}}</span></div>{{else}}<div class="empty">Aucun scan enregistré.</div>{{end}}</div></div>
-<style>.log-list{display:grid;gap:8px}.log-entry{display:grid;grid-template-columns:90px 180px 1fr;gap:12px;align-items:center;padding:11px 12px;border-left:4px solid var(--brand);background:var(--soft);border-radius:8px}.log-success{border-left-color:var(--good)}.log-warning{border-left-color:var(--warn)}.log-error{border-left-color:var(--bad)}.log-entry time{color:var(--muted);font-size:12px}@media(max-width:560px){.log-entry{grid-template-columns:1fr;gap:4px}}</style>
-{{end}}`
+<div class="panel"><div class="panel-head"><h2>{{call .T "web.logs.title"}}</h2><span class="hint">{{call .T "web.logs.subtitle"}}</span></div><div class="panel-body log-list">{{range .Logs}}<div class="log-entry log-{{.Level}}"><span class="badge">{{.Level}}</span><time>{{tsv .At}}</time><span>{{.Message}}</span></div>{{else}}<div class="empty">{{call $.T "web.logs.none"}}</div>{{end}}</div></div>
+<style>.log-list{display:grid;gap:8px}.log-entry{display:grid;grid-template-columns:90px 180px 1fr;gap:12px;align-items:center;padding:11px 12px;border-left:4px solid var(--brand);background:var(--soft)}.log-success{border-left-color:var(--good)}.log-warning{border-left-color:var(--warn)}.log-error{border-left-color:var(--bad)}.log-entry time{color:var(--muted);font-size:12px}@media(max-width:560px){.log-entry{grid-template-columns:1fr;gap:4px}}</style>
+{{end}}
+`

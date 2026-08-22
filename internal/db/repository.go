@@ -800,7 +800,12 @@ func catalogWhere(q CatalogQuery, grouped bool) (string, []any) {
 		add("p.availability=$%d", q.Availability)
 	}
 	if q.Brand != "" {
-		add("p.brand=$%d", q.Brand)
+		add(`(
+  CASE WHEN regexp_replace(lower(trim(COALESCE(p.brand,''))), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital')
+  THEN 'westerndigital'
+  ELSE regexp_replace(lower(trim(COALESCE(p.brand,''))), '[^[:alnum:]]+', '', 'g')
+  END
+)=$%d`, brandFacetKey(q.Brand))
 	}
 	if q.Category != "" {
 		add("p.drive_category=$%d", q.Category)
@@ -922,7 +927,7 @@ func (db *DB) UngroupedPrices(ctx context.Context, q CatalogQuery) ([]CurrentPri
 	where, args := catalogWhere(q, false)
 	if s := strings.TrimSpace(q.Search); s != "" {
 		args = append(args, "%"+s+"%")
-		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(p.sku,'') ILIKE $%d)", len(args), len(args))
+		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(p.brand,'') ILIKE $%d OR COALESCE(p.model,'') ILIKE $%d OR COALESCE(p.sku,'') ILIKE $%d)", len(args), len(args), len(args), len(args))
 	}
 	args = append(args, q.Limit)
 	sql := fmt.Sprintf(`
@@ -970,7 +975,7 @@ WHERE p.quality_score >= 50 AND p.canonical_key IS NOT NULL`)
 			return nil, nil, nil, nil, nil, err
 		}
 		if brand != nil && *brand != "" {
-			bset[*brand] = true
+			bset[canonicalBrandFacet(*brand)] = true
 		}
 		if cat != nil && *cat != "" {
 			cset[*cat] = true
@@ -997,6 +1002,31 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// brandFacetKey normalises a brand filter value the same way canonical_key
+// collapses WD / Western Digital so the catalog facet and SQL filter agree.
+func brandFacetKey(brand string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(brand)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	key := b.String()
+	if key == "wd" || key == "westerndigital" {
+		return "westerndigital"
+	}
+	return key
+}
+
+// canonicalBrandFacet returns the display brand used in filter dropdowns.
+// WD and Western Digital collapse to a single "Western Digital" option.
+func canonicalBrandFacet(brand string) string {
+	if brandFacetKey(brand) == "westerndigital" {
+		return "Western Digital"
+	}
+	return brand
 }
 
 // MarkSourceMissing advances absence only after a successful source scan.

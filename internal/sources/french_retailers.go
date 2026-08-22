@@ -23,7 +23,11 @@ type frenchRetailer struct {
 
 func (s *frenchRetailer) Name() string { return s.name }
 func (s *frenchRetailer) Info() SourceInfo {
-	return SourceInfo{Name: s.name, Description: s.description, Categories: []string{"marchand-fr"}, Requires: []string{strings.ToUpper(s.name) + "_URLS"}, Version: "1"}
+	req := []string{strings.ToUpper(s.name) + "_URLS"}
+	if s.name == "darty" {
+		req = append(req, "BYPARR_URL")
+	}
+	return SourceInfo{Name: s.name, Description: s.description, Categories: []string{"marchand-fr"}, Requires: req, Version: "1"}
 }
 func (s *frenchRetailer) Fetch(ctx context.Context) ([]domain.Deal, error) {
 	parse := func(html, base string) []domain.Deal {

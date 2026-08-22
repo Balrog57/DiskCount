@@ -111,7 +111,9 @@ type Server struct {
 	db                *db.DB
 	scanner           *scanner.Scanner
 	cfg               *config.Config
+	cfgMu             sync.RWMutex
 	sourceNames       []string
+	sourceMu          sync.RWMutex
 	startedAt         time.Time
 	discordConfigured atomic.Bool
 	discordTestSender func(string, string) error
@@ -311,6 +313,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/discord/test", s.testDiscord)
 	muxAdmin.HandleFunc("/config", s.config)
 	muxAdmin.HandleFunc("/config/save", s.saveConfig)
+	muxAdmin.HandleFunc("/sites/sources", s.saveSiteSources)
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
@@ -386,17 +389,75 @@ func sanitizeNext(raw string) string {
 	return u.RequestURI()
 }
 
+func (s *Server) liveSourceNames() []string {
+	s.sourceMu.RLock()
+	defer s.sourceMu.RUnlock()
+	out := make([]string, len(s.sourceNames))
+	copy(out, s.sourceNames)
+	return out
+}
+
+func (s *Server) setLiveSources(names []string) {
+	sort.Strings(names)
+	s.sourceMu.Lock()
+	s.sourceNames = names
+	s.sourceMu.Unlock()
+}
+
+func (s *Server) liveConfig() *config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+// reloadSources rebuilds scrapers from DB app_config and applies them live.
+func (s *Server) reloadSources(ctx context.Context) error {
+	if s.db == nil || s.scanner == nil {
+		return nil
+	}
+	values, err := s.db.ListAppConfig(ctx)
+	if err != nil {
+		return err
+	}
+	newCfg := config.LoadWithAppValues(values)
+	s.cfgMu.RLock()
+	old := s.cfg
+	s.cfgMu.RUnlock()
+	if old != nil {
+		newCfg.DatabaseURL = old.DatabaseURL
+		newCfg.WebAdminAddr = old.WebAdminAddr
+		if newCfg.WebAdminPassword == "" {
+			newCfg.WebAdminPassword = old.WebAdminPassword
+		}
+	}
+	reg := sources.NewRegistry(newCfg)
+	srcs := sources.BuildAll(reg)
+	names := make([]string, 0, len(srcs))
+	for _, src := range srcs {
+		names = append(names, src.Name())
+	}
+	s.scanner.SetConfig(newCfg)
+	s.scanner.SetSources(srcs)
+	s.cfgMu.Lock()
+	s.cfg = newCfg
+	s.cfgMu.Unlock()
+	s.setLiveSources(names)
+	slog.Info("sources reloaded", "count", len(names))
+	return nil
+}
+
 func (s *Server) base(title, active string) map[string]any {
 	return map[string]any{
 		"Title":      title,
 		"Active":     active,
+		"Path":       "/",
 		"Locale":     string(i18n.Default),
 		"Theme":      themeAuto,
 		"T":          func(key string) string { return i18n.T(key, i18n.Default) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
 			DiscordConfigured: s.discordConfigured.Load(),
-			SourceCount:       len(s.sourceNames),
+			SourceCount:       len(s.liveSourceNames()),
 		},
 	}
 }
@@ -411,16 +472,24 @@ func (s *Server) baseWithRequest(r *http.Request, title, active string) map[stri
 	}
 	loc := s.localeForRequest(nil, r)
 	theme := s.themeForRequest(r)
+	path := "/"
+	if r.URL != nil {
+		path = r.URL.RequestURI()
+		if path == "" {
+			path = "/"
+		}
+	}
 	return map[string]any{
 		"Title":      title,
 		"Active":     active,
+		"Path":       path,
 		"Locale":     string(loc),
 		"Theme":      theme,
 		"T":          func(key string) string { return i18n.T(key, loc) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
 			DiscordConfigured: s.discordConfigured.Load(),
-			SourceCount:       len(s.sourceNames),
+			SourceCount:       len(s.liveSourceNames()),
 		},
 	}
 }
@@ -469,7 +538,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	data["StatsError"] = err
 	data["Notifications"] = notifications
 	data["NotificationsError"] = notificationsErr
-	data["Sources"] = s.sourceNames
+	data["Sources"] = s.liveSourceNames()
 	data["LastReport"] = lastReport(s.scanner)
 	data["StartedAt"] = s.startedAt
 	// "Prochain scan" countdown: derive from the last finished report
@@ -969,9 +1038,15 @@ func xmlEscape(s string) string {
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	alerts, err := s.db.ListAlerts(r.Context(), false)
 	data := s.baseWithRequest(r, "Alertes", "alerts")
+	loc := i18n.ParseLocale(fmt.Sprint(data["Locale"]))
+	data["Title"] = i18n.T("web.alerts.title", loc)
 	data["Alerts"] = alerts
-	data["Sources"] = s.sourceNames
+	data["Sources"] = s.liveSourceNames()
 	data["CapacityPresets"] = rules.CapacityPresets
+	data["BrandOptions"] = []string{"Seagate", "Western Digital", "Samsung", "Crucial", "Kingston", "Toshiba", "Corsair", "SanDisk", "Intel", "Micron", "SK Hynix", "TeamGroup", "Patriot", "ADATA", "Lexar"}
+	data["InterfaceOptions"] = []string{"sata", "nvme", "usb", "sas", "thunderbolt"}
+	data["RecordingOptions"] = []string{"cmr", "smr"}
+	data["CategoryOptions"] = []string{"internal_3_5", "internal_2_5", "external_3_5", "external_2_5", "m2_nvme", "m2_sata", "internal_ssd", "external_ssd"}
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
 	data["PrefillName"] = r.URL.Query().Get("name")
@@ -1007,15 +1082,19 @@ func (s *Server) addAlert(w http.ResponseWriter, r *http.Request) {
 
 func alertDraftFromForm(r *http.Request) (db.AlertDraft, error) {
 	d := db.AlertDraft{
-		CapacityPresets: cleanValues(r.Form["capacity"]),
-		Conditions:      cleanValues(r.Form["condition"]),
-		MediaTypes:      cleanValues(r.Form["media"]),
-		Sources:         cleanValues(r.Form["source"]),
-		Keywords:        splitList(r.Form.Get("keywords")),
-		ExcludeKeywords: splitList(r.Form.Get("exclude_keywords")),
-		MinDiscountPct:  5,
-		CooldownHours:   24,
-		DiscordEnabled:  r.Form.Get("discord_enabled") == "1",
+		CapacityPresets:   cleanValues(r.Form["capacity"]),
+		Conditions:        cleanValues(r.Form["condition"]),
+		MediaTypes:        cleanValues(r.Form["media"]),
+		Sources:           cleanValues(r.Form["source"]),
+		Brands:            cleanValues(r.Form["brand"]),
+		Interfaces:        cleanValues(r.Form["interface"]),
+		RecordingMethods:  cleanValues(r.Form["recording"]),
+		DriveCategories:   cleanValues(r.Form["category"]),
+		Keywords:          splitList(r.Form.Get("keywords")),
+		ExcludeKeywords:   splitList(r.Form.Get("exclude_keywords")),
+		MinDiscountPct:    5,
+		CooldownHours:     24,
+		DiscordEnabled:    r.Form.Get("discord_enabled") == "1",
 	}
 	for _, preset := range d.CapacityPresets {
 		if _, ok := rules.CapacityPresets[preset]; !ok {
@@ -1113,18 +1192,34 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	for k, v := range values {
 		effective[k] = v
 	}
-	rows := make([]configRow, 0, len(config.AppSettings))
+	sections := map[string][]configRow{}
 	for _, meta := range config.AppSettings {
 		if isDiscordSetting(meta.Key) {
 			continue
 		}
-		rows = append(rows, configRow{Meta: meta, Value: effective[meta.Key]})
+		sec := meta.Section
+		if sec == "" {
+			sec = "advanced"
+		}
+		sections[sec] = append(sections[sec], configRow{Meta: meta, Value: effective[meta.Key]})
+	}
+	type sectionView struct {
+		Key  string
+		Rows []configRow
+	}
+	ordered := make([]sectionView, 0, len(config.ConfigSectionOrder))
+	for _, key := range config.ConfigSectionOrder {
+		if rows := sections[key]; len(rows) > 0 {
+			ordered = append(ordered, sectionView{Key: key, Rows: rows})
+		}
 	}
 	data := s.baseWithRequest(r, "Configuration", "config")
-	data["Rows"] = rows
+	loc := i18n.ParseLocale(fmt.Sprint(data["Locale"]))
+	data["Title"] = i18n.T("web.config.title", loc)
+	data["Sections"] = ordered
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
-	data["RestartMsg"] = "Les changements de sources et du scanner prennent effet après redémarrage."
+	data["RestartMsg"] = i18n.T("web.config.restart_note", loc)
 	render(w, configTpl, data)
 }
 
@@ -1156,6 +1251,9 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.SetAppConfig(r.Context(), values); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if err := s.reloadSources(r.Context()); err != nil {
+		slog.Warn("config reload sources", "err", err)
 	}
 	http.Redirect(w, r, "/config?saved=1", http.StatusSeeOther)
 }
@@ -1262,7 +1360,7 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{
 		"started_at":  s.startedAt,
 		"discord":     s.discordConfigured.Load(),
-		"sources":     s.sourceNames,
+		"sources":     s.liveSourceNames(),
 		"breakers":    s.scanner.BreakerSnapshot(),
 		"last_report": nil,
 	}
@@ -1304,7 +1402,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"status":    "ok",
 		"db":        dbStatus,
 		"discord":   s.discordConfigured.Load(),
-		"sources":   len(s.sourceNames),
+		"sources":   len(s.liveSourceNames()),
 		"last_scan": lastScan,
 		"breakers":  s.scanner.BreakerSnapshot(),
 	}
@@ -1615,13 +1713,13 @@ var tmplFuncs = template.FuncMap{
 	},
 	"conditionLabel": func(v *string) string {
 		if v == nil {
-			return "État inconnu"
+			return i18n.T("web.condition.unknown", i18n.Default)
 		}
 		if *v == "new" {
-			return "Neuf"
+			return i18n.T("web.condition.new", i18n.Default)
 		}
 		if *v == "used" {
-			return "Occasion"
+			return i18n.T("web.condition.used", i18n.Default)
 		}
 		return *v
 	},
@@ -1681,6 +1779,9 @@ const layoutTpl = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DiskCount - {{.Title}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
 <script>
   // Inline theme bootstrap: read the cookie and apply the data-theme
   // attribute before the CSS paints so users on dark mode do not see
@@ -1696,32 +1797,25 @@ const layoutTpl = `<!doctype html>
   })();
 </script>
 <style>
-:root[data-theme=light]{color-scheme:light;--bg:#f2f7ff;--panel:#fff;--ink:#0c1b33;--muted:#60708c;--line:#d9e4f5;--line2:#edf3fb;--nav:#071a38;--nav2:#103e78;--brand:#1677ff;--brand2:#0758c7;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eaf3ff}
-:root[data-theme=dark]{color-scheme:dark;--bg:#030b17;--panel:#0c192b;--ink:#edf5ff;--muted:#91a4bf;--line:#1b304b;--line2:#13253c;--nav:#061326;--nav2:#0b3568;--brand:#3b9cff;--brand2:#1879dc;--good:#4ec78a;--warn:#e0a558;--bad:#e87972;--soft:#0b2748}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}a{color:inherit}
-.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px}.shell{min-width:0}.topbar{min-height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:10px 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:var(--panel);color:var(--muted);font-size:12px}.badge.good{color:var(--good)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line)}.card{padding:18px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.table-wrap{overflow:auto}.config-row{display:grid;grid-template-columns:1fr 2fr auto;gap:16px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line2)}.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px}.stat{padding:14px;border-radius:10px;background:var(--soft)}.chart-wrap{padding:18px}.price-chart{width:100%;height:220px}.range-links{display:flex;gap:8px}.range-links a{padding:5px 9px;border-radius:999px;text-decoration:none}.range-links a.active{background:var(--brand);color:#fff}
-.lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#3b9cff;border-color:#3b9cff;color:#061326;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#0b3568}
-@media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;z-index:8;height:auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:11px 14px}.brand{font-size:19px;white-space:nowrap}.nav{display:flex;gap:5px;overflow-x:auto;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav a{flex:0 0 auto;padding:8px 10px}.lang-switch,.theme-switch{display:none}.topbar{position:relative;height:auto;padding:12px 16px}.topbar .status>span{display:none}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
-@media (max-width:560px){.sidebar{grid-template-columns:1fr}.brand{display:none}.grid{grid-template-columns:1fr}.topbar{min-height:54px}.topbar h1{font-size:18px}.status{margin-left:auto}.truncate{max-width:240px}}
+:root[data-theme=light]{color-scheme:light;--bg:#e8eef5;--panel:#ffffff;--ink:#0a1628;--muted:#5a6b82;--line:#1a2a40;--line2:#c5d0de;--nav:#0a1628;--nav2:#1a3a5c;--brand:#1a6fff;--brand2:#0d4fcc;--good:#0d7a4a;--warn:#9a5a00;--bad:#b42018;--soft:#d6e4f5;--pixel:#1a6fff}
+:root[data-theme=dark]{color-scheme:dark;--bg:#060e1a;--panel:#0c1828;--ink:#e8f0fa;--muted:#8a9bb0;--line:#3a5a7a;--line2:#1a3048;--nav:#040a14;--nav2:#0e2848;--brand:#3b9cff;--brand2:#1879dc;--good:#3dbf7a;--warn:#d4a04a;--bad:#e07068;--soft:#0e2438;--pixel:#3b9cff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 "IBM Plex Mono",ui-monospace,Consolas,monospace}a{color:inherit}
+.app{min-height:100vh;display:grid;grid-template-columns:232px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f0f6fa;padding:16px 12px;display:flex;flex-direction:column;gap:18px;border-right:3px solid var(--pixel)}.brand{font-family:"Press Start 2P",monospace;font-size:11px;line-height:1.5;letter-spacing:0;color:#fff}.brand:before{content:"";display:inline-block;width:10px;height:10px;margin-right:8px;background:var(--pixel);box-shadow:2px 2px 0 #000;vertical-align:middle}.nav{display:grid;gap:4px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#b8cdd8;padding:9px 10px;border:2px solid transparent;transition:background-color .1s step-end,color .1s step-end}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff;border-color:var(--pixel)}.dot{width:8px;height:8px;background:#4a6680;flex:0 0 auto}.active .dot{background:var(--pixel);box-shadow:2px 0 0 #000}.shell{min-width:0}.topbar{min-height:60px;border-bottom:3px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:8px 22px;position:sticky;top:0;z-index:2;background:var(--panel)}.topbar h1{font-family:"Press Start 2P",monospace;font-size:12px;margin:0;line-height:1.4}.status{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.badge{display:inline-flex;align-items:center;gap:6px;border:2px solid var(--line);border-radius:0;padding:4px 8px;background:var(--panel);color:var(--muted);font-size:11px}.badge.good{color:var(--good);border-color:var(--good)}.badge.warn{color:var(--warn);border-color:var(--warn)}.badge.bad{color:var(--bad);border-color:var(--bad)}main{max-width:1440px;margin:0 auto;padding:22px 26px 40px}.section{margin-top:20px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.card,.panel{background:var(--panel);border:2px solid var(--line);border-radius:0}.card{padding:16px}.label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}.value{font-size:26px;font-weight:700;margin-top:4px;font-family:"Press Start 2P",monospace;font-size:16px;line-height:1.3}.hint{color:var(--muted);font-size:12px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:2px solid var(--line2);padding:14px 16px}.panel-head h2{font-size:14px;margin:0;font-family:"Press Start 2P",monospace;font-size:11px;line-height:1.4}.panel-body{padding:16px}.table-wrap{overflow:auto}.config-row{display:grid;grid-template-columns:1fr 2fr auto;gap:14px;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line2)}.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:16px}.stat{padding:12px;border:2px solid var(--line2);background:var(--soft)}.chart-wrap{padding:16px}.price-chart{width:100%;height:220px}.range-links{display:flex;gap:6px}.range-links a{padding:5px 9px;border:2px solid var(--line);text-decoration:none}.range-links a.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+.topbar .lang-switch,.topbar .theme-switch{margin:0;width:auto;display:inline-flex;gap:4px;align-items:center;color:var(--muted);font-size:11px}
+.topbar .lang-switch a,.topbar .lang-switch button,.topbar .theme-switch a,.topbar .theme-switch button{background:var(--panel);border:2px solid var(--line);color:var(--ink);border-radius:0;padding:4px 8px;font-size:11px;cursor:pointer;text-decoration:none;font-family:inherit}
+.topbar .lang-switch a.active,.topbar .lang-switch button.active,.topbar .theme-switch a.active,.topbar .theme-switch button.active{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+.login-shell .lang-switch{display:flex;gap:6px;justify-content:center;margin-top:14px}
+.login-shell .lang-switch button{background:var(--panel);border:2px solid var(--line);color:var(--ink);border-radius:0;padding:4px 10px;cursor:pointer}
+.login-shell .lang-switch button.active{background:var(--brand);border-color:var(--brand);color:#fff}
+@media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;z-index:8;height:auto;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:10px 12px;border-right:0;border-bottom:3px solid var(--pixel)}.brand{font-size:10px;white-space:nowrap}.nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav a{flex:0 0 auto;padding:7px 9px}.topbar{position:relative;height:auto;padding:10px 14px;flex-wrap:wrap;gap:8px}.topbar .status>span.badge:not(.ctrl){display:none}main{padding:14px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
+@media (max-width:560px){.sidebar{grid-template-columns:1fr}.brand{display:none}.grid{grid-template-columns:1fr}.topbar{min-height:48px}.topbar h1{font-size:10px}.status{margin-left:auto}.truncate{max-width:240px}}
 .sparkline{width:80px;height:24px;display:block}
 .muted{color:var(--muted)}
 :root[data-theme=dark] .topbar{background:var(--panel);color:var(--ink)}
-:root[data-theme=dark] .badge{background:var(--panel);color:var(--muted)}
-:root[data-theme=dark] .badge.good{background:rgba(78,199,138,.12);color:var(--good);border-color:rgba(78,199,138,.4)}
-:root[data-theme=dark] .badge.warn{background:rgba(224,165,88,.12);color:var(--warn);border-color:rgba(224,165,88,.4)}
-:root[data-theme=dark] .badge.bad{background:rgba(232,121,114,.12);color:var(--bad);border-color:rgba(232,121,114,.4)}
 :root[data-theme=dark] .login-card input[type=password]{background:var(--panel);color:var(--ink)}
 :root[data-theme=dark] .login-card .error{background:rgba(232,121,114,.12);border-color:rgba(232,121,114,.5)}
-.theme-switch{display:inline-flex;gap:4px;margin-top:6px;width:100%}
-.theme-switch a,.theme-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 6px;font-size:11px;cursor:pointer;flex:1;text-decoration:none;text-align:center}
-:root[data-theme=light] .theme-switch a,.theme-switch button{color:var(--muted);border-color:var(--line)}
-.theme-switch a.active,.theme-switch button.active{background:#3b9cff;border-color:#3b9cff;color:#061326;font-weight:600}
-:root[data-theme=light] .theme-switch a.active,.theme-switch button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
-.sidebar{background:linear-gradient(180deg,#071a38,#041024);box-shadow:12px 0 40px rgba(0,35,85,.16)}
-.brand{font-size:24px}.brand:before{content:"◉";color:var(--brand);margin-right:10px}.dot{background:#496787}.active .dot{background:#63b3ff;box-shadow:0 0 12px #3b9cff}
-.topbar{backdrop-filter:blur(16px);background:color-mix(in srgb,var(--panel) 88%,transparent)}main{max-width:1440px}.card,.panel{border-radius:14px;box-shadow:0 12px 35px rgba(0,29,72,.08)}.panel-head{padding:18px 20px}.panel-body{padding:20px}
-table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--line2);vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}tbody tr:hover{background:var(--soft)}
-input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}input:focus,select:focus{outline:2px solid var(--brand);outline-offset:1px}.filters,.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:end}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.inline{display:inline;margin:0}button,.button{display:inline-flex;align-items:center;justify-content:center;min-height:38px;border:0;border-radius:9px;padding:9px 14px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none;cursor:pointer}button:hover,.button:hover{background:var(--brand2)}button.secondary{background:var(--soft);color:var(--brand);border:1px solid var(--line)}button.danger{background:var(--bad)}.notice,.warnbox{border-radius:10px;padding:12px 14px;margin-bottom:16px}.notice{background:rgba(59,156,255,.12);border:1px solid rgba(59,156,255,.35);color:var(--brand)}.warnbox{background:rgba(224,165,88,.1);border:1px solid rgba(224,165,88,.35)}.source-list,.check-grid{display:flex;gap:9px;flex-wrap:wrap}.check-chip{display:flex;gap:7px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:8px 11px;background:var(--soft)}.check-chip input{width:auto;min-height:auto}.alert-form{display:grid;gap:18px}.alert-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.offer-link{color:var(--brand);font-weight:700;text-decoration:none;white-space:nowrap}.empty{padding:24px;text-align:center;color:var(--muted)}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line2);vertical-align:middle}th{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em}tbody tr:hover{background:var(--soft)}
+input,select{width:100%;min-height:40px;padding:8px 10px;border:2px solid var(--line);border-radius:0;background:var(--panel);color:var(--ink);font-family:inherit}input:focus,select:focus{outline:2px solid var(--brand);outline-offset:0}.filters,.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.inline{display:inline;margin:0}button,.button{display:inline-flex;align-items:center;justify-content:center;min-height:36px;border:2px solid var(--brand2);border-radius:0;padding:8px 12px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none;cursor:pointer;font-family:inherit;box-shadow:3px 3px 0 #000}button:hover,.button:hover{background:var(--brand2)}button.secondary{background:var(--soft);color:var(--brand);border-color:var(--line);box-shadow:2px 2px 0 var(--line)}button.danger{background:var(--bad);border-color:#7a100c}.notice,.warnbox{border-radius:0;padding:11px 13px;margin-bottom:14px;border:2px solid}.notice{background:var(--soft);border-color:var(--brand);color:var(--brand)}.warnbox{background:rgba(212,160,74,.12);border-color:var(--warn)}.source-list,.check-grid{display:flex;gap:8px;flex-wrap:wrap}.check-chip{display:flex;gap:7px;align-items:center;border:2px solid var(--line);border-radius:0;padding:7px 10px;background:var(--soft)}.check-chip input{width:auto;min-height:auto}.alert-form{display:grid;gap:16px}.alert-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.offer-link{color:var(--brand);font-weight:700;text-decoration:none;white-space:nowrap}.empty{padding:22px;text-align:center;color:var(--muted)}.config-section{margin-top:0}.config-section+.config-section{margin-top:18px}.config-section summary{cursor:pointer;font-weight:700;padding:10px 0;color:var(--brand)}
 @media (max-width:960px){.alert-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.alert-grid{grid-template-columns:1fr}}
 </style>
@@ -1740,16 +1834,20 @@ input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--
 <a href="/discord" class="{{if eq .Active "discord"}}active{{end}}" {{if eq .Active "discord"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.discord"}}</a>
 <a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.config"}}</a>
 </nav>
-<div class="lang-switch">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
-<div class="theme-switch"><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "light"}}class="active"{{end}}>☀ Light</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "dark"}}class="active"{{end}}>🌙 Dark</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "auto"}}class="active"{{end}}>🖥 Auto</button></form></div>
 </aside>
 <div class="shell">
 <header class="topbar">
 <h1>{{.Title}}</h1>
 <div class="status">
-<span class="badge {{stateClass .Status.DiscordConfigured}}">Discord {{if .Status.DiscordConfigured}}configuré{{else}}non configuré{{end}}</span>
-<span class="badge">{{.Status.SourceCount}} sources</span>
-<form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">{{call .T "web.nav.logout"}}</button></form>
+<div class="lang-switch" role="group" aria-label="{{call .T "web.lang.label"}}">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Path}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
+<div class="theme-switch" role="group" aria-label="theme">
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "light"}}class="active"{{end}}>{{call .T "web.theme.light"}}</button></form>
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "dark"}}class="active"{{end}}>{{call .T "web.theme.dark"}}</button></form>
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "auto"}}class="active"{{end}}>{{call .T "web.theme.auto"}}</button></form>
+</div>
+<span class="badge {{stateClass .Status.DiscordConfigured}}">Discord {{if .Status.DiscordConfigured}}{{call .T "web.topbar.discord_ok"}}{{else}}{{call .T "web.topbar.discord_off"}}{{end}}</span>
+<span class="badge">{{.Status.SourceCount}} {{call .T "web.topbar.sources"}}</span>
+<form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer">{{call .T "web.nav.logout"}}</button></form>
 </div>
 </header>
 <main>{{template "body" .}}</main>
@@ -1760,7 +1858,7 @@ input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--
 const loginTpl = `{{define "body"}}
 <style>
 .login-shell{min-height:calc(100vh - 0px);display:grid;place-items:center;padding:40px 20px}
-.login-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;width:100%;max-width:380px;box-shadow:0 12px 32px rgba(16,37,50,.12)}
+.login-card{background:var(--panel);border:2px solid var(--line);border-radius:0;padding:28px;width:100%;max-width:380px;box-shadow:4px 4px 0 #000}
 .login-card h1{margin:0 0 6px;font-size:22px}
 .login-card p.hint{margin:0 0 18px}
 .login-card label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
@@ -1789,32 +1887,32 @@ const loginTpl = `{{define "body"}}
 {{end}}`
 
 const statsTpl = `{{define "body"}}
-{{if .StatsError}}<div class="warnbox">Erreur DB: {{.StatsError}}</div>{{end}}
+{{if .StatsError}}<div class="warnbox">{{call .T "web.common.error_prefix"}} DB: {{.StatsError}}</div>{{end}}
 <div class="grid">
-<div class="card"><div class="label">Alertes actives</div><div class="value">{{if .Stats}}{{.Stats.ActiveAlerts}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Produits</div><div class="value">{{if .Stats}}{{.Stats.Products}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Observations</div><div class="value">{{if .Stats}}{{.Stats.Observations}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Notifications</div><div class="value">{{if .Stats}}{{.Stats.Notifications}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.active_alerts"}}</div><div class="value">{{if .Stats}}{{.Stats.ActiveAlerts}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.products"}}</div><div class="value">{{if .Stats}}{{.Stats.Products}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.observations"}}</div><div class="value">{{if .Stats}}{{.Stats.Observations}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.notifications"}}</div><div class="value">{{if .Stats}}{{.Stats.Notifications}}{{else}}0{{end}}</div></div>
 </div>
 <div class="section grid">
-<div class="card"><div class="label">Alertes inactives</div><div class="value">{{if .Stats}}{{.Stats.InactiveAlerts}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Discord</div><div class="value" style="font-size:20px">{{if .Status.DiscordConfigured}}Configuré{{else}}Optionnel{{end}}</div></div>
-<div class="card"><div class="label">Sources</div><div class="value">{{.Status.SourceCount}}</div></div>
-<div class="card"><div class="label">Rejets donnees</div><div class="value">{{if .Stats}}{{.Stats.RejectedDeals}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.inactive_alerts"}}</div><div class="value">{{if .Stats}}{{.Stats.InactiveAlerts}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.discord"}}</div><div class="value" style="font-size:14px">{{if .Status.DiscordConfigured}}{{call .T "web.common.configured"}}{{else}}{{call .T "web.common.optional"}}{{end}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.sources"}}</div><div class="value">{{.Status.SourceCount}}</div></div>
+<div class="card"><div class="label">{{call .T "web.dashboard.rejected"}}</div><div class="value">{{if .Stats}}{{.Stats.RejectedDeals}}{{else}}0{{end}}</div></div>
 </div>
-<div class="section" style="display:flex;gap:9px;flex-wrap:wrap"><a class="button" href="/products">Voir les produits</a><a class="button" href="/sites">État des sites</a><a class="button" href="/drops">Baisses de prix</a><a class="button" href="/alerts">Créer une alerte</a><a class="offer-link" href="/market">Indice du marché</a><a class="offer-link" href="/europe">Comparaison européenne</a><a class="offer-link" href="/metrics/dashboard">Métriques techniques</a></div>
-<section class="section panel"><div class="panel-head"><h2>Sources actives</h2></div><div class="panel-body"><div class="source-list">{{range .Sources}}<span class="badge">{{.}}</span>{{else}}<span class="muted">Aucune source active</span>{{end}}</div></div></section>
-<section class="section panel"><div class="panel-head"><h2>Derniers evenements</h2></div><div class="table-wrap"><table><tbody>
-<tr><th>Demarrage Web</th><td>{{tsv .StartedAt}}</td></tr>
-<tr><th>Derniere observation</th><td>{{if .Stats}}{{ts .Stats.LastObservationAt}}{{else}}-{{end}}</td></tr>
-<tr><th>Derniere notification</th><td>{{if .Stats}}{{ts .Stats.LastNotificationAt}}{{else}}-{{end}}</td></tr>
-{{if .LastReport}}<tr><th>Dernier scan</th><td>{{tsv .LastReport.FinishedAt}} - fetched={{.LastReport.Fetched}}, accepted={{.LastReport.Accepted}}, rejected={{.LastReport.Rejected}}, matched={{.LastReport.Matched}}, notified={{.LastReport.Notified}}, errors={{len .LastReport.Errors}}</td></tr>{{else}}<tr><th>Dernier scan</th><td>-</td></tr>{{end}}
-{{if .NextCheck}}<tr><th>Prochain scan</th><td>{{tsv .NextCheck}} - dans {{durationHuman .NextCheckIn}}</td></tr>{{end}}
+<div class="section" style="display:flex;gap:9px;flex-wrap:wrap"><a class="button" href="/products">{{call .T "web.dashboard.view_products"}}</a><a class="button" href="/sites">{{call .T "web.dashboard.sites_state"}}</a><a class="button" href="/drops">{{call .T "web.dashboard.price_drops"}}</a><a class="button" href="/alerts">{{call .T "web.dashboard.create_alert"}}</a><a class="offer-link" href="/market">{{call .T "web.dashboard.market_index"}}</a><a class="offer-link" href="/europe">{{call .T "web.dashboard.europe"}}</a><a class="offer-link" href="/metrics/dashboard">{{call .T "web.dashboard.tech_metrics"}}</a></div>
+<section class="section panel"><div class="panel-head"><h2>{{call .T "web.dashboard.active_sources"}}</h2></div><div class="panel-body"><div class="source-list">{{range .Sources}}<span class="badge">{{.}}</span>{{else}}<span class="muted">{{call $.T "web.common.no_source"}}</span>{{end}}</div></div></section>
+<section class="section panel"><div class="panel-head"><h2>{{call .T "web.dashboard.recent_events"}}</h2></div><div class="table-wrap"><table><tbody>
+<tr><th>{{call .T "web.dashboard.web_started"}}</th><td>{{tsv .StartedAt}}</td></tr>
+<tr><th>{{call .T "web.dashboard.last_observation"}}</th><td>{{if .Stats}}{{ts .Stats.LastObservationAt}}{{else}}-{{end}}</td></tr>
+<tr><th>{{call .T "web.dashboard.last_notification"}}</th><td>{{if .Stats}}{{ts .Stats.LastNotificationAt}}{{else}}-{{end}}</td></tr>
+{{if .LastReport}}<tr><th>{{call .T "web.dashboard.last_scan"}}</th><td>{{tsv .LastReport.FinishedAt}} - fetched={{.LastReport.Fetched}}, accepted={{.LastReport.Accepted}}, rejected={{.LastReport.Rejected}}, matched={{.LastReport.Matched}}, notified={{.LastReport.Notified}}, errors={{len .LastReport.Errors}}</td></tr>{{else}}<tr><th>{{call .T "web.dashboard.last_scan"}}</th><td>-</td></tr>{{end}}
+{{if .NextCheck}}<tr><th>{{call .T "web.dashboard.next_scan"}}</th><td>{{tsv .NextCheck}} - {{durationHuman .NextCheckIn}}</td></tr>{{end}}
 </tbody></table></div></section>
-{{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>⚠ Sources en alerte</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Scans vides consecutifs</th><th>Message</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
-{{if .NotificationsError}}<div class="warnbox">Erreur historique des alertes: {{.NotificationsError}}</div>{{end}}
-<section class="section panel"><div class="panel-head"><h2>Dernières alertes déclenchées</h2></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Alerte</th><th>Produit</th><th>Prix</th><th>€/To</th><th>Raison</th><th>Offre</th></tr></thead><tbody>
-{{range .Notifications}}<tr><td>{{tsv .SentAt}}</td><td>{{.AlertName}}</td><td>{{.Title}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Reason}}</td><td><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir ↗</a></td></tr>{{else}}<tr><td colspan="7" class="empty">Aucune alerte déclenchée.</td></tr>{{end}}
+{{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>{{call .T "web.dashboard.warnings_title"}}</h2></div><div class="table-wrap"><table><thead><tr><th>{{call .T "web.dashboard.col_source"}}</th><th>{{call .T "web.dashboard.col_streak"}}</th><th>{{call .T "web.dashboard.col_message"}}</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
+{{if .NotificationsError}}<div class="warnbox">{{call .T "web.common.error_prefix"}} {{.NotificationsError}}</div>{{end}}
+<section class="section panel"><div class="panel-head"><h2>{{call .T "web.dashboard.last_triggered_alerts"}}</h2></div><div class="table-wrap"><table><thead><tr><th>{{call .T "web.dashboard.col_date"}}</th><th>{{call .T "web.dashboard.col_alert"}}</th><th>{{call .T "web.dashboard.col_product"}}</th><th>{{call .T "web.dashboard.col_price"}}</th><th>{{call .T "web.dashboard.col_eur_tb"}}</th><th>{{call .T "web.dashboard.col_reason"}}</th><th>{{call .T "web.dashboard.col_offer"}}</th></tr></thead><tbody>
+{{range .Notifications}}<tr><td>{{tsv .SentAt}}</td><td>{{.AlertName}}</td><td>{{.Title}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Reason}}</td><td><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{call $.T "web.common.view_offer"}} ↗</a></td></tr>{{else}}<tr><td colspan="7" class="empty">{{call $.T "web.dashboard.no_triggered"}}</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
 
@@ -1864,7 +1962,7 @@ const europeTpl = `{{define "body"}}
 const productsTpl = `{{define "body"}}
 <style>
 .drive-photo{width:100%;height:126px;object-fit:contain;background:var(--soft);border-radius:11px;border:1px solid var(--line)}
-.catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;margin-bottom:18px;background:linear-gradient(135deg,var(--nav),var(--nav2));color:#fff;border:1px solid #174f92;border-radius:16px}.catalog-hero h2{margin:0 0 4px;font-size:24px}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:28px;font-weight:850;color:#78bdff;white-space:nowrap}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(0,29,72,.08);transition:transform .15s ease,border-color .15s ease}.product-card:hover{transform:translateY(-2px);border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:11px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.drive-visual span{font-size:28px;font-weight:900;letter-spacing:.08em}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:16px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:24px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:999px;padding:4px 9px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff}.storage-tag.unavailable{background:rgba(232,121,114,.12);color:var(--bad)}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
+.catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 20px;margin-bottom:16px;background:var(--nav);color:#fff;border:3px solid var(--pixel)}.catalog-hero h2{margin:0 0 4px;font-size:14px;font-family:"Press Start 2P",monospace;line-height:1.4}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:14px;font-weight:700;color:#78bdff;white-space:nowrap;font-family:"Press Start 2P",monospace}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:2px solid var(--line);border-radius:0;transition:border-color .1s step-end}.product-card:hover{border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:0;background:var(--soft);color:var(--brand);border:2px solid var(--line)}.drive-visual span{font-size:22px;font-weight:900;letter-spacing:.08em;font-family:"Press Start 2P",monospace;font-size:12px}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:15px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:22px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:0;padding:4px 8px;border:2px solid var(--line);background:var(--soft);color:var(--brand);font-size:11px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff;border-color:var(--brand2)}.storage-tag.unavailable{background:rgba(232,121,114,.12);color:var(--bad);border-color:var(--bad)}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
 :root[data-theme=dark] .drive-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
 @media(max-width:1180px){.product-grid{grid-template-columns:1fr}}
 @media(max-width:760px){main{padding-bottom:94px}.catalog-hero{align-items:flex-start;padding:17px}.catalog-hero h2{font-size:20px}.catalog-count{font-size:20px}.catalog-layout{display:block}.filter-drawer{display:none;position:fixed;inset:0;z-index:20;overflow:auto;border-radius:0;padding:22px;background:var(--bg)}.filter-drawer:target{display:block}.filter-close{display:block}.filter-form{padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:14px}.catalog-toolbar .button{display:none}.product-card{grid-template-columns:96px minmax(0,1fr);padding:12px}.drive-visual{min-height:112px}.product-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.product-price{font-size:22px}.product-meta{align-items:flex-end}.mobile-filter-button{display:flex;position:fixed;left:16px;right:16px;bottom:14px;z-index:15;min-height:58px;align-items:center;justify-content:center;border-radius:13px;background:var(--brand);color:#fff;text-decoration:none;font-size:18px;font-weight:850;box-shadow:0 12px 35px rgba(0,65,160,.35)}}
@@ -1881,7 +1979,7 @@ const productsTpl = `{{define "body"}}
 <div><label for="filter_condition">État</label><select id="filter_condition" name="condition"><option value="">Tous</option><option value="new" {{if eq .SelectedCondition "new"}}selected{{end}}>Neuf</option><option value="used" {{if eq .SelectedCondition "used"}}selected{{end}}>Occasion</option></select></div>
 <div><label for="filter_availability">Disponibilité</label><select id="filter_availability" name="availability"><option value="">Toutes</option><option value="available" {{if eq .SelectedAvailability "available"}}selected{{end}}>Disponible</option><option value="unavailable" {{if eq .SelectedAvailability "unavailable"}}selected{{end}}>Indisponible</option></select></div>
 <div><label for="filter_brand">Marque</label><select id="filter_brand" name="brand"><option value="">Toutes</option>{{range .Brands}}<option value="{{.}}" {{if eq $.SelectedBrand .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
-<div><label for="filter_category">Usage</label><select id="filter_category" name="category"><option value="">Tous</option>{{range .Categories}}<option value="{{.}}" {{if eq $.SelectedCategory .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_category">{{call $.T "web.products.form_factor"}}</label><select id="filter_category" name="category"><option value="">{{call $.T "web.common.all"}}</option>{{range .Categories}}<option value="{{.}}" {{if eq $.SelectedCategory .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_interface">Interface</label><select id="filter_interface" name="interface"><option value="">Toutes</option>{{range .Interfaces}}<option value="{{.}}" {{if eq $.SelectedInterface .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_recording">Enregistrement</label><select id="filter_recording" name="recording"><option value="">Tous</option>{{range .Recordings}}<option value="{{.}}" {{if eq $.SelectedRecording .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label>Capacité</label><div class="filter-range"><input aria-label="Capacité minimale" name="min_tb" value="{{.MinTB}}" inputmode="decimal" placeholder="Min To"><input aria-label="Capacité maximale" name="max_tb" value="{{.MaxTB}}" inputmode="decimal" placeholder="Max To"></div></div>
@@ -1927,8 +2025,12 @@ const alertsTpl = `{{define "body"}}
 <div><div class="label">Support</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="media" value="rotational"> HDD</label><label class="check-chip"><input type="checkbox" name="media" value="solid_state"> SSD</label></div></div>
 <div><div class="label">État</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="condition" value="new"> Neuf</label><label class="check-chip"><input type="checkbox" name="condition" value="used"> Occasion</label></div></div>
 <div><div class="label">Capacité</div><div class="check-grid">{{range $key, $preset := .CapacityPresets}}<label class="check-chip"><input type="checkbox" name="capacity" value="{{$key}}"> {{$preset.Label}}</label>{{end}}</div></div>
-<div><div class="label">Sources</div><div class="check-grid">{{range .Sources}}<label class="check-chip"><input type="checkbox" name="source" value="{{.}}"> {{.}}</label>{{end}}</div></div>
-<div><button type="submit">Créer l'alerte</button></div></form>
+<div><div class="label">{{call .T "web.alerts.sources"}}</div><div class="check-grid">{{range .Sources}}<label class="check-chip"><input type="checkbox" name="source" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><div class="label">{{call .T "web.alerts.brands"}}</div><div class="check-grid">{{range .BrandOptions}}<label class="check-chip"><input type="checkbox" name="brand" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><div class="label">{{call .T "web.alerts.interfaces"}}</div><div class="check-grid">{{range .InterfaceOptions}}<label class="check-chip"><input type="checkbox" name="interface" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><div class="label">{{call .T "web.alerts.recording"}}</div><div class="check-grid">{{range .RecordingOptions}}<label class="check-chip"><input type="checkbox" name="recording" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><div class="label">{{call .T "web.alerts.categories"}}</div><div class="check-grid">{{range .CategoryOptions}}<label class="check-chip"><input type="checkbox" name="category" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><button type="submit">{{call .T "web.alerts.submit"}}</button></div></form>
 </div></section>
 <section class="panel"><div class="panel-head"><h2>Alertes existantes</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>État</th><th>Discord</th><th>Capacités</th><th>Media</th><th>Prix max</th><th>Actions</th></tr></thead><tbody>
 {{range .Alerts}}<tr><td>{{.Name}}</td><td>{{if .Enabled}}<span class="badge good">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}</td><td>{{if .DiscordEnabled}}<span class="badge good">coché</span>{{else}}<span class="badge">non</span>{{end}}</td><td>{{csv .CapacityPresets}}</td><td>{{csv .MediaTypes}}</td><td>{{alertPrice .}}</td><td><div class="actions">
@@ -1939,11 +2041,19 @@ const alertsTpl = `{{define "body"}}
 {{end}}`
 
 const configTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">Configuration sauvegardee.</div>{{end}}
-{{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
+{{if .Saved}}<div class="notice">{{call .T "web.common.config_saved"}}</div>{{end}}
+{{if .Error}}<div class="warnbox">{{call .T "web.common.error_prefix"}} {{.Error}}</div>{{end}}
 <div class="warnbox">{{.RestartMsg}}</div>
-<form method="post" action="/config/save" class="panel"><div class="panel-head"><h2>Parametres applicatifs</h2><button type="submit">Sauvegarder</button></div>
-{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="{{.InputType}}" placeholder="{{.DisplayValue}}"><div class="hint">Coche remplacer pour enregistrer une nouvelle valeur.</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> Remplacer</label>{{else}}<span class="badge warn">Redemarrage</span>{{end}}</div></div>{{end}}
+<div class="notice">{{call .T "web.config.merchants_hint"}} <a class="offer-link" href="/sites">{{call .T "web.nav.sites"}}</a></div>
+<form method="post" action="/config/save">
+{{range .Sections}}
+<section class="panel config-section"><div class="panel-head"><h2>{{call $.T (printf "web.config.section_%s" .Key)}}</h2>{{if eq .Key "essential"}}<button type="submit">{{call $.T "web.common.save"}}</button>{{end}}</div>
+{{if eq .Key "merchants"}}<details><summary>{{call $.T "web.config.show_advanced_urls"}}</summary>{{end}}
+{{range .Rows}}<div class="config-row"><div><label for="{{.Meta.Key}}">{{.Meta.Key}}</label><div class="hint">{{.Meta.Label}}</div></div><div>{{if .Meta.Secret}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="password" placeholder="********"><div class="hint">{{call $.T "web.config.replace"}}</div>{{else}}<input id="{{.Meta.Key}}" name="{{.Meta.Key}}" type="text" value="{{.Value}}">{{end}}</div><div>{{if .Meta.Secret}}<label><input type="checkbox" name="replace_{{.Meta.Key}}" value="1"> {{call $.T "web.config.replace"}}</label>{{else if .Meta.RestartRequired}}<span class="badge warn">{{call $.T "web.config.restart_badge"}}</span>{{end}}</div></div>{{end}}
+{{if eq .Key "merchants"}}</details>{{end}}
+</section>
+{{end}}
+<div style="margin-top:14px"><button type="submit">{{call .T "web.common.save"}}</button></div>
 </form>
 {{end}}`
 

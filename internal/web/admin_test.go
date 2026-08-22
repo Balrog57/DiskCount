@@ -17,13 +17,20 @@ import (
 )
 
 func TestConfigTemplateMasksSecret(t *testing.T) {
+	type sectionView struct {
+		Key  string
+		Rows []configRow
+	}
 	rec := httptest.NewRecorder()
 	render(rec, configTpl, map[string]any{
 		"Title":  "Configuration",
 		"Active": "config",
-		"Rows": []configRow{{
-			Meta:  config.SettingMeta{Key: "DISCORD_BOT_TOKEN", Label: "Token", Secret: true},
-			Value: "masked-sensitive-fixture",
+		"Sections": []sectionView{{
+			Key: "essential",
+			Rows: []configRow{{
+				Meta:  config.SettingMeta{Key: "WEB_ADMIN_PASSWORD", Label: "Password", Secret: true, Section: "essential"},
+				Value: "masked-sensitive-fixture",
+			}},
 		}},
 		"RestartMsg": "restart",
 	})
@@ -220,7 +227,7 @@ func TestDashboardRendersRecentNotifications(t *testing.T) {
 		}},
 	})
 	body := rec.Body.String()
-	for _, required := range []string{"Dernières alertes déclenchées", "NAS", "IronWolf", "https://example.test/offer"} {
+	for _, required := range []string{"Dernieres alertes declenchees", "NAS", "IronWolf", "https://example.test/offer"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing notification value %q: %s", required, body)
 		}

@@ -13,7 +13,7 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 
 ## Expérience web
 
-- Direction visuelle : interface sombre premium inspirée de DropReference, avec navigation structurée, cartes arrondies et forts contrastes, transposée en bleu. Aucun contenu, logo ou actif de DropReference n'est repris.
+- Direction visuelle : interface flat design avec accents pixel art (bordures dures, police pixel pour le brand et les titres, corps monospace lisible). Thèmes clair et sombre. Aucun contenu, logo ou actif de DropReference n'est repris.
 - Navigation principale : Tableau de bord, Produits, Sites, Logs, Baisses de prix, Créer une alerte, Discord, Configuration. Marché, Europe, Qualité et Métriques restent accessibles depuis le tableau de bord sans surcharger le menu.
 - Tableau de bord : état du service, sources, dernier et prochain scan, produits, observations et notifications.
 - Produits : filtres, prix actuel, prix par To, tendance, source, date du dernier refresh, fiche d'historique et lien direct vers le marchand.
