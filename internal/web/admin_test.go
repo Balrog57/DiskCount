@@ -104,7 +104,7 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("unexpected status %d: %s", rec.Code, body)
 	}
-	for _, required := range []string{"name=\"q\"", "name=\"source\"", "name=\"media\"", "name=\"brand\"", "name=\"category\"", "name=\"interface\"", "name=\"recording\"", "name=\"max_eur_tb\""} {
+	for _, required := range []string{"name=\"q\"", "name=\"source\"", "name=\"media\"", "name=\"brand\"", "name=\"category\"", "name=\"interface\"", "name=\"recording\"", "name=\"availability\"", "name=\"max_eur_tb\""} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing product filter %q", required)
 		}
@@ -136,6 +136,39 @@ func TestPriceDropsTemplateRendersDropReferenceView(t *testing.T) {
 	for _, required := range []string{"Baisses de prix", "IronWolf 16 To", "16.67 %", "Filtrer", "/drops"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing drop view value %q: %s", required, body)
+		}
+	}
+}
+
+func TestMarketTemplateRendersDailyBands(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, marketTpl, map[string]any{
+		"Title": "Indice du marche", "Active": "market", "Days": 30,
+		"Market": []db.MarketIndexPoint{{Day: time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), Band: "8–12 To", MedianEUR: 14.25, Samples: 3}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, required := range []string{"Indice quotidien du marché", "8–12 To", "14.25 €/To", "7 jours", "JSON"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing market view value %q: %s", required, body)
+		}
+	}
+}
+
+func TestEuropeTemplateRendersRegionalOffers(t *testing.T) {
+	rec := httptest.NewRecorder()
+	fr := countryInfo{"fr", "France", "🇫🇷"}
+	render(rec, europeTpl, map[string]any{
+		"Title": "Europe", "Active": "europe", "SelectedCountry": "fr",
+		"Regions": []regionSummary{{Country: fr, Offers: 2, BestPricePerTB: 14}},
+		"Offers":  []regionalOffer{{CurrentPrice: db.CurrentPrice{ProductID: "disk", Title: "IronWolf", URL: "https://example.fr", Source: "shop", CapacityTB: 16, PriceEUR: 224, PricePerTB: 14, ObservedAt: time.Now()}, Country: fr}},
+	})
+	body := rec.Body.String()
+	for _, required := range []string{"Comparaison européenne", "France", "IronWolf", "14.00 €/To", "frais de port"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing Europe value %q", required)
 		}
 	}
 }
@@ -361,7 +394,7 @@ func TestParseCronInterval(t *testing.T) {
 
 func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
 	srv := New(nil, nil, &config.Config{}, nil)
-	for _, path := range []string{"/alerts/add", "/alerts/toggle", "/alerts/delete", "/config/save", "/discord/save"} {
+	for _, path := range []string{"/alerts/add", "/alerts/toggle", "/alerts/delete", "/config/save", "/discord/save", "/discord/test"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		srv.routes().ServeHTTP(rec, req)

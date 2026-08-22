@@ -44,7 +44,7 @@ SELECT d.product_id, d.source, p.title, p.url, p.condition, p.media_type, p.driv
        p.brand, p.recording_method, p.interfaces, p.capacity_tb, d.price_eur, d.price_per_tb,
        d.observed_at, d.previous_price_per_tb, d.previous_observed_at, d.drop_pct
 FROM compared d JOIN products p ON p.id = d.product_id
-WHERE p.quality_score >= 50 AND d.observed_at >= NOW() - ($1 * INTERVAL '1 day')
+WHERE p.quality_score >= 50 AND p.availability='available' AND d.observed_at >= NOW() - ($1 * INTERVAL '1 day')
   AND d.price_per_tb < d.previous_price_per_tb AND d.drop_pct >= $2
 ORDER BY d.drop_pct DESC, d.observed_at DESC LIMIT $3`, days, minDropPct, limit)
 	if err != nil {

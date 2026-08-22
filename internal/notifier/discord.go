@@ -38,6 +38,19 @@ func (d *Discord) SendDeal(alert *db.Alert, deal domain.Deal, dec domain.Notific
 	if runes := []rune(content); len(runes) > 2000 {
 		content = string(runes[:1997]) + "..."
 	}
+	return d.sendContent(content)
+}
+
+// SendTest sends a fixed, non-mentioning message to verify the configured
+// Discord destination. It deliberately contains no user-provided content.
+func (d *Discord) SendTest() error {
+	return d.sendContent("DiskCount : message de test Discord.")
+}
+
+func (d *Discord) sendContent(content string) error {
+	if d == nil || d.token == "" || d.channelID == "" {
+		return fmt.Errorf("discord non configure")
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"content":          content,
 		"allowed_mentions": map[string]any{"parse": []string{}},

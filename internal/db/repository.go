@@ -115,6 +115,11 @@ DROP TABLE IF EXISTS authorized_users;
 DROP TABLE IF EXISTS subscribers;
 DELETE FROM app_config WHERE key LIKE 'TELEGRAM_%';
 `},
+	{n: 6, sql: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS availability VARCHAR(20) NOT NULL DEFAULT 'available';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS availability_miss_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS availability_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+`},
 }
 
 // Migrate applies every pending migration in order. Each migration runs in
@@ -200,6 +205,9 @@ type Product struct {
 	CapacityTB                                                                         float64
 	Interfaces                                                                         []string
 	QualityScore                                                                       int
+	Availability                                                                       domain.Availability
+	AvailabilityMissCount                                                              int
+	AvailabilityUpdatedAt                                                              time.Time
 	FirstSeenAt, LastSeenAt                                                            time.Time
 }
 type PriceObservation struct {
@@ -225,6 +233,7 @@ type CurrentPrice struct {
 	CapacityTB                                                                float64
 	PriceEUR, PricePerTB                                                      float64
 	ObservedAt                                                                time.Time
+	Availability                                                              domain.Availability
 }
 
 type ProductOffer struct {
@@ -232,6 +241,7 @@ type ProductOffer struct {
 	Condition                     *string
 	PriceEUR, PricePerTB          float64
 	ObservedAt                    time.Time
+	Availability                  domain.Availability
 }
 
 type ProductGroup struct {
@@ -359,7 +369,7 @@ func (db *DB) DeleteAlert(ctx context.Context, aID int64) error {
 // productUpsertSQL is the shared INSERT...ON CONFLICT statement used by
 // UpsertProduct, RecordObservation, and RecordNotification. Centralizing it
 // keeps the three call sites in sync as columns are added.
-const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,canonical_key=$16,merchant=$17,brand=$18,model=$19,raw_title=$20,recording_method=$21,last_seen_at=NOW()`
+const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,availability,availability_miss_count,availability_updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,'available',0,NOW()) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,canonical_key=$16,merchant=$17,brand=$18,model=$19,raw_title=$20,recording_method=$21,availability='available',availability_miss_count=0,availability_updated_at=NOW(),last_seen_at=NOW()`
 
 // productUpsertArgs builds the positional arguments for productUpsertSQL.
 // Extracted so the three call sites cannot drift out of sync.
@@ -602,11 +612,11 @@ WITH latest AS (
 	WHERE price_per_tb > 0 AND quality_score >= 70
 	ORDER BY product_id, observed_at DESC
 )
-SELECT l.product_id, l.source, p.title, p.url, p.condition, p.media_type, p.drive_category, p.canonical_key, p.brand, p.recording_method, p.interfaces, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
+SELECT l.product_id, l.source, p.title, p.url, p.condition, p.media_type, p.drive_category, p.canonical_key, p.brand, p.recording_method, p.interfaces, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at, p.availability
 FROM latest l
 JOIN products p ON p.id = l.product_id
 WHERE p.quality_score >= 50
-ORDER BY l.price_per_tb ASC, l.observed_at DESC
+ORDER BY (p.availability='available') DESC, l.price_per_tb ASC, l.observed_at DESC
 LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -615,7 +625,7 @@ LIMIT $1`, limit)
 	var out []CurrentPrice
 	for rows.Next() {
 		var p CurrentPrice
-		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.Condition, &p.MediaType, &p.DriveCategory, &p.CanonicalKey, &p.Brand, &p.RecordingMethod, jsonScan(&p.Interfaces), &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.Condition, &p.MediaType, &p.DriveCategory, &p.CanonicalKey, &p.Brand, &p.RecordingMethod, jsonScan(&p.Interfaces), &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt, &p.Availability); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -641,7 +651,7 @@ WITH latest AS (
  FROM latest l JOIN products p ON p.id=l.product_id
  GROUP BY p.canonical_key ORDER BY best_price LIMIT $1
 )
-SELECT p.canonical_key,p.brand,p.model,p.capacity_tb,l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at
+SELECT p.canonical_key,p.brand,p.model,p.capacity_tb,l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at,p.availability
 FROM latest l JOIN products p ON p.id=l.product_id
 JOIN group_keys g ON g.canonical_key=p.canonical_key
 ORDER BY p.canonical_key,l.price_per_tb ASC`, limit)
@@ -656,7 +666,7 @@ ORDER BY p.canonical_key,l.price_per_tb ASC`, limit)
 		var brand, model string
 		var capacity float64
 		var offer ProductOffer
-		if err := rows.Scan(&key, &brand, &model, &capacity, &offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt); err != nil {
+		if err := rows.Scan(&key, &brand, &model, &capacity, &offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt, &offer.Availability); err != nil {
 			return nil, err
 		}
 		i, ok := byKey[key]
@@ -681,9 +691,9 @@ WITH latest AS (
 	WHERE p.canonical_key=$1 AND o.price_per_tb > 0 AND o.quality_score >= 70
 	ORDER BY o.product_id,o.observed_at DESC
 )
-SELECT l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at
+SELECT l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at,p.availability
 FROM latest l JOIN products p ON p.id=l.product_id
-ORDER BY l.price_per_tb,l.observed_at DESC`, canonicalKey)
+ORDER BY (p.availability='available') DESC,l.price_per_tb,l.observed_at DESC`, canonicalKey)
 	if err != nil {
 		return nil, err
 	}
@@ -691,7 +701,7 @@ ORDER BY l.price_per_tb,l.observed_at DESC`, canonicalKey)
 	var offers []ProductOffer
 	for rows.Next() {
 		var offer ProductOffer
-		if err := rows.Scan(&offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt); err != nil {
+		if err := rows.Scan(&offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt, &offer.Availability); err != nil {
 			return nil, err
 		}
 		offers = append(offers, offer)
@@ -702,12 +712,21 @@ ORDER BY l.price_per_tb,l.observed_at DESC`, canonicalKey)
 // GetProduct fetches a single product by its ID for the detail page.
 func (db *DB) GetProduct(ctx context.Context, productID string) (*Product, error) {
 	p := &Product{}
-	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
-		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.CanonicalKey, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.FirstSeenAt, &p.LastSeenAt)
+	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,availability,availability_miss_count,availability_updated_at,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
+		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.CanonicalKey, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.Availability, &p.AvailabilityMissCount, &p.AvailabilityUpdatedAt, &p.FirstSeenAt, &p.LastSeenAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
 	return p, err
+}
+
+// MarkSourceMissing advances absence only after a successful source scan.
+func (db *DB) MarkSourceMissing(ctx context.Context, source string, seen []string, threshold int) error {
+	if threshold < 1 {
+		threshold = 3
+	}
+	_, err := db.Pool.Exec(ctx, `UPDATE products SET availability_miss_count=availability_miss_count+1, availability=CASE WHEN availability_miss_count+1 >= $3 THEN 'unavailable' ELSE availability END, availability_updated_at=NOW() WHERE source=$1 AND (COALESCE(cardinality($2::text[]),0)=0 OR NOT id=ANY($2))`, source, seen, threshold)
+	return err
 }
 
 // LastSeenMap returns the most recent observation timestamp for every

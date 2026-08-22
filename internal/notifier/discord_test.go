@@ -31,3 +31,22 @@ func TestDiscordSendsOnlyDealMessageWithoutMentions(t *testing.T) {
 		t.Fatalf("unexpected Discord request: auth=%q body=%s", gotAuth, gotBody)
 	}
 }
+
+func TestDiscordSendTestUsesFixedContentWithoutMentions(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	d := NewDiscord("secret", "42")
+	d.baseURL, d.client = srv.URL, srv.Client()
+	if err := d.SendTest(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotBody, "message de test Discord") || !strings.Contains(gotBody, `"parse":[]`) {
+		t.Fatalf("unexpected test payload: %s", gotBody)
+	}
+}

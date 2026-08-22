@@ -114,6 +114,7 @@ type Server struct {
 	sourceNames       []string
 	startedAt         time.Time
 	discordConfigured atomic.Bool
+	discordTestSender func(string, string) error
 }
 
 type configRow struct {
@@ -130,6 +131,9 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	sort.Strings(sources)
 	s := &Server{
 		db: dbase, scanner: scan, cfg: cfg, sourceNames: sources, startedAt: time.Now().UTC(),
+	}
+	s.discordTestSender = func(token, channelID string) error {
+		return notifier.NewDiscord(token, channelID).SendTest()
 	}
 	s.discordConfigured.Store(cfg != nil && cfg.DiscordBotToken != "" && cfg.DiscordChannelID != "")
 	return s
@@ -292,6 +296,9 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/quality", s.quality)
 	muxAdmin.HandleFunc("/products", s.products)
 	muxAdmin.HandleFunc("/drops", s.priceDrops)
+	muxAdmin.HandleFunc("/market", s.market)
+	muxAdmin.HandleFunc("/api/market", s.apiMarket)
+	muxAdmin.HandleFunc("/europe", s.europe)
 	muxAdmin.HandleFunc("/product", s.productDetail)
 	muxAdmin.HandleFunc("/alerts", s.alerts)
 	muxAdmin.HandleFunc("/alerts/add", s.addAlert)
@@ -299,6 +306,7 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/alerts/delete", s.deleteAlert)
 	muxAdmin.HandleFunc("/discord", s.discordSettings)
 	muxAdmin.HandleFunc("/discord/save", s.saveDiscordSettings)
+	muxAdmin.HandleFunc("/discord/test", s.testDiscord)
 	muxAdmin.HandleFunc("/config", s.config)
 	muxAdmin.HandleFunc("/config/save", s.saveConfig)
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
@@ -582,6 +590,7 @@ func (s *Server) products(w http.ResponseWriter, r *http.Request) {
 	data["SelectedSource"] = r.URL.Query().Get("source")
 	data["SelectedMedia"] = r.URL.Query().Get("media")
 	data["SelectedCondition"] = r.URL.Query().Get("condition")
+	data["SelectedAvailability"] = r.URL.Query().Get("availability")
 	data["SelectedBrand"] = r.URL.Query().Get("brand")
 	data["SelectedCategory"] = r.URL.Query().Get("category")
 	data["SelectedInterface"] = r.URL.Query().Get("interface")
@@ -605,6 +614,41 @@ func (s *Server) priceDrops(w http.ResponseWriter, r *http.Request) {
 	data := s.baseWithRequest(r, "Baisses de prix", "drops")
 	data["Drops"], data["Days"], data["MinDrop"], data["Error"] = drops, days, minDrop, err
 	render(w, priceDropsTpl, data)
+}
+
+func marketDays(r *http.Request) int {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days != 7 && days != 30 && days != 90 {
+		days = 30
+	}
+	return days
+}
+
+func (s *Server) market(w http.ResponseWriter, r *http.Request) {
+	days := marketDays(r)
+	points, err := s.db.MarketIndex(r.Context(), days)
+	data := s.baseWithRequest(r, "Indice du marche", "market")
+	data["Market"], data["Days"], data["Error"] = points, days, err
+	render(w, marketTpl, data)
+}
+
+func (s *Server) apiMarket(w http.ResponseWriter, r *http.Request) {
+	points, err := s.db.MarketIndex(r.Context(), marketDays(r))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(points)
+}
+
+func (s *Server) europe(w http.ResponseWriter, r *http.Request) {
+	selected := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("country")))
+	prices, err := s.db.LatestPrices(r.Context(), 5000)
+	offers, summaries := regionalize(prices, selected, 300)
+	data := s.baseWithRequest(r, "Comparaison européenne", "europe")
+	data["Offers"], data["Regions"], data["SelectedCountry"], data["Error"] = offers, summaries, selected, err
+	render(w, europeTpl, data)
 }
 
 func (s *Server) productDetail(w http.ResponseWriter, r *http.Request) {
@@ -1040,8 +1084,36 @@ func (s *Server) discordSettings(w http.ResponseWriter, r *http.Request) {
 	data["ChannelID"] = values["DISCORD_CHANNEL_ID"]
 	data["TokenConfigured"] = values["DISCORD_BOT_TOKEN"] != ""
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
+	data["Tested"] = r.URL.Query().Get("tested") == "1"
+	data["TestAvailable"] = data["TokenConfigured"] == true && data["ChannelID"] != ""
 	data["Error"] = err
 	render(w, discordTpl, data)
+}
+
+func (s *Server) testDiscord(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	values, err := s.db.ListAppConfig(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	token, channelID := strings.TrimSpace(values["DISCORD_BOT_TOKEN"]), strings.TrimSpace(values["DISCORD_CHANNEL_ID"])
+	if token == "" || channelID == "" {
+		http.Error(w, "Discord non configuré", http.StatusBadRequest)
+		return
+	}
+	if s.discordTestSender == nil {
+		http.Error(w, "test Discord indisponible", http.StatusInternalServerError)
+		return
+	}
+	if err := s.discordTestSender(token, channelID); err != nil {
+		http.Error(w, "échec du test Discord: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	http.Redirect(w, r, "/discord?tested=1", http.StatusSeeOther)
 }
 
 func (s *Server) saveDiscordSettings(w http.ResponseWriter, r *http.Request) {
@@ -1287,6 +1359,7 @@ func filterPrices(prices []db.CurrentPrice, r *http.Request) []db.CurrentPrice {
 	source := strings.TrimSpace(r.URL.Query().Get("source"))
 	media := strings.TrimSpace(r.URL.Query().Get("media"))
 	condition := strings.TrimSpace(r.URL.Query().Get("condition"))
+	availability := strings.TrimSpace(r.URL.Query().Get("availability"))
 	brand := strings.TrimSpace(r.URL.Query().Get("brand"))
 	category := strings.TrimSpace(r.URL.Query().Get("category"))
 	iface := strings.TrimSpace(r.URL.Query().Get("interface"))
@@ -1306,6 +1379,9 @@ func filterPrices(prices []db.CurrentPrice, r *http.Request) []db.CurrentPrice {
 			continue
 		}
 		if condition != "" && (p.Condition == nil || *p.Condition != condition) {
+			continue
+		}
+		if availability != "" && string(p.Availability) != availability {
 			continue
 		}
 		if brand != "" && (p.Brand == nil || *p.Brand != brand) {
@@ -1572,6 +1648,8 @@ input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--
 <a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.quality"}}</a>
 <a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.products"}}</a>
 <a href="/drops" class="{{if eq .Active "drops"}}active{{end}}" {{if eq .Active "drops"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Baisses</a>
+<a href="/market" class="{{if eq .Active "market"}}active{{end}}" {{if eq .Active "market"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Marche</a>
+<a href="/europe" class="{{if eq .Active "europe"}}active{{end}}" {{if eq .Active "europe"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Europe</a>
 <a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.alerts"}}</a>
 <a href="/discord" class="{{if eq .Active "discord"}}active{{end}}" {{if eq .Active "discord"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Discord</a>
 <a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.config"}}</a>
@@ -1675,9 +1753,31 @@ const priceDropsTpl = `{{define "body"}}
 <section class="drops-grid">{{range .Drops}}<article class="drop-card"><div><h3><a href="/product?id={{.ProductID}}">{{.Title}}</a></h3><div class="drop-meta">{{.Source}} · {{cap .CapacityTB}} · actualisé {{ago .ObservedAt}}</div></div><div class="drop-prices"><span class="drop-current">{{price .PricePerTB}} €/To</span><span class="drop-old">{{price .PreviousPricePerTB}} €/To</span></div><div class="drop-footer"><span class="badge good">▼ {{price .DropPct}} %</span><span>{{price .PriceEUR}} €</span><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir l'offre ↗</a></div></article>{{else}}<div class="panel empty">Aucune baisse trouvée avec ces critères.</div>{{end}}</section>
 {{end}}`
 
+const marketTpl = `{{define "body"}}
+<style>
+.market-hero{padding:24px;margin-bottom:18px;background:linear-gradient(135deg,#0758c7,#1677ff);color:#fff;border-radius:16px;border:1px solid #3b9cff}.market-hero h2{margin:0 0 5px;font-size:24px}.market-hero p{margin:0;color:#d7eaff}.market-periods{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}.market-periods a{padding:8px 13px;border:1px solid var(--line);border-radius:999px;text-decoration:none;background:var(--panel);color:var(--brand);font-weight:750}.market-periods a.active{background:var(--brand);color:#fff;border-color:var(--brand)}.market-table{overflow:auto}.market-table table{min-width:560px}.market-value{color:var(--brand);font-weight:850;font-size:17px}
+</style>
+<section class="market-hero"><h2>Indice quotidien du marché</h2><p>Médiane observée du prix par téraoctet, regroupée par tranche de capacité.</p></section>
+<nav class="market-periods" aria-label="Période"><a href="/market?days=7" class="{{if eq .Days 7}}active{{end}}">7 jours</a><a href="/market?days=30" class="{{if eq .Days 30}}active{{end}}">30 jours</a><a href="/market?days=90" class="{{if eq .Days 90}}active{{end}}">90 jours</a><a href="/api/market?days={{.Days}}">JSON</a></nav>
+{{if .Error}}<p class="warnbox">Impossible de charger l'indice : {{.Error}}</p>{{end}}
+<section class="panel market-table"><table><thead><tr><th>Jour UTC</th><th>Capacité</th><th>Médiane €/To</th><th>Observations</th></tr></thead><tbody>{{range .Market}}<tr><td>{{.Day.Format "02/01/2006"}}</td><td>{{.Band}}</td><td class="market-value">{{price .MedianEUR}} €/To</td><td>{{.Samples}}</td></tr>{{else}}<tr><td colspan="4" class="empty">Aucune observation qualifiée sur cette période.</td></tr>{{end}}</tbody></table></section>
+{{end}}`
+
+const europeTpl = `{{define "body"}}
+<style>
+.eu-hero{padding:24px;margin-bottom:18px;background:linear-gradient(135deg,#071a38,#0758c7);color:#fff;border:1px solid #174f92;border-radius:16px}.eu-hero h2{margin:0 0 5px;font-size:24px}.eu-hero p{margin:0;color:#c7ddf8}.eu-regions{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px}.eu-region{display:block;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;text-decoration:none}.eu-region.active,.eu-region:hover{border-color:var(--brand)}.eu-region strong{display:block;font-size:17px}.eu-region span{color:var(--muted);font-size:12px}.eu-region b{display:block;margin-top:5px;color:var(--brand)}.eu-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.eu-offer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:16px;background:var(--panel);border:1px solid var(--line);border-radius:14px}.eu-offer h3{margin:0 0 6px;font-size:15px}.eu-offer h3 a{text-decoration:none}.eu-meta{color:var(--muted);font-size:12px}.eu-price{text-align:right;color:var(--brand);font-size:23px;font-weight:900}.eu-price small{display:block;color:var(--muted);font-size:11px}.eu-foot{grid-column:1/-1;display:flex;justify-content:space-between;gap:10px;padding-top:10px;border-top:1px solid var(--line2)}
+@media(max-width:780px){.eu-grid{grid-template-columns:1fr}}@media(max-width:520px){.eu-hero{padding:17px}.eu-hero h2{font-size:20px}.eu-regions{grid-template-columns:repeat(2,minmax(0,1fr))}.eu-price{font-size:20px}}
+</style>
+<section class="eu-hero"><h2>Comparaison européenne</h2><p>Prix observés par boutique nationale, classés au coût par téraoctet.</p></section>
+<div class="warnbox">Les frais de port et les restrictions de livraison ne sont pas inclus. Vérifiez le total chez le marchand.</div>
+{{if .Error}}<div class="warnbox">Impossible de charger la comparaison : {{.Error}}</div>{{end}}
+<nav class="eu-regions" aria-label="Pays"><a class="eu-region {{if eq .SelectedCountry ""}}active{{end}}" href="/europe"><strong>🇪🇺 Toute l'Europe</strong><span>Comparer les pays</span></a>{{range .Regions}}<a class="eu-region {{if eq $.SelectedCountry .Country.Code}}active{{end}}" href="/europe?country={{.Country.Code}}"><strong>{{.Country.Flag}} {{.Country.Name}}</strong><span>{{.Offers}} offres</span><b>Dès {{price .BestPricePerTB}} €/To</b></a>{{end}}</nav>
+<section class="eu-grid">{{range .Offers}}<article class="eu-offer"><div><h3><a href="/product?id={{.ProductID}}">{{.Title}}</a></h3><div class="eu-meta">{{.Country.Flag}} {{.Country.Name}} · {{.Source}} · {{cap .CapacityTB}}</div></div><div class="eu-price">{{price .PriceEUR}} €<small>{{price .PricePerTB}} €/To</small></div><div class="eu-foot"><span>Actualisé {{ago .ObservedAt}}</span><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir l'offre ↗</a></div></article>{{else}}<div class="panel empty">Aucune offre fiable pour ce pays.</div>{{end}}</section>
+{{end}}`
+
 const productsTpl = `{{define "body"}}
 <style>
-.catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;margin-bottom:18px;background:linear-gradient(135deg,var(--nav),var(--nav2));color:#fff;border:1px solid #174f92;border-radius:16px}.catalog-hero h2{margin:0 0 4px;font-size:24px}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:28px;font-weight:850;color:#78bdff;white-space:nowrap}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(0,29,72,.08);transition:transform .15s ease,border-color .15s ease}.product-card:hover{transform:translateY(-2px);border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:11px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.drive-visual span{font-size:28px;font-weight:900;letter-spacing:.08em}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:16px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:24px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:999px;padding:4px 9px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
+.catalog-hero{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;margin-bottom:18px;background:linear-gradient(135deg,var(--nav),var(--nav2));color:#fff;border:1px solid #174f92;border-radius:16px}.catalog-hero h2{margin:0 0 4px;font-size:24px}.catalog-hero p{margin:0;color:#b9d6f7}.catalog-count{font-size:28px;font-weight:850;color:#78bdff;white-space:nowrap}.catalog-layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:18px;align-items:start}.filter-drawer{position:sticky;top:84px}.filter-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}.filter-head h2{margin:0;font-size:19px}.filter-close{display:none;font-size:28px;text-decoration:none}.filter-form{display:grid;gap:14px}.filter-form label{display:block;margin-bottom:5px;color:var(--muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em}.filter-range{display:grid;grid-template-columns:1fr 1fr;gap:9px}.filter-actions{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:4px}.filter-reset{display:flex;align-items:center;padding:0 8px;color:var(--brand);font-weight:700;text-decoration:none}.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.catalog-toolbar h2{margin:0;font-size:17px}.product-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.product-card{display:grid;grid-template-columns:112px minmax(0,1fr);gap:15px;padding:14px;background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 26px rgba(0,29,72,.08);transition:transform .15s ease,border-color .15s ease}.product-card:hover{transform:translateY(-2px);border-color:var(--brand)}.drive-visual{min-height:126px;display:grid;place-content:center;text-align:center;border-radius:11px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.drive-visual span{font-size:28px;font-weight:900;letter-spacing:.08em}.drive-visual small{font-weight:800}.product-copy{min-width:0}.product-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:16px;font-weight:800;text-decoration:none}.product-title:hover{color:var(--brand)}.product-price{margin:10px 0 7px;color:var(--brand);font-size:24px;font-weight:900}.product-price small{color:var(--muted);font-size:12px;font-weight:700}.tag-row{display:flex;gap:6px;flex-wrap:wrap}.storage-tag{display:inline-flex;border-radius:999px;padding:4px 9px;background:var(--soft);color:var(--brand);font-size:12px;font-weight:750}.storage-tag.strong{background:var(--brand);color:#fff}.storage-tag.unavailable{background:rgba(232,121,114,.12);color:var(--bad)}.product-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px;color:var(--muted);font-size:12px}.product-meta a{color:var(--brand);font-weight:800;text-decoration:none}.trend{margin-left:auto}.mobile-filter-button{display:none}
 :root[data-theme=dark] .drive-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
 @media(max-width:1180px){.product-grid{grid-template-columns:1fr}}
 @media(max-width:760px){main{padding-bottom:94px}.catalog-hero{align-items:flex-start;padding:17px}.catalog-hero h2{font-size:20px}.catalog-count{font-size:20px}.catalog-layout{display:block}.filter-drawer{display:none;position:fixed;inset:0;z-index:20;overflow:auto;border-radius:0;padding:22px;background:var(--bg)}.filter-drawer:target{display:block}.filter-close{display:block}.filter-form{padding:18px;background:var(--panel);border:1px solid var(--line);border-radius:14px}.catalog-toolbar .button{display:none}.product-card{grid-template-columns:96px minmax(0,1fr);padding:12px}.drive-visual{min-height:112px}.product-title{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.product-price{font-size:22px}.product-meta{align-items:flex-end}.mobile-filter-button{display:flex;position:fixed;left:16px;right:16px;bottom:14px;z-index:15;min-height:58px;align-items:center;justify-content:center;border-radius:13px;background:var(--brand);color:#fff;text-decoration:none;font-size:18px;font-weight:850;box-shadow:0 12px 35px rgba(0,65,160,.35)}}
@@ -1692,6 +1792,7 @@ const productsTpl = `{{define "body"}}
 <div><label for="filter_source">Marchand</label><select id="filter_source" name="source"><option value="">Tous</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_media">Support</label><select id="filter_media" name="media"><option value="">HDD et SSD</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
 <div><label for="filter_condition">État</label><select id="filter_condition" name="condition"><option value="">Tous</option><option value="new" {{if eq .SelectedCondition "new"}}selected{{end}}>Neuf</option><option value="used" {{if eq .SelectedCondition "used"}}selected{{end}}>Occasion</option></select></div>
+<div><label for="filter_availability">Disponibilité</label><select id="filter_availability" name="availability"><option value="">Toutes</option><option value="available" {{if eq .SelectedAvailability "available"}}selected{{end}}>Disponible</option><option value="unavailable" {{if eq .SelectedAvailability "unavailable"}}selected{{end}}>Indisponible</option></select></div>
 <div><label for="filter_brand">Marque</label><select id="filter_brand" name="brand"><option value="">Toutes</option>{{range .Brands}}<option value="{{.}}" {{if eq $.SelectedBrand .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_category">Usage</label><select id="filter_category" name="category"><option value="">Tous</option>{{range .Categories}}<option value="{{.}}" {{if eq $.SelectedCategory .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_interface">Interface</label><select id="filter_interface" name="interface"><option value="">Toutes</option>{{range .Interfaces}}<option value="{{.}}" {{if eq $.SelectedInterface .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
@@ -1705,7 +1806,7 @@ const productsTpl = `{{define "body"}}
 <article class="product-card"><div class="drive-visual"><span>{{mediaLabel .MediaType}}</span><small>{{cap .CapacityTB}}</small></div><div class="product-copy">
 <a class="product-title" href="/product?id={{.ProductID}}">{{.Title}}</a>
 <div class="product-price">{{price .PriceEUR}} € <small>{{price .PricePerTB}} €/To</small></div>
-<div class="tag-row"><span class="storage-tag strong">{{mediaLabel .MediaType}}</span>{{if .Brand}}<span class="storage-tag">{{ptr .Brand}}</span>{{end}}{{if .DriveCategory}}<span class="storage-tag">{{ptr .DriveCategory}}</span>{{end}}{{if .RecordingMethod}}<span class="storage-tag">{{ptr .RecordingMethod}}</span>{{end}}{{range .Interfaces}}<span class="storage-tag">{{.}}</span>{{end}}</div>
+<div class="tag-row"><span class="storage-tag strong">{{mediaLabel .MediaType}}</span><span class="storage-tag {{if eq (printf "%s" .Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span>{{if .Brand}}<span class="storage-tag">{{ptr .Brand}}</span>{{end}}{{if .DriveCategory}}<span class="storage-tag">{{ptr .DriveCategory}}</span>{{end}}{{if .RecordingMethod}}<span class="storage-tag">{{ptr .RecordingMethod}}</span>{{end}}{{range .Interfaces}}<span class="storage-tag">{{.}}</span>{{end}}</div>
 <div class="product-meta"><span>{{.Source}} · Actualisé {{ago .ObservedAt}}</span>{{if $spark.Coords}}<svg class="sparkline trend" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{end}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">Site ↗</a></div>
 </div></article>{{else}}<div class="panel empty">Aucun produit ne correspond aux filtres.</div>{{end}}</div></section>
 </div><a class="mobile-filter-button" href="#filters">⌁ &nbsp; Filtres</a>
@@ -1713,15 +1814,15 @@ const productsTpl = `{{define "body"}}
 
 const productDetailTpl = `{{define "body"}}
 <style>
-.detail-back{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:700;text-decoration:none}.detail-hero{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px;background:linear-gradient(135deg,var(--panel),var(--soft));border:1px solid var(--line);border-radius:16px}.detail-visual{min-height:180px;display:grid;place-content:center;text-align:center;border-radius:14px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.detail-visual span{font-size:44px;font-weight:950;letter-spacing:.08em}.detail-visual small{font-size:16px;font-weight:800}.detail-copy h2{margin:0 0 9px;font-size:25px;line-height:1.25}.detail-tags{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}.detail-tag{border-radius:999px;padding:5px 10px;background:var(--panel);border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:750}.detail-actions{display:flex;gap:9px;flex-wrap:wrap}.detail-actions .secondary-link{background:var(--panel);color:var(--brand);border:1px solid var(--line)}.detail-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:18px;margin-top:18px;align-items:start}.compare-panel{padding:22px}.compare-panel h2{margin:0;color:var(--brand);font-size:22px}.compare-sub{margin:4px 0 18px;color:var(--muted)}.offer-card{display:grid;grid-template-columns:minmax(0,1fr) auto 48px;gap:15px;align-items:center;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 10px 28px rgba(0,29,72,.08)}.offer-card+.offer-card{margin-top:12px}.merchant-name{font-size:19px;font-weight:900;text-transform:capitalize}.merchant-title{display:block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}.offer-state{display:inline-flex;margin-top:8px;padding:4px 9px;border-radius:999px;background:rgba(78,199,138,.12);color:var(--good);font-size:12px;font-weight:800}.offer-price{text-align:right}.offer-price strong{display:block;color:var(--brand);font-size:28px}.offer-price span{color:var(--muted);font-size:12px}.offer-go{width:46px;height:46px;display:grid;place-content:center;border-radius:999px;background:var(--brand);color:#fff;font-size:28px;text-decoration:none}.spec-list{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}.spec{padding:14px;background:var(--panel)}.spec span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}.spec strong{display:block;margin-top:4px}.history-panel{margin-top:18px}.history-scroll{max-height:330px;overflow:auto}:root[data-theme=dark] .detail-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
+.detail-back{display:inline-block;margin-bottom:14px;color:var(--muted);font-weight:700;text-decoration:none}.detail-hero{display:grid;grid-template-columns:180px minmax(0,1fr);gap:24px;padding:24px;background:linear-gradient(135deg,var(--panel),var(--soft));border:1px solid var(--line);border-radius:16px}.detail-visual{min-height:180px;display:grid;place-content:center;text-align:center;border-radius:14px;background:linear-gradient(145deg,#eef6ff,#cfe4ff);color:#0758c7;border:1px solid #c1dcff}.detail-visual span{font-size:44px;font-weight:950;letter-spacing:.08em}.detail-visual small{font-size:16px;font-weight:800}.detail-copy h2{margin:0 0 9px;font-size:25px;line-height:1.25}.detail-tags{display:flex;gap:7px;flex-wrap:wrap;margin:12px 0 18px}.detail-tag{border-radius:999px;padding:5px 10px;background:var(--panel);border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:750}.detail-actions{display:flex;gap:9px;flex-wrap:wrap}.detail-actions .secondary-link{background:var(--panel);color:var(--brand);border:1px solid var(--line)}.detail-layout{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);gap:18px;margin-top:18px;align-items:start}.compare-panel{padding:22px}.compare-panel h2{margin:0;color:var(--brand);font-size:22px}.compare-sub{margin:4px 0 18px;color:var(--muted)}.offer-card{display:grid;grid-template-columns:minmax(0,1fr) auto 48px;gap:15px;align-items:center;padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);box-shadow:0 10px 28px rgba(0,29,72,.08)}.offer-card+.offer-card{margin-top:12px}.merchant-name{font-size:19px;font-weight:900;text-transform:capitalize}.merchant-title{display:block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11px}.offer-state{display:inline-flex;margin-top:8px;padding:4px 9px;border-radius:999px;background:rgba(78,199,138,.12);color:var(--good);font-size:12px;font-weight:800}.offer-state.unavailable{background:rgba(232,121,114,.12);color:var(--bad)}.offer-price{text-align:right}.offer-price strong{display:block;color:var(--brand);font-size:28px}.offer-price span{color:var(--muted);font-size:12px}.offer-go{width:46px;height:46px;display:grid;place-content:center;border-radius:999px;background:var(--brand);color:#fff;font-size:28px;text-decoration:none}.spec-list{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}.spec{padding:14px;background:var(--panel)}.spec span{display:block;color:var(--muted);font-size:11px;text-transform:uppercase}.spec strong{display:block;margin-top:4px}.history-panel{margin-top:18px}.history-scroll{max-height:330px;overflow:auto}:root[data-theme=dark] .detail-visual{background:linear-gradient(145deg,#102c51,#07172d);color:#78bdff;border-color:#214b78}
 @media(max-width:900px){.detail-layout{grid-template-columns:1fr}}
 @media(max-width:620px){.detail-hero{grid-template-columns:100px minmax(0,1fr);gap:14px;padding:14px}.detail-visual{min-height:115px}.detail-visual span{font-size:28px}.detail-copy h2{font-size:18px}.detail-actions{display:grid}.detail-actions .button{width:100%}.compare-panel{padding:17px}.offer-card{grid-template-columns:1fr auto;gap:10px}.offer-go{grid-column:2;grid-row:1 / span 2}.offer-price{text-align:left}.offer-price strong{font-size:25px}.spec-list{grid-template-columns:1fr}.stats-row{grid-template-columns:1fr}.stat .value{font-size:23px}}
 </style>
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 {{if .Product}}<a class="detail-back" href="/products">← Retour aux produits</a>
-<section class="detail-hero"><div class="detail-visual"><span>{{mediaLabel .Product.MediaType}}</span><small>{{cap .Product.CapacityTB}}</small></div><div class="detail-copy"><h2>{{.Product.Title}}</h2><div class="hint">Référence suivie chez {{.Product.Source}} · actualisée {{ago .Product.LastSeenAt}}</div><div class="detail-tags"><span class="detail-tag">{{mediaLabel .Product.MediaType}}</span>{{if .Product.Brand}}<span class="detail-tag">{{ptr .Product.Brand}}</span>{{end}}{{if .Product.DriveCategory}}<span class="detail-tag">{{ptr .Product.DriveCategory}}</span>{{end}}{{if .Product.RecordingMethod}}<span class="detail-tag">{{ptr .Product.RecordingMethod}}</span>{{end}}{{range .Product.Interfaces}}<span class="detail-tag">{{.}}</span>{{end}}</div><div class="detail-actions"><a class="button" href="/alerts">♧ &nbsp; Créer une alerte de prix</a><a class="button secondary-link" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer">Voir chez le marchand ↗</a></div></div></section>
-<div class="detail-layout"><section class="panel compare-panel"><h2>Comparaison des prix</h2><p class="compare-sub">{{if gt (len .Offers) 1}}{{len .Offers}} offres regroupées par marque, modèle et capacité.{{else}}Dernière offre disponible pour cette référence.{{end}}</p>{{if .Offers}}{{range .Offers}}<article class="offer-card"><div><div class="merchant-name">{{.Source}}</div><span class="merchant-title">{{.Title}}</span><span class="offer-state">✓ {{conditionLabel .Condition}}</span></div><div class="offer-price"><strong>{{price .PriceEUR}} €</strong><span>{{price .PricePerTB}} €/To · {{ago .ObservedAt}}</span></div><a class="offer-go" href="{{.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Source}}">›</a></article>{{end}}{{else if .Current}}<article class="offer-card"><div><div class="merchant-name">{{.Product.Source}}</div><span class="offer-state">✓ {{conditionLabel .Product.Condition}}</span></div><div class="offer-price"><strong>{{price .Current.PriceEUR}} €</strong><span>{{price .Current.PricePerTB}} €/To · {{ago .Current.ObservedAt}}</span></div><a class="offer-go" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Product.Source}}">›</a></article>{{else}}<p class="empty">Aucun prix récent disponible.</p>{{end}}</section>
-<section class="panel"><div class="panel-head"><h2>Caractéristiques</h2></div><div class="spec-list"><div class="spec"><span>Capacité</span><strong>{{cap .Product.CapacityTB}}</strong></div><div class="spec"><span>Support</span><strong>{{mediaLabel .Product.MediaType}}</strong></div><div class="spec"><span>Marque</span><strong>{{ptr .Product.Brand}}</strong></div><div class="spec"><span>État</span><strong>{{conditionLabel .Product.Condition}}</strong></div><div class="spec"><span>Première observation</span><strong>{{tsv .Product.FirstSeenAt}}</strong></div><div class="spec"><span>Dernier refresh</span><strong>{{tsv .Product.LastSeenAt}}</strong></div></div></section></div>
+<section class="detail-hero"><div class="detail-visual"><span>{{mediaLabel .Product.MediaType}}</span><small>{{cap .Product.CapacityTB}}</small></div><div class="detail-copy"><h2>{{.Product.Title}}</h2><div class="hint">Référence suivie chez {{.Product.Source}} · actualisée {{ago .Product.LastSeenAt}}</div><div class="detail-tags"><span class="detail-tag">{{mediaLabel .Product.MediaType}}</span><span class="detail-tag">{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</span>{{if .Product.Brand}}<span class="detail-tag">{{ptr .Product.Brand}}</span>{{end}}{{if .Product.DriveCategory}}<span class="detail-tag">{{ptr .Product.DriveCategory}}</span>{{end}}{{if .Product.RecordingMethod}}<span class="detail-tag">{{ptr .Product.RecordingMethod}}</span>{{end}}{{range .Product.Interfaces}}<span class="detail-tag">{{.}}</span>{{end}}</div><div class="detail-actions"><a class="button" href="/alerts">♧ &nbsp; Créer une alerte de prix</a><a class="button secondary-link" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer">Voir chez le marchand ↗</a></div></div></section>
+<div class="detail-layout"><section class="panel compare-panel"><h2>Comparaison des prix</h2><p class="compare-sub">{{if gt (len .Offers) 1}}{{len .Offers}} offres regroupées par marque, modèle et capacité.{{else}}Dernière offre disponible pour cette référence.{{end}}</p>{{if .Offers}}{{range .Offers}}<article class="offer-card"><div><div class="merchant-name">{{.Source}}</div><span class="merchant-title">{{.Title}}</span><span class="offer-state {{if eq (printf "%s" .Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Availability) "unavailable"}}Indisponible{{else}}✓ {{conditionLabel .Condition}}{{end}}</span></div><div class="offer-price"><strong>{{price .PriceEUR}} €</strong><span>{{price .PricePerTB}} €/To · {{ago .ObservedAt}}</span></div><a class="offer-go" href="{{.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Source}}">›</a></article>{{end}}{{else if .Current}}<article class="offer-card"><div><div class="merchant-name">{{.Product.Source}}</div><span class="offer-state {{if eq (printf "%s" .Product.Availability) "unavailable"}}unavailable{{end}}">{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}✓ {{conditionLabel .Product.Condition}}{{end}}</span></div><div class="offer-price"><strong>{{price .Current.PriceEUR}} €</strong><span>{{price .Current.PricePerTB}} €/To · {{ago .Current.ObservedAt}}</span></div><a class="offer-go" href="{{.Product.URL}}" target="_blank" rel="noopener noreferrer" aria-label="Voir l'offre chez {{.Product.Source}}">›</a></article>{{else}}<p class="empty">Aucun prix récent disponible.</p>{{end}}</section>
+<section class="panel"><div class="panel-head"><h2>Caractéristiques</h2></div><div class="spec-list"><div class="spec"><span>Capacité</span><strong>{{cap .Product.CapacityTB}}</strong></div><div class="spec"><span>Support</span><strong>{{mediaLabel .Product.MediaType}}</strong></div><div class="spec"><span>Marque</span><strong>{{ptr .Product.Brand}}</strong></div><div class="spec"><span>État</span><strong>{{conditionLabel .Product.Condition}}</strong></div><div class="spec"><span>Disponibilité</span><strong>{{if eq (printf "%s" .Product.Availability) "unavailable"}}Indisponible{{else}}Disponible{{end}}</strong></div><div class="spec"><span>Disponibilité vérifiée</span><strong>{{tsv .Product.AvailabilityUpdatedAt}}</strong></div><div class="spec"><span>Première observation</span><strong>{{tsv .Product.FirstSeenAt}}</strong></div><div class="spec"><span>Dernier refresh</span><strong>{{tsv .Product.LastSeenAt}}</strong></div></div></section></div>
 <section class="panel history-panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a><a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a><a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a><a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1 an</a></div></div>
 {{if .History}}<div class="stats-row"><div class="stat"><span class="label">Minimum EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moyenne EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Maximum EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div><div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none" aria-label="Évolution du prix au téraoctet"><polyline fill="none" stroke="#3b9cff" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de données pour un graphique.</p>{{end}}</div><div class="table-wrap history-scroll"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>{{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}</tbody></table></div>{{else}}<p class="empty">Aucune observation sur cette période.</p>{{end}}</section>
 {{else}}<p class="empty">Produit introuvable. <a href="/products">Retour aux produits</a></p>{{end}}
@@ -1781,6 +1882,7 @@ const metricsTpl = `{{define "body"}}
 
 const discordTpl = `{{define "body"}}
 {{if .Saved}}<div class="notice">Configuration Discord sauvegardée et appliquée.</div>{{end}}
+{{if .Tested}}<div class="notice">Message de test Discord envoyé.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <div class="notice">Intégration prête mais laissée en attente. Configurez le bot seulement après validation complète du suivi des produits et des alertes.</div>
 <section class="panel"><div class="panel-head"><div><h2>Bot Discord de diffusion</h2><div class="hint">Le bot publie uniquement les alertes créées dans DiskCount dont la case Discord est cochée.</div></div></div><div class="panel-body">
@@ -1788,5 +1890,6 @@ const discordTpl = `{{define "body"}}
 <div class="alert-grid"><div><label for="discord_channel">Identifiant du salon</label><input id="discord_channel" name="DISCORD_CHANNEL_ID" value="{{.ChannelID}}" inputmode="numeric" placeholder="123456789012345678"></div><div><label for="discord_token">Token du bot</label><input id="discord_token" name="DISCORD_BOT_TOKEN" type="password" placeholder="{{if .TokenConfigured}}********{{else}}Token du bot{{end}}" autocomplete="off"></div>{{if .TokenConfigured}}<div><label class="check-chip"><input type="checkbox" name="replace_token" value="1"> Remplacer le token enregistré</label></div>{{end}}</div>
 <div class="warnbox">Permissions minimales du bot dans ce salon : Voir le salon et Envoyer des messages. Aucun message entrant ni commande Discord n'est traité.</div>
 <div><button type="submit">Sauvegarder Discord</button></div></form>
+{{if .TestAvailable}}<form method="post" action="/discord/test"><button class="secondary" type="submit">Envoyer un message de test</button></form>{{else}}<div class="hint">Le test sera disponible après configuration du token et du salon.</div>{{end}}
 </div></section>
 {{end}}`

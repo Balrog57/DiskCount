@@ -49,8 +49,16 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 
 1. Terminé : recherche et facettes stockage sur le catalogue, prix par To, fraîcheur, historique et liens vendeurs.
 2. Terminé : regroupement multi-vendeurs fiable par marque + référence modèle + capacité, et vue des baisses de prix actuelles.
-3. Prochain : disponibilité explicite. Le test Discord depuis le site reste volontairement en attente jusqu'à validation complète du suivi produit.
-4. Futur : indice quotidien par tranche de capacité, comparaison européenne et messages privés Discord si nécessaire.
+3. Terminé : disponibilité explicite après trois scans source réussis manquants, retour en stock, et test Discord depuis le site.
+4. Terminé : indice quotidien par tranche de capacité et comparaison européenne. Les messages privés Discord ne sont pas retenus : le salon configuré couvre le besoin actuel sans complexité ni permission supplémentaire.
+
+## Disponibilité — version actuelle
+
+- Une offre observée est `available` et remet son compteur d'absence à zéro.
+- Une offre devient `unavailable` après trois scans réussis de sa source où elle est absente.
+- Une erreur, un circuit breaker, un scan vide ou un lot entièrement rejeté ne modifie jamais la disponibilité.
+- Une nouvelle observation restaure immédiatement l'offre et le mécanisme existant de retour en stock peut déclencher l'alerte.
+- L'état `discontinued` n'est pas déduit : aucune source actuelle ne permet de distinguer de façon fiable un retrait définitif d'une absence prolongée.
 
 ## Alertes — version actuelle
 

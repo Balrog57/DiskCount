@@ -17,6 +17,13 @@ const (
 	ConditionUsed Condition = "used"
 )
 
+type Availability string
+
+const (
+	AvailabilityAvailable   Availability = "available"
+	AvailabilityUnavailable Availability = "unavailable"
+)
+
 type MediaType string
 
 const (
