@@ -64,9 +64,9 @@ func TestLatestPricesUsesLatestObservationAndSortsByPricePerTB(t *testing.T) {
 		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM products WHERE id = ANY($1)`, ids)
 	})
 
-	_, err := d.Pool.Exec(ctx, `INSERT INTO products(id,source,title,url,capacity_tb) VALUES
-		('test-current-a','test','Drive A','https://example.test/a',10),
-		('test-current-b','test','Drive B','https://example.test/b',20)`)
+	_, err := d.Pool.Exec(ctx, `INSERT INTO products(id,source,title,url,capacity_tb,quality_score) VALUES
+		('test-current-a','test','Drive A','https://example.test/a',10,90),
+		('test-current-b','test','Drive B','https://example.test/b',20,90)`)
 	if err != nil {
 		t.Fatal(err)
 	}

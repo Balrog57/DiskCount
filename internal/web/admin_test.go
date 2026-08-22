@@ -119,6 +119,27 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	}
 }
 
+func TestPriceDropsTemplateRendersDropReferenceView(t *testing.T) {
+	rec := httptest.NewRecorder()
+	now := time.Now()
+	render(rec, priceDropsTpl, map[string]any{
+		"Title": "Baisses de prix", "Active": "drops", "Days": 30, "MinDrop": 2.0,
+		"Drops": []db.PriceDrop{{
+			CurrentPrice:       db.CurrentPrice{ProductID: "fixture", Title: "IronWolf 16 To", URL: "https://example.test", Source: "diskprices", CapacityTB: 16, PriceEUR: 240, PricePerTB: 15, ObservedAt: now},
+			PreviousPricePerTB: 18, DropPct: 16.67,
+		}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, required := range []string{"Baisses de prix", "IronWolf 16 To", "16.67 %", "Filtrer", "/drops"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing drop view value %q: %s", required, body)
+		}
+	}
+}
+
 func TestRelativeTimeAt(t *testing.T) {
 	now := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
@@ -144,6 +165,7 @@ func TestProductDetailTemplateRendersComparison(t *testing.T) {
 		"Title": "Produit", "Active": "products", "Days": 30,
 		"Product": &db.Product{ID: "fixture", Title: "SSD Fixture", Source: "merchant", URL: "https://example.test", MediaType: &media, Condition: &condition, CapacityTB: 4, LastSeenAt: now},
 		"Current": &db.PriceHistoryPoint{ObservedAt: now, PriceEUR: 200, PricePerTB: 50, Source: "merchant"},
+		"Offers":  []db.ProductOffer{},
 	})
 	body := rec.Body.String()
 	for _, required := range []string{"Comparaison des prix", "Créer une alerte de prix", "200.00 €", "Dernier refresh"} {

@@ -95,6 +95,26 @@ ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_alert_id_fkey;
 ALTER TABLE notifications ADD CONSTRAINT notifications_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES alerts(id) ON DELETE CASCADE;
 DELETE FROM app_config WHERE key LIKE 'TELEGRAM_%';
 `},
+	{n: 4, sql: `
+ALTER TABLE products ADD COLUMN IF NOT EXISTS canonical_key TEXT;
+CREATE INDEX IF NOT EXISTS idx_products_canonical_key ON products(canonical_key) WHERE canonical_key IS NOT NULL;
+WITH normalized AS (
+	SELECT id,
+		CASE WHEN regexp_replace(lower(trim(brand)), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital') THEN 'westerndigital' ELSE regexp_replace(lower(trim(brand)), '[^[:alnum:]]+', '', 'g') END AS brand_key,
+		regexp_replace(lower(trim(model)), '[^[:alnum:]]+', '', 'g') AS model_key,
+		capacity_tb::text AS capacity_key
+	FROM products WHERE brand IS NOT NULL AND model IS NOT NULL AND capacity_tb > 0
+)
+UPDATE products p SET canonical_key=n.brand_key||'|'||n.model_key||'|'||n.capacity_key
+FROM normalized n WHERE p.id=n.id AND n.brand_key<>'' AND n.model_key<>'';
+`},
+	// v5: remove legacy Telegram-era tables from databases that predate the
+	// web/Discord alert model. Keep this separate: migrations are append-only.
+	{n: 5, sql: `
+DROP TABLE IF EXISTS authorized_users;
+DROP TABLE IF EXISTS subscribers;
+DELETE FROM app_config WHERE key LIKE 'TELEGRAM_%';
+`},
 }
 
 // Migrate applies every pending migration in order. Each migration runs in
@@ -173,14 +193,14 @@ type Alert struct {
 	CreatedAt, UpdatedAt                                                          time.Time
 }
 type Product struct {
-	ID, Source, Title, URL                                                  string
-	ExternalID, Condition, MediaType, FormFactor, Technology, DriveCategory *string
-	ClassificationSource, CanonicalURL, Merchant, Brand, Model, RawTitle    *string
-	RecordingMethod                                                         *string
-	CapacityTB                                                              float64
-	Interfaces                                                              []string
-	QualityScore                                                            int
-	FirstSeenAt, LastSeenAt                                                 time.Time
+	ID, Source, Title, URL                                                             string
+	ExternalID, Condition, MediaType, FormFactor, Technology, DriveCategory            *string
+	ClassificationSource, CanonicalURL, CanonicalKey, Merchant, Brand, Model, RawTitle *string
+	RecordingMethod                                                                    *string
+	CapacityTB                                                                         float64
+	Interfaces                                                                         []string
+	QualityScore                                                                       int
+	FirstSeenAt, LastSeenAt                                                            time.Time
 }
 type PriceObservation struct {
 	ID                   int64
@@ -198,13 +218,27 @@ type Notification struct {
 	DiscountPct                              *float64
 }
 type CurrentPrice struct {
-	ProductID                                                   string
-	Source, Title, URL                                          string
-	Condition, MediaType, DriveCategory, Brand, RecordingMethod *string
-	Interfaces                                                  []string
-	CapacityTB                                                  float64
-	PriceEUR, PricePerTB                                        float64
-	ObservedAt                                                  time.Time
+	ProductID                                                                 string
+	Source, Title, URL                                                        string
+	Condition, MediaType, DriveCategory, CanonicalKey, Brand, RecordingMethod *string
+	Interfaces                                                                []string
+	CapacityTB                                                                float64
+	PriceEUR, PricePerTB                                                      float64
+	ObservedAt                                                                time.Time
+}
+
+type ProductOffer struct {
+	ProductID, Source, Title, URL string
+	Condition                     *string
+	PriceEUR, PricePerTB          float64
+	ObservedAt                    time.Time
+}
+
+type ProductGroup struct {
+	CanonicalKey string
+	Brand, Model string
+	CapacityTB   float64
+	Offers       []ProductOffer
 }
 type Stats struct {
 	ActiveAlerts, InactiveAlerts          int64
@@ -325,7 +359,7 @@ func (db *DB) DeleteAlert(ctx context.Context, aID int64) error {
 // productUpsertSQL is the shared INSERT...ON CONFLICT statement used by
 // UpsertProduct, RecordObservation, and RecordNotification. Centralizing it
 // keeps the three call sites in sync as columns are added.
-const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,merchant=$16,brand=$17,model=$18,raw_title=$19,recording_method=$20,last_seen_at=NOW()`
+const productUpsertSQL = `INSERT INTO products(id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) ON CONFLICT(id) DO UPDATE SET title=$4,url=$5,capacity_tb=$6,condition=$7,media_type=$8,form_factor=$9,technology=$10,drive_category=$11,interfaces=$12,quality_score=$13,classification_source=$14,canonical_url=$15,canonical_key=$16,merchant=$17,brand=$18,model=$19,raw_title=$20,recording_method=$21,last_seen_at=NOW()`
 
 // productUpsertArgs builds the positional arguments for productUpsertSQL.
 // Extracted so the three call sites cannot drift out of sync.
@@ -334,7 +368,7 @@ func productUpsertArgs(deal domain.Deal, ifaces []string) []any {
 		deal.ProductID(), deal.Source, deal.ExternalID, deal.Title, deal.URL, deal.CapacityTB,
 		ptrStr(deal.Condition), ptrStr(deal.MediaType), deal.FormFactor, deal.Technology, ptrStr(deal.DriveCategory),
 		ja(ifaces), deal.QualityScore, nilIfEmpty(deal.ClassificationSource), nilIfEmpty(deal.CanonicalURL),
-		deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod),
+		nilIfEmpty(deal.CanonicalProductKey()), deal.Merchant, deal.Brand, deal.Model, nilIfEmpty(deal.RawTitle), ptrStr(deal.RecordingMethod),
 	}
 }
 
@@ -568,7 +602,7 @@ WITH latest AS (
 	WHERE price_per_tb > 0 AND quality_score >= 70
 	ORDER BY product_id, observed_at DESC
 )
-SELECT l.product_id, l.source, p.title, p.url, p.condition, p.media_type, p.drive_category, p.brand, p.recording_method, p.interfaces, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
+SELECT l.product_id, l.source, p.title, p.url, p.condition, p.media_type, p.drive_category, p.canonical_key, p.brand, p.recording_method, p.interfaces, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
 FROM latest l
 JOIN products p ON p.id = l.product_id
 WHERE p.quality_score >= 50
@@ -581,7 +615,7 @@ LIMIT $1`, limit)
 	var out []CurrentPrice
 	for rows.Next() {
 		var p CurrentPrice
-		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.Condition, &p.MediaType, &p.DriveCategory, &p.Brand, &p.RecordingMethod, jsonScan(&p.Interfaces), &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.Condition, &p.MediaType, &p.DriveCategory, &p.CanonicalKey, &p.Brand, &p.RecordingMethod, jsonScan(&p.Interfaces), &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -589,11 +623,87 @@ LIMIT $1`, limit)
 	return out, rows.Err()
 }
 
+// ListProductGroups returns only groups with a complete canonical identity.
+// Products without brand+model+capacity are deliberately excluded; titles are
+// never used as a grouping fallback.
+func (db *DB) ListProductGroups(ctx context.Context, limit int) ([]ProductGroup, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Pool.Query(ctx, `
+WITH latest AS (
+ SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
+ FROM price_observations o JOIN products p ON p.id=o.product_id
+ WHERE p.canonical_key IS NOT NULL AND o.price_per_tb > 0 AND o.quality_score >= 70
+ ORDER BY o.product_id,o.observed_at DESC
+), group_keys AS (
+ SELECT p.canonical_key,MIN(l.price_per_tb) AS best_price
+ FROM latest l JOIN products p ON p.id=l.product_id
+ GROUP BY p.canonical_key ORDER BY best_price LIMIT $1
+)
+SELECT p.canonical_key,p.brand,p.model,p.capacity_tb,l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at
+FROM latest l JOIN products p ON p.id=l.product_id
+JOIN group_keys g ON g.canonical_key=p.canonical_key
+ORDER BY p.canonical_key,l.price_per_tb ASC`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	groups := make([]ProductGroup, 0)
+	byKey := make(map[string]int)
+	for rows.Next() {
+		var key string
+		var brand, model string
+		var capacity float64
+		var offer ProductOffer
+		if err := rows.Scan(&key, &brand, &model, &capacity, &offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt); err != nil {
+			return nil, err
+		}
+		i, ok := byKey[key]
+		if !ok {
+			i = len(groups)
+			byKey[key] = i
+			groups = append(groups, ProductGroup{CanonicalKey: key, Brand: brand, Model: model, CapacityTB: capacity})
+		}
+		groups[i].Offers = append(groups[i].Offers, offer)
+	}
+	return groups, rows.Err()
+}
+
+func (db *DB) ProductOffers(ctx context.Context, canonicalKey string) ([]ProductOffer, error) {
+	if canonicalKey == "" {
+		return nil, nil
+	}
+	rows, err := db.Pool.Query(ctx, `
+WITH latest AS (
+	SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
+	FROM price_observations o JOIN products p ON p.id=o.product_id
+	WHERE p.canonical_key=$1 AND o.price_per_tb > 0 AND o.quality_score >= 70
+	ORDER BY o.product_id,o.observed_at DESC
+)
+SELECT l.product_id,l.source,p.title,p.url,p.condition,l.price_eur,l.price_per_tb,l.observed_at
+FROM latest l JOIN products p ON p.id=l.product_id
+ORDER BY l.price_per_tb,l.observed_at DESC`, canonicalKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var offers []ProductOffer
+	for rows.Next() {
+		var offer ProductOffer
+		if err := rows.Scan(&offer.ProductID, &offer.Source, &offer.Title, &offer.URL, &offer.Condition, &offer.PriceEUR, &offer.PricePerTB, &offer.ObservedAt); err != nil {
+			return nil, err
+		}
+		offers = append(offers, offer)
+	}
+	return offers, rows.Err()
+}
+
 // GetProduct fetches a single product by its ID for the detail page.
 func (db *DB) GetProduct(ctx context.Context, productID string) (*Product, error) {
 	p := &Product{}
-	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,merchant,brand,model,raw_title,recording_method,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
-		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.FirstSeenAt, &p.LastSeenAt)
+	err := db.Pool.QueryRow(ctx, `SELECT id,source,external_id,title,url,capacity_tb,condition,media_type,form_factor,technology,drive_category,interfaces,quality_score,classification_source,canonical_url,canonical_key,merchant,brand,model,raw_title,recording_method,first_seen_at,last_seen_at FROM products WHERE id=$1`, productID).Scan(
+		&p.ID, &p.Source, &p.ExternalID, &p.Title, &p.URL, &p.CapacityTB, &p.Condition, &p.MediaType, &p.FormFactor, &p.Technology, &p.DriveCategory, jsonScan(&p.Interfaces), &p.QualityScore, &p.ClassificationSource, &p.CanonicalURL, &p.CanonicalKey, &p.Merchant, &p.Brand, &p.Model, &p.RawTitle, &p.RecordingMethod, &p.FirstSeenAt, &p.LastSeenAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

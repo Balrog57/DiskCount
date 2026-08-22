@@ -48,8 +48,8 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 ### Ordre d'implémentation
 
 1. Terminé : recherche et facettes stockage sur le catalogue, prix par To, fraîcheur, historique et liens vendeurs.
-2. Prochain : regroupement multi-vendeurs fiable par modèle normalisé et vue des baisses de prix.
-3. Ensuite : disponibilité explicite et test Discord depuis le site.
+2. Terminé : regroupement multi-vendeurs fiable par marque + référence modèle + capacité, et vue des baisses de prix actuelles.
+3. Prochain : disponibilité explicite. Le test Discord depuis le site reste volontairement en attente jusqu'à validation complète du suivi produit.
 4. Futur : indice quotidien par tranche de capacité, comparaison européenne et messages privés Discord si nécessaire.
 
 ## Alertes — version actuelle
@@ -61,6 +61,7 @@ DiskCount centralise les offres HDD/SSD, conserve leur historique de prix et env
 
 ## Discord — version actuelle
 
+- L'intégration est implantée mais laissée dormante : aucun token ni salon n'est requis et aucune alerte ne coche Discord par défaut.
 - La page `/discord` enregistre le token du bot et l'identifiant du salon cible ; le token reste masqué.
 - La configuration est appliquée immédiatement, sans redémarrage du conteneur.
 - Le bot est strictement sortant : il relaie les résultats des alertes de l'application, sans commande ni gestion distante.

@@ -22,6 +22,10 @@ const (
 
 var packRE = regexp.MustCompile(`(?i)(?:lot\s+de|pack\s+of|pack\s+de)\s*(\d{1,2})`)
 
+// Storage part numbers are safer than guessing a model from arbitrary title
+// words. Keep this deliberately narrow; an unknown model remains ungrouped.
+var modelRE = regexp.MustCompile(`(?i)\b(?:ST\d{3,}[A-Z0-9-]{2,}|WD[A-Z0-9][A-Z0-9-]{3,}|WDS[A-Z0-9-]{4,}|CT\d{3,}[A-Z0-9-]{3,}|MZ[A-Z0-9-]{4,}|SK[A-Z0-9-]{4,}|HUS\d{3,}[A-Z0-9-]*|MG\d{3,}[A-Z0-9-]*)\b`)
+
 type Result struct {
 	Deal   domain.Deal
 	Reject *Reject
@@ -122,6 +126,11 @@ func enrich(d domain.Deal) domain.Deal {
 	if d.Brand == nil {
 		if b := inferBrand(d.Title); b != "" {
 			d.Brand = &b
+		}
+	}
+	if d.Model == nil {
+		if m := modelRE.FindString(d.Title); m != "" {
+			d.Model = &m
 		}
 	}
 	return d

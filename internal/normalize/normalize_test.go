@@ -131,13 +131,13 @@ func TestDealDoesNotTreatXboxAsPack(t *testing.T) {
 // now be "Seagate" so brand-based alerts actually match.
 func TestInferBrandMatchesMidTitle(t *testing.T) {
 	cases := map[string]string{
-		"2 To Seagate IronWolf Pro 16 To":          "Seagate",
-		"WD Red Plus 4 To NAS HDD":                 "WD",
-		"Western Digital Red 8 To":                 "Western Digital",
-		"Toshiba MG08 16 To Enterprise":            "Toshiba",
-		"samsung 990 pro 2 to ssd":                 "Samsung", // case-insensitive
-		"Disque Générique 4 To Marque Inconnue":    "",        // unknown → no junk brand
-		"4 To":                                     "",        // capacity only, no brand
+		"2 To Seagate IronWolf Pro 16 To":       "Seagate",
+		"WD Red Plus 4 To NAS HDD":              "WD",
+		"Western Digital Red 8 To":              "Western Digital",
+		"Toshiba MG08 16 To Enterprise":         "Toshiba",
+		"samsung 990 pro 2 to ssd":              "Samsung", // case-insensitive
+		"Disque Générique 4 To Marque Inconnue": "",        // unknown → no junk brand
+		"4 To": "", // capacity only, no brand
 	}
 	for title, want := range cases {
 		if got := inferBrand(title); got != want {
@@ -161,5 +161,16 @@ func TestDealEnrichesBrandFromTitle(t *testing.T) {
 	}
 	if res.Deal.Brand == nil || *res.Deal.Brand != "Seagate" {
 		t.Fatalf("brand not enriched: %#v", res.Deal.Brand)
+	}
+}
+
+func TestDealInfersConservativeStorageModel(t *testing.T) {
+	res := Deal(domain.Deal{Source: "test", Title: "Seagate Exos 7E8 8TB ST8000NM000A HDD", URL: "https://example.test/d", CapacityTB: 8, PriceEUR: 120})
+	if res.Reject != nil || res.Deal.Model == nil || *res.Deal.Model != "ST8000NM000A" {
+		t.Fatalf("expected part number model, got %#v (%v)", res.Deal.Model, res.Reject)
+	}
+	noModel := Deal(domain.Deal{Source: "test", Title: "Disque dur 8 To pas de reference", URL: "https://example.test/e", CapacityTB: 8, PriceEUR: 120})
+	if noModel.Deal.Model != nil {
+		t.Fatalf("generic title must remain ungrouped: %q", *noModel.Deal.Model)
 	}
 }
