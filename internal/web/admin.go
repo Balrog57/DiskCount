@@ -1,4 +1,4 @@
-﻿package web
+package web
 
 import (
 	"context"
@@ -12,15 +12,19 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/i18n"
+	"github.com/Balrog57/DiskCount/internal/notifier"
+	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
@@ -104,12 +108,12 @@ func (s *Server) setTheme(w http.ResponseWriter, r *http.Request) {
 }
 
 type Server struct {
-	db              *db.DB
-	scanner         *scanner.Scanner
-	cfg             *config.Config
-	sourceNames     []string
-	telegramRunning bool
-	startedAt       time.Time
+	db                *db.DB
+	scanner           *scanner.Scanner
+	cfg               *config.Config
+	sourceNames       []string
+	startedAt         time.Time
+	discordConfigured atomic.Bool
 }
 
 type configRow struct {
@@ -117,27 +121,18 @@ type configRow struct {
 	Value string
 }
 
-type alertRow struct {
-	Alert db.Alert
-	Owner string
-}
-
 type appStatus struct {
-	TelegramRunning bool
-	ConfigComplete  bool
-	SourceCount     int
+	DiscordConfigured bool
+	SourceCount       int
 }
 
-func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []string, telegramRunning bool) *Server {
+func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []string) *Server {
 	sort.Strings(sources)
-	return &Server{
-		db:              dbase,
-		scanner:         scan,
-		cfg:             cfg,
-		sourceNames:     sources,
-		telegramRunning: telegramRunning,
-		startedAt:       time.Now().UTC(),
+	s := &Server{
+		db: dbase, scanner: scan, cfg: cfg, sourceNames: sources, startedAt: time.Now().UTC(),
 	}
+	s.discordConfigured.Store(cfg != nil && cfg.DiscordBotToken != "" && cfg.DiscordChannelID != "")
+	return s
 }
 
 func (s *Server) withAuth(next http.Handler) http.Handler {
@@ -283,7 +278,7 @@ func (s *Server) handler() http.Handler {
 		case "/feed.xml", "/feed":
 			s.feed(w, r)
 			return
-			}
+		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
 }
@@ -298,13 +293,13 @@ func (s *Server) routes() http.Handler {
 	muxAdmin.HandleFunc("/products", s.products)
 	muxAdmin.HandleFunc("/product", s.productDetail)
 	muxAdmin.HandleFunc("/alerts", s.alerts)
+	muxAdmin.HandleFunc("/alerts/add", s.addAlert)
 	muxAdmin.HandleFunc("/alerts/toggle", s.toggleAlert)
 	muxAdmin.HandleFunc("/alerts/delete", s.deleteAlert)
+	muxAdmin.HandleFunc("/discord", s.discordSettings)
+	muxAdmin.HandleFunc("/discord/save", s.saveDiscordSettings)
 	muxAdmin.HandleFunc("/config", s.config)
 	muxAdmin.HandleFunc("/config/save", s.saveConfig)
-	muxAdmin.HandleFunc("/users", s.users)
-	muxAdmin.HandleFunc("/users/add", s.addUser)
-	muxAdmin.HandleFunc("/users/toggle", s.toggleUser)
 	muxAdmin.HandleFunc("/metrics/dashboard", s.metricsDashboard)
 	muxAdmin.HandleFunc("/api/metrics", s.apiMetrics)
 	muxAdmin.HandleFunc("/api/sources/breaker/reset", s.apiResetBreaker)
@@ -389,9 +384,8 @@ func (s *Server) base(title, active string) map[string]any {
 		"T":          func(key string) string { return i18n.T(key, i18n.Default) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
-			TelegramRunning: s.telegramRunning,
-			ConfigComplete:  s.cfg != nil && s.cfg.TelegramBotToken != "",
-			SourceCount:     len(s.sourceNames),
+			DiscordConfigured: s.discordConfigured.Load(),
+			SourceCount:       len(s.sourceNames),
 		},
 	}
 }
@@ -414,9 +408,8 @@ func (s *Server) baseWithRequest(r *http.Request, title, active string) map[stri
 		"T":          func(key string) string { return i18n.T(key, loc) },
 		"KnownLangs": i18n.KnownLocales(),
 		"Status": appStatus{
-			TelegramRunning: s.telegramRunning,
-			ConfigComplete:  s.cfg != nil && s.cfg.TelegramBotToken != "",
-			SourceCount:     len(s.sourceNames),
+			DiscordConfigured: s.discordConfigured.Load(),
+			SourceCount:       len(s.sourceNames),
 		},
 	}
 }
@@ -458,10 +451,13 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := s.db.Stats(r.Context())
+	notifications, notificationsErr := s.db.RecentNotifications(r.Context(), 20)
 	loc := s.localeForRequest(nil, r)
 	data := s.baseWithRequest(r, i18n.T("web.nav.dashboard", loc), "stats")
 	data["Stats"] = st
 	data["StatsError"] = err
+	data["Notifications"] = notifications
+	data["NotificationsError"] = notificationsErr
 	data["Sources"] = s.sourceNames
 	data["LastReport"] = lastReport(s.scanner)
 	data["StartedAt"] = s.startedAt
@@ -546,11 +542,33 @@ func (s *Server) products(w http.ResponseWriter, r *http.Request) {
 	data := s.baseWithRequest(r, "Produits", "products")
 	data["Prices"] = filtered
 	data["Sparklines"] = sparklines
-	data["Sparkline"] = func(points []db.SparklinePoint) SparklineResult { return computeSparklinePoints(points) }
 	data["Error"] = err
 	data["Sources"] = uniqueSources(prices)
+	brands, categories, interfaces, recordings := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, p := range prices {
+		if p.Brand != nil {
+			brands[*p.Brand] = true
+		}
+		if p.DriveCategory != nil {
+			categories[*p.DriveCategory] = true
+		}
+		if p.RecordingMethod != nil {
+			recordings[*p.RecordingMethod] = true
+		}
+		for _, iface := range p.Interfaces {
+			interfaces[iface] = true
+		}
+	}
+	data["Brands"], data["Categories"] = sortedSet(brands), sortedSet(categories)
+	data["Interfaces"], data["Recordings"] = sortedSet(interfaces), sortedSet(recordings)
 	data["SelectedSource"] = r.URL.Query().Get("source")
 	data["SelectedMedia"] = r.URL.Query().Get("media")
+	data["SelectedCondition"] = r.URL.Query().Get("condition")
+	data["SelectedBrand"] = r.URL.Query().Get("brand")
+	data["SelectedCategory"] = r.URL.Query().Get("category")
+	data["SelectedInterface"] = r.URL.Query().Get("interface")
+	data["SelectedRecording"] = r.URL.Query().Get("recording")
+	data["Query"] = r.URL.Query().Get("q")
 	data["MinTB"] = r.URL.Query().Get("min_tb")
 	data["MaxTB"] = r.URL.Query().Get("max_tb")
 	data["MaxPrice"] = r.URL.Query().Get("max_eur_tb")
@@ -683,8 +701,8 @@ func computeSparklinePoints(points []db.SparklinePoint) SparklineResult {
 	}
 
 	const (
-		w = 80.0
-		h = 24.0
+		w   = 80.0
+		h   = 24.0
 		pad = 2.0
 	)
 	minP, maxP := prices[0], prices[0]
@@ -779,24 +797,94 @@ func xmlEscape(s string) string {
 
 func (s *Server) alerts(w http.ResponseWriter, r *http.Request) {
 	alerts, err := s.db.ListAlerts(r.Context(), false)
-	users, userErr := s.db.ListAuthorizedUsers(r.Context(), true)
-	owners := make(map[int64]string, len(users))
-	for _, u := range users {
-		owners[u.TelegramUserID] = u.Label
-	}
-	rows := make([]alertRow, 0, len(alerts))
-	for _, a := range alerts {
-		owner := owners[a.OwnerUserID]
-		if owner == "" {
-			owner = fmt.Sprintf("Utilisateur %d", a.OwnerUserID)
-		}
-		rows = append(rows, alertRow{Alert: a, Owner: owner})
-	}
 	data := s.baseWithRequest(r, "Alertes", "alerts")
-	data["Alerts"] = rows
-	data["Error"] = firstErr(err, userErr)
+	data["Alerts"] = alerts
+	data["Sources"] = s.sourceNames
+	data["CapacityPresets"] = rules.CapacityPresets
+	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
 	render(w, alertsTpl, data)
+}
+
+func (s *Server) addAlert(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(r.Form.Get("name"))
+	if name == "" {
+		http.Error(w, "nom requis", http.StatusBadRequest)
+		return
+	}
+	draft, err := alertDraftFromForm(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := s.db.CreateAlert(r.Context(), name, draft); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/alerts?saved=1", http.StatusSeeOther)
+}
+
+func alertDraftFromForm(r *http.Request) (db.AlertDraft, error) {
+	d := db.AlertDraft{
+		CapacityPresets: cleanValues(r.Form["capacity"]),
+		Conditions:      cleanValues(r.Form["condition"]),
+		MediaTypes:      cleanValues(r.Form["media"]),
+		Sources:         cleanValues(r.Form["source"]),
+		Keywords:        splitList(r.Form.Get("keywords")),
+		ExcludeKeywords: splitList(r.Form.Get("exclude_keywords")),
+		MinDiscountPct:  5,
+		CooldownHours:   24,
+		DiscordEnabled:  r.Form.Get("discord_enabled") == "1",
+	}
+	for _, preset := range d.CapacityPresets {
+		if _, ok := rules.CapacityPresets[preset]; !ok {
+			return d, fmt.Errorf("capacite inconnue: %s", preset)
+		}
+	}
+	if raw := strings.TrimSpace(r.Form.Get("max_price_per_tb")); raw != "" {
+		v, err := strconv.ParseFloat(strings.ReplaceAll(raw, ",", "."), 64)
+		if err != nil || v <= 0 {
+			return d, fmt.Errorf("prix maximum invalide")
+		}
+		d.MaxPricePerTB = &v
+	}
+	if raw := strings.TrimSpace(r.Form.Get("min_discount_pct")); raw != "" {
+		v, err := strconv.ParseFloat(strings.ReplaceAll(raw, ",", "."), 64)
+		if err != nil || v < 0 || v > 100 {
+			return d, fmt.Errorf("remise minimale invalide")
+		}
+		d.MinDiscountPct = v
+	}
+	if raw := strings.TrimSpace(r.Form.Get("cooldown_hours")); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 0 {
+			return d, fmt.Errorf("delai invalide")
+		}
+		d.CooldownHours = v
+	}
+	return d, nil
+}
+
+func cleanValues(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func splitList(value string) []string {
+	return cleanValues(strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' }))
 }
 
 func (s *Server) toggleAlert(w http.ResponseWriter, r *http.Request) {
@@ -808,13 +896,13 @@ func (s *Server) toggleAlert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ownerID, alertID, err := alertIDs(r)
+	alertID, err := alertID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	enabled := r.Form.Get("enabled") == "1"
-	if err := s.db.SetAlertEnabled(r.Context(), ownerID, alertID, enabled); err != nil {
+	if err := s.db.SetAlertEnabled(r.Context(), alertID, enabled); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -830,7 +918,7 @@ func (s *Server) deleteAlert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	ownerID, alertID, err := alertIDs(r)
+	alertID, err := alertID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -839,7 +927,7 @@ func (s *Server) deleteAlert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "confirmation required", http.StatusBadRequest)
 		return
 	}
-	if err := s.db.DeleteAlert(r.Context(), ownerID, alertID); err != nil {
+	if err := s.db.DeleteAlert(r.Context(), alertID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -854,13 +942,16 @@ func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := make([]configRow, 0, len(config.AppSettings))
 	for _, meta := range config.AppSettings {
+		if isDiscordSetting(meta.Key) {
+			continue
+		}
 		rows = append(rows, configRow{Meta: meta, Value: effective[meta.Key]})
 	}
 	data := s.baseWithRequest(r, "Configuration", "config")
 	data["Rows"] = rows
 	data["Error"] = err
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
-	data["RestartMsg"] = "Les changements Telegram, sources et scanner prennent effet apres redemarrage."
+	data["RestartMsg"] = "Les changements de sources et du scanner prennent effet après redémarrage."
 	render(w, configTpl, data)
 }
 
@@ -880,6 +971,9 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	values := make(map[string]string)
 	for _, meta := range config.AppSettings {
+		if isDiscordSetting(meta.Key) {
+			continue
+		}
 		if meta.Secret && r.Form.Get("replace_"+meta.Key) != "1" {
 			values[meta.Key] = existing[meta.Key]
 			continue
@@ -893,16 +987,21 @@ func (s *Server) saveConfig(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/config?saved=1", http.StatusSeeOther)
 }
 
-func (s *Server) users(w http.ResponseWriter, r *http.Request) {
-	users, err := s.db.ListAuthorizedUsers(r.Context(), true)
-	data := s.baseWithRequest(r, "Utilisateurs", "users")
-	data["Users"] = users
-	data["Error"] = err
+func isDiscordSetting(key string) bool {
+	return key == "DISCORD_BOT_TOKEN" || key == "DISCORD_CHANNEL_ID"
+}
+
+func (s *Server) discordSettings(w http.ResponseWriter, r *http.Request) {
+	values, err := s.db.ListAppConfig(r.Context())
+	data := s.baseWithRequest(r, "Discord", "discord")
+	data["ChannelID"] = values["DISCORD_CHANNEL_ID"]
+	data["TokenConfigured"] = values["DISCORD_BOT_TOKEN"] != ""
 	data["Saved"] = r.URL.Query().Get("saved") == "1"
-	render(w, usersTpl, data)
+	data["Error"] = err
+	render(w, discordTpl, data)
 }
 
-func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
+func (s *Server) saveDiscordSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -911,39 +1010,39 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	id, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("telegram_user_id")), 10, 64)
-	if err != nil || id == 0 {
-		http.Error(w, "telegram_user_id invalide", http.StatusBadRequest)
-		return
-	}
-	label := strings.TrimSpace(r.Form.Get("label"))
-	if err := s.db.UpsertAuthorizedUser(r.Context(), id, label, true); err != nil {
+	existing, err := s.db.ListAppConfig(r.Context())
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/users?saved=1", http.StatusSeeOther)
-}
-
-func (s *Server) toggleUser(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	token := existing["DISCORD_BOT_TOKEN"]
+	if token == "" || r.Form.Get("replace_token") == "1" {
+		token = strings.TrimSpace(r.Form.Get("DISCORD_BOT_TOKEN"))
+	}
+	channelID := strings.TrimSpace(r.Form.Get("DISCORD_CHANNEL_ID"))
+	if (token == "") != (channelID == "") {
+		http.Error(w, "le token et l'identifiant du salon Discord doivent être configurés ensemble", http.StatusBadRequest)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if channelID != "" {
+		if _, err := strconv.ParseUint(channelID, 10, 64); err != nil {
+			http.Error(w, "l'identifiant du salon Discord doit être numérique", http.StatusBadRequest)
+			return
+		}
 	}
-	id, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("telegram_user_id")), 10, 64)
-	if err != nil || id == 0 {
-		http.Error(w, "telegram_user_id invalide", http.StatusBadRequest)
-		return
+	values := map[string]string{
+		"DISCORD_BOT_TOKEN":  token,
+		"DISCORD_CHANNEL_ID": channelID,
 	}
-	enabled := r.Form.Get("enabled") == "1"
-	if err := s.db.SetAuthorizedUserEnabled(r.Context(), id, enabled); err != nil {
+	if err := s.db.SetAppConfig(r.Context(), values); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	http.Redirect(w, r, "/users?saved=1", http.StatusSeeOther)
+	s.discordConfigured.Store(token != "" && channelID != "")
+	if s.scanner != nil {
+		s.scanner.SetNotifier(notifier.NewDiscord(token, channelID))
+	}
+	http.Redirect(w, r, "/discord?saved=1", http.StatusSeeOther)
 }
 
 func (r configRow) DisplayValue() string {
@@ -961,24 +1060,24 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 	report := s.scanner.LastReport()
 	out := map[string]any{
 		"started_at":  s.startedAt,
-		"telegram":    s.telegramRunning,
+		"discord":     s.discordConfigured.Load(),
 		"sources":     s.sourceNames,
 		"breakers":    s.scanner.BreakerSnapshot(),
 		"last_report": nil,
 	}
 	if report != nil {
 		out["last_report"] = map[string]any{
-			"started_at":   report.StartedAt,
-			"finished_at":  report.FinishedAt,
-			"fetched":      report.Fetched,
-			"accepted":     report.Accepted,
-			"rejected":     report.Rejected,
-			"matched":      report.Matched,
-			"notified":     report.Notified,
-			"dry_run":      report.DryRun,
-			"error_count":  len(report.Errors),
-			"breaker_skips": report.BreakerSkips,
-			"sources":      report.SourceMetrics,
+			"started_at":      report.StartedAt,
+			"finished_at":     report.FinishedAt,
+			"fetched":         report.Fetched,
+			"accepted":        report.Accepted,
+			"rejected":        report.Rejected,
+			"matched":         report.Matched,
+			"notified":        report.Notified,
+			"dry_run":         report.DryRun,
+			"error_count":     len(report.Errors),
+			"breaker_skips":   report.BreakerSkips,
+			"sources":         report.SourceMetrics,
 			"source_warnings": report.SourceWarnings,
 		}
 	}
@@ -1001,12 +1100,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		lastScan = report.FinishedAt.Format(time.RFC3339)
 	}
 	out := map[string]any{
-		"status":         "ok",
-		"db":             dbStatus,
-		"telegram":       s.telegramRunning,
-		"sources":        len(s.sourceNames),
-		"last_scan":      lastScan,
-		"breakers":       s.scanner.BreakerSnapshot(),
+		"status":    "ok",
+		"db":        dbStatus,
+		"discord":   s.discordConfigured.Load(),
+		"sources":   len(s.sourceNames),
+		"last_scan": lastScan,
+		"breakers":  s.scanner.BreakerSnapshot(),
 	}
 	if !healthy {
 		out["status"] = "degraded"
@@ -1052,10 +1151,10 @@ func (s *Server) apiSourcesHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"total":          len(entries),
-		"flagged":        flagged,
-		"threshold":      s.scanner.ZeroStreakThreshold(),
-		"sources":        entries,
+		"total":     len(entries),
+		"flagged":   flagged,
+		"threshold": s.scanner.ZeroStreakThreshold(),
+		"sources":   entries,
 	})
 }
 
@@ -1132,30 +1231,50 @@ func lastReport(scan *scanner.Scanner) *scanner.ScanReport {
 	return scan.LastReport()
 }
 
-func alertIDs(r *http.Request) (int64, int64, error) {
-	ownerID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("owner_user_id")), 10, 64)
-	if err != nil || ownerID == 0 {
-		return 0, 0, fmt.Errorf("owner_user_id invalide")
-	}
+func alertID(r *http.Request) (int64, error) {
 	alertID, err := strconv.ParseInt(strings.TrimSpace(r.Form.Get("alert_id")), 10, 64)
 	if err != nil || alertID == 0 {
-		return 0, 0, fmt.Errorf("alert_id invalide")
+		return 0, fmt.Errorf("alert_id invalide")
 	}
-	return ownerID, alertID, nil
+	return alertID, nil
 }
 
 func filterPrices(prices []db.CurrentPrice, r *http.Request) []db.CurrentPrice {
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	source := strings.TrimSpace(r.URL.Query().Get("source"))
 	media := strings.TrimSpace(r.URL.Query().Get("media"))
+	condition := strings.TrimSpace(r.URL.Query().Get("condition"))
+	brand := strings.TrimSpace(r.URL.Query().Get("brand"))
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	iface := strings.TrimSpace(r.URL.Query().Get("interface"))
+	recording := strings.TrimSpace(r.URL.Query().Get("recording"))
 	minTB, hasMin := parseOptionalFloat(r.URL.Query().Get("min_tb"))
 	maxTB, hasMax := parseOptionalFloat(r.URL.Query().Get("max_tb"))
 	maxPrice, hasMaxPrice := parseOptionalFloat(r.URL.Query().Get("max_eur_tb"))
 	out := make([]db.CurrentPrice, 0, len(prices))
 	for _, p := range prices {
+		if query != "" && !strings.Contains(strings.ToLower(p.Title), query) {
+			continue
+		}
 		if source != "" && p.Source != source {
 			continue
 		}
 		if media != "" && (p.MediaType == nil || *p.MediaType != media) {
+			continue
+		}
+		if condition != "" && (p.Condition == nil || *p.Condition != condition) {
+			continue
+		}
+		if brand != "" && (p.Brand == nil || *p.Brand != brand) {
+			continue
+		}
+		if category != "" && (p.DriveCategory == nil || *p.DriveCategory != category) {
+			continue
+		}
+		if recording != "" && (p.RecordingMethod == nil || *p.RecordingMethod != recording) {
+			continue
+		}
+		if iface != "" && !slices.Contains(p.Interfaces, iface) {
 			continue
 		}
 		if hasMin && p.CapacityTB < minTB {
@@ -1172,6 +1291,15 @@ func filterPrices(prices []db.CurrentPrice, r *http.Request) []db.CurrentPrice {
 	if len(out) > 100 {
 		return out[:100]
 	}
+	return out
+}
+
+func sortedSet(values map[string]bool) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1262,25 +1390,6 @@ var tmplFuncs = template.FuncMap{
 		}
 		return "warn"
 	},
-	// T is the i18n helper exposed to templates. When the caller did
-	// not populate .T (e.g. some unit tests that render a body in
-	// isolation) we fall back to a passthrough that returns the key
-	// itself, so `{{call .T "any.key"}}` still renders something
-	// instead of panicking.
-	"call": func(f any, args ...any) (string, error) {
-		if fn, ok := f.(func(string) string); ok {
-			if len(args) == 0 {
-				return "", nil
-			}
-			if s, ok := args[0].(string); ok {
-				return fn(s), nil
-			}
-		}
-		return "", nil
-	},
-	// Sparkline computes the 7-day mini-chart for a single product
-	// row. Templates call it as `{{call .Sparkline $points}}` and
-	// receive a SparklineResult with Coords/Trend fields.
 	"Sparkline": func(points []db.SparklinePoint) SparklineResult {
 		return computeSparklinePoints(points)
 	},
@@ -1356,11 +1465,11 @@ const layoutTpl = `<!doctype html>
   })();
 </script>
 <style>
-:root[data-theme=light]{color-scheme:light;--bg:#f3f6f8;--panel:#fff;--ink:#15202b;--muted:#667085;--line:#d8e0e7;--line2:#edf1f4;--nav:#102532;--nav2:#183847;--brand:#167c80;--brand2:#255f78;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eef7f7}
-:root[data-theme=dark]{color-scheme:dark;--bg:#0e1620;--panel:#15202b;--ink:#e7eef3;--muted:#8b9aa6;--line:#1f2e3a;--line2:#1a2731;--nav:#08111a;--nav2:#0f1d28;--brand:#3aa6a8;--brand2:#5fbcc2;--good:#4ec78a;--warn:#e0a558;--bad:#e87972;--soft:#152736}
+:root[data-theme=light]{color-scheme:light;--bg:#f2f7ff;--panel:#fff;--ink:#0c1b33;--muted:#60708c;--line:#d9e4f5;--line2:#edf3fb;--nav:#071a38;--nav2:#103e78;--brand:#1677ff;--brand2:#0758c7;--good:#188052;--warn:#a15c00;--bad:#b42318;--soft:#eaf3ff}
+:root[data-theme=dark]{color-scheme:dark;--bg:#030b17;--panel:#0c192b;--ink:#edf5ff;--muted:#91a4bf;--line:#1b304b;--line2:#13253c;--nav:#061326;--nav2:#0b3568;--brand:#3b9cff;--brand2:#1879dc;--good:#4ec78a;--warn:#e0a558;--bad:#e87972;--soft:#0b2748}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Segoe UI,Roboto,Arial,sans-serif}a{color:inherit}
-.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px;background:#7ba7b4}.active .dot{background:#59d7c9}.shell{min-width:0}.topbar{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:#fff;color:var(--muted);font-size:12px}.badge.good{border-color:#b7dec9;background:#edf9f2;color:var(--good)}.badge.warn{border-color:#ffd99d;background:#fff8eb;color:var(--warn)}.badge.bad{border-color:#f5b5b0;background:#fff1f0;color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px}.card{padding:16px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.panel-body{padding:16px}.table-wrap{overflow:auto}table{width:100%;border-colla
-.lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#59d7c9;border-color:#59d7c9;color:#0a1a21;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#1c3a45}
+.app{min-height:100vh;display:grid;grid-template-columns:248px 1fr}.sidebar{position:sticky;top:0;height:100vh;background:var(--nav);color:#f8fbfc;padding:18px 14px;display:flex;flex-direction:column;gap:22px}.brand{font-size:20px;font-weight:800;letter-spacing:.2px}.nav{display:grid;gap:6px}.nav a{display:flex;align-items:center;gap:10px;text-decoration:none;color:#d5e3e8;padding:10px 12px;border-radius:8px;transition:background-color .15s ease,color .15s ease}.nav a.active,.nav a:hover{background:var(--nav2);color:#fff}.dot{width:8px;height:8px;border-radius:99px}.shell{min-width:0}.topbar{min-height:64px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:10px 28px;position:sticky;top:0;z-index:2}.topbar h1{font-size:20px;margin:0}.status{display:flex;gap:8px;flex-wrap:wrap}.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;background:var(--panel);color:var(--muted);font-size:12px}.badge.good{color:var(--good)}.badge.warn{color:var(--warn)}.badge.bad{color:var(--bad)}main{max-width:1280px;margin:0 auto;padding:24px 28px 44px}.section{margin-top:22px}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card,.panel{background:var(--panel);border:1px solid var(--line)}.card{padding:18px}.label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}.value{font-size:30px;font-weight:800;margin-top:4px}.hint{color:var(--muted);font-size:13px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line2)}.panel-head h2{font-size:16px;margin:0}.table-wrap{overflow:auto}.config-row{display:grid;grid-template-columns:1fr 2fr auto;gap:16px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--line2)}.stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:18px}.stat{padding:14px;border-radius:10px;background:var(--soft)}.chart-wrap{padding:18px}.price-chart{width:100%;height:220px}.range-links{display:flex;gap:8px}.range-links a{padding:5px 9px;border-radius:999px;text-decoration:none}.range-links a.active{background:var(--brand);color:#fff}
+.lang-switch{margin-top:auto;display:flex;gap:6px;align-items:center;color:#a9c0c8;font-size:12px}.lang-switch a,.lang-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer;text-decoration:none}.lang-switch a.active,.lang-switch button.active{background:#3b9cff;border-color:#3b9cff;color:#061326;font-weight:600}.lang-switch a:hover,.lang-switch button:hover{background:#0b3568}
 @media (max-width:960px){.app{grid-template-columns:1fr}.sidebar{position:relative;height:auto;gap:12px}.nav{grid-template-columns:repeat(3,minmax(0,1fr))}.topbar{position:relative;height:auto;align-items:flex-start;gap:10px;flex-direction:column;padding:16px}main{padding:16px}.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.filters,.config-row{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}.mobile-title{display:block}}
 @media (max-width:560px){.nav{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.status{display:grid;width:100%}.truncate{max-width:240px}}
 .sparkline{width:80px;height:24px;display:block}
@@ -1375,8 +1484,15 @@ const layoutTpl = `<!doctype html>
 .theme-switch{display:inline-flex;gap:4px;margin-top:6px;width:100%}
 .theme-switch a,.theme-switch button{background:transparent;border:1px solid #2a4a55;color:#d5e3e8;border-radius:6px;padding:4px 6px;font-size:11px;cursor:pointer;flex:1;text-decoration:none;text-align:center}
 :root[data-theme=light] .theme-switch a,.theme-switch button{color:var(--muted);border-color:var(--line)}
-.theme-switch a.active,.theme-switch button.active{background:#59d7c9;border-color:#59d7c9;color:#0a1a21;font-weight:600}
+.theme-switch a.active,.theme-switch button.active{background:#3b9cff;border-color:#3b9cff;color:#061326;font-weight:600}
 :root[data-theme=light] .theme-switch a.active,.theme-switch button.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+.sidebar{background:linear-gradient(180deg,#071a38,#041024);box-shadow:12px 0 40px rgba(0,35,85,.16)}
+.brand{font-size:24px}.brand:before{content:"◉";color:var(--brand);margin-right:10px}.dot{background:#496787}.active .dot{background:#63b3ff;box-shadow:0 0 12px #3b9cff}
+.topbar{backdrop-filter:blur(16px);background:color-mix(in srgb,var(--panel) 88%,transparent)}main{max-width:1440px}.card,.panel{border-radius:14px;box-shadow:0 12px 35px rgba(0,29,72,.08)}.panel-head{padding:18px 20px}.panel-body{padding:20px}
+table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:13px 16px;border-bottom:1px solid var(--line2);vertical-align:middle}th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em}tbody tr:hover{background:var(--soft)}
+input,select{width:100%;min-height:42px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--ink)}input:focus,select:focus{outline:2px solid var(--brand);outline-offset:1px}.filters,.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:end}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.inline{display:inline;margin:0}button,.button{display:inline-flex;align-items:center;justify-content:center;min-height:38px;border:0;border-radius:9px;padding:9px 14px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none;cursor:pointer}button:hover,.button:hover{background:var(--brand2)}button.secondary{background:var(--soft);color:var(--brand);border:1px solid var(--line)}button.danger{background:var(--bad)}.notice,.warnbox{border-radius:10px;padding:12px 14px;margin-bottom:16px}.notice{background:rgba(59,156,255,.12);border:1px solid rgba(59,156,255,.35);color:var(--brand)}.warnbox{background:rgba(224,165,88,.1);border:1px solid rgba(224,165,88,.35)}.source-list,.check-grid{display:flex;gap:9px;flex-wrap:wrap}.check-chip{display:flex;gap:7px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:8px 11px;background:var(--soft)}.check-chip input{width:auto;min-height:auto}.alert-form{display:grid;gap:18px}.alert-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.offer-link{color:var(--brand);font-weight:700;text-decoration:none;white-space:nowrap}.empty{padding:24px;text-align:center;color:var(--muted)}
+@media (max-width:960px){.alert-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.alert-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -1388,9 +1504,9 @@ const layoutTpl = `<!doctype html>
 <a href="/quality" class="{{if eq .Active "quality"}}active{{end}}" {{if eq .Active "quality"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.quality"}}</a>
 <a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.products"}}</a>
 <a href="/alerts" class="{{if eq .Active "alerts"}}active{{end}}" {{if eq .Active "alerts"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.alerts"}}</a>
+<a href="/discord" class="{{if eq .Active "discord"}}active{{end}}" {{if eq .Active "discord"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>Discord</a>
 <a href="/config" class="{{if eq .Active "config"}}active{{end}}" {{if eq .Active "config"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.config"}}</a>
 <a href="/metrics/dashboard" class="{{if eq .Active "metrics"}}active{{end}}" {{if eq .Active "metrics"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.metrics"}}</a>
-<a href="/users" class="{{if eq .Active "users"}}active{{end}}" {{if eq .Active "users"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.users"}}</a>
 </nav>
 <div class="lang-switch">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
 <div class="theme-switch"><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "light"}}class="active"{{end}}>☀ Light</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "dark"}}class="active"{{end}}>🌙 Dark</button></form><form method="post" action="/theme" style="display:inline;margin:0;width:100%"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Theme "auto"}}class="active"{{end}}>🖥 Auto</button></form></div>
@@ -1399,8 +1515,7 @@ const layoutTpl = `<!doctype html>
 <header class="topbar">
 <h1>{{.Title}}</h1>
 <div class="status">
-<span class="badge {{stateClass .Status.TelegramRunning}}">Telegram {{if .Status.TelegramRunning}}actif{{else}}inactif{{end}}</span>
-<span class="badge {{stateClass .Status.ConfigComplete}}">Config {{if .Status.ConfigComplete}}complete{{else}}incomplete{{end}}</span>
+<span class="badge {{stateClass .Status.DiscordConfigured}}">Discord {{if .Status.DiscordConfigured}}configuré{{else}}non configuré{{end}}</span>
 <span class="badge">{{.Status.SourceCount}} sources</span>
 <form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)">{{call .T "web.nav.logout"}}</button></form>
 </div>
@@ -1451,8 +1566,8 @@ const statsTpl = `{{define "body"}}
 </div>
 <div class="section grid">
 <div class="card"><div class="label">Alertes inactives</div><div class="value">{{if .Stats}}{{.Stats.InactiveAlerts}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Utilisateurs actifs</div><div class="value">{{if .Stats}}{{.Stats.AuthorizedEnabled}}{{else}}0{{end}}</div></div>
-<div class="card"><div class="label">Utilisateurs inactifs</div><div class="value">{{if .Stats}}{{.Stats.AuthorizedDisabled}}{{else}}0{{end}}</div></div>
+<div class="card"><div class="label">Discord</div><div class="value" style="font-size:20px">{{if .Status.DiscordConfigured}}Configuré{{else}}Optionnel{{end}}</div></div>
+<div class="card"><div class="label">Sources</div><div class="value">{{.Status.SourceCount}}</div></div>
 <div class="card"><div class="label">Rejets donnees</div><div class="value">{{if .Stats}}{{.Stats.RejectedDeals}}{{else}}0{{end}}</div></div>
 </div>
 <section class="section panel"><div class="panel-head"><h2>Sources actives</h2></div><div class="panel-body"><div class="source-list">{{range .Sources}}<span class="badge">{{.}}</span>{{else}}<span class="muted">Aucune source active</span>{{end}}</div></div></section>
@@ -1463,7 +1578,11 @@ const statsTpl = `{{define "body"}}
 {{if .LastReport}}<tr><th>Dernier scan</th><td>{{tsv .LastReport.FinishedAt}} - fetched={{.LastReport.Fetched}}, accepted={{.LastReport.Accepted}}, rejected={{.LastReport.Rejected}}, matched={{.LastReport.Matched}}, notified={{.LastReport.Notified}}, errors={{len .LastReport.Errors}}</td></tr>{{else}}<tr><th>Dernier scan</th><td>-</td></tr>{{end}}
 {{if .NextCheck}}<tr><th>Prochain scan</th><td>{{tsv .NextCheck}} - dans {{durationHuman .NextCheckIn}}</td></tr>{{end}}
 </tbody></table></div></section>
-{{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>âš  Sources en alerte</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Scans vides consecutifs</th><th>Message</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
+{{if .LastReport}}{{if gt (len .LastReport.SourceWarnings) 0}}<section class="panel warnbox"><div class="panel-head"><h2>⚠ Sources en alerte</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Scans vides consecutifs</th><th>Message</th></tr></thead><tbody>{{range .LastReport.SourceWarnings}}<tr><td><span class="badge">{{.Name}}</span></td><td>{{.ConsecutiveZeros}}</td><td>{{.Message}}</td></tr>{{end}}</tbody></table></div></section>{{end}}{{end}}
+{{if .NotificationsError}}<div class="warnbox">Erreur historique des alertes: {{.NotificationsError}}</div>{{end}}
+<section class="section panel"><div class="panel-head"><h2>Dernières alertes déclenchées</h2></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Alerte</th><th>Produit</th><th>Prix</th><th>€/To</th><th>Raison</th><th>Offre</th></tr></thead><tbody>
+{{range .Notifications}}<tr><td>{{tsv .SentAt}}</td><td>{{.AlertName}}</td><td>{{.Title}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Reason}}</td><td><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir ↗</a></td></tr>{{else}}<tr><td colspan="7" class="empty">Aucune alerte déclenchée.</td></tr>{{end}}
+</tbody></table></div></section>
 {{end}}`
 
 const qualityTpl = `{{define "body"}}
@@ -1480,15 +1599,21 @@ const productsTpl = `{{define "body"}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><h2>Filtres</h2></div><div class="panel-body">
 <form method="get" action="/products" class="filters">
+<div><label for="filter_q">Recherche</label><input id="filter_q" name="q" value="{{.Query}}" placeholder="Exos, IronWolf, NVMe..."></div>
 <div><label for="filter_source">Source</label><select id="filter_source" name="source"><option value="">Toutes</option>{{range .Sources}}<option value="{{.}}" {{if eq $.SelectedSource .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_media">Media</label><select id="filter_media" name="media"><option value="">Tous</option><option value="rotational" {{if eq .SelectedMedia "rotational"}}selected{{end}}>HDD</option><option value="solid_state" {{if eq .SelectedMedia "solid_state"}}selected{{end}}>SSD</option></select></div>
+<div><label for="filter_condition">État</label><select id="filter_condition" name="condition"><option value="">Tous</option><option value="new" {{if eq .SelectedCondition "new"}}selected{{end}}>Neuf</option><option value="used" {{if eq .SelectedCondition "used"}}selected{{end}}>Occasion</option></select></div>
+<div><label for="filter_brand">Marque</label><select id="filter_brand" name="brand"><option value="">Toutes</option>{{range .Brands}}<option value="{{.}}" {{if eq $.SelectedBrand .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_category">Usage</label><select id="filter_category" name="category"><option value="">Tous</option>{{range .Categories}}<option value="{{.}}" {{if eq $.SelectedCategory .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_interface">Interface</label><select id="filter_interface" name="interface"><option value="">Toutes</option>{{range .Interfaces}}<option value="{{.}}" {{if eq $.SelectedInterface .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div><label for="filter_recording">Enregistrement</label><select id="filter_recording" name="recording"><option value="">Tous</option>{{range .Recordings}}<option value="{{.}}" {{if eq $.SelectedRecording .}}selected{{end}}>{{.}}</option>{{end}}</select></div>
 <div><label for="filter_min_tb">Min To</label><input id="filter_min_tb" name="min_tb" value="{{.MinTB}}" inputmode="decimal"></div>
 <div><label for="filter_max_tb">Max To</label><input id="filter_max_tb" name="max_tb" value="{{.MaxTB}}" inputmode="decimal"></div>
 <div><label for="filter_max_eur_tb">Max EUR/To</label><input id="filter_max_eur_tb" name="max_eur_tb" value="{{.MaxPrice}}" inputmode="decimal"></div>
 <div class="actions"><button type="submit">Filtrer</button><a class="badge" href="/products">Reinitialiser</a></div>
 </form></div></section>
-<section class="section panel"><div class="panel-head"><h2>Meilleures offres recentes</h2><span class="hint">Creation d'alertes uniquement via Telegram.</span></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Source</th><th>Media</th><th>Capacite</th><th>Prix</th><th>EUR/To</th><th>7j</th><th>Observe</th></tr></thead><tbody>
-{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := call .Sparkline $pts}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td>{{.Source}}</td><td>{{ptr .MediaType}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{if $spark.Coords}}<svg class="sparkline" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#188052"{{else if eq $spark.Trend "up"}}stroke="#b42318"{{else}}stroke="#667085"{{end}} points="{{$spark.Coords}}"/></svg>{{else}}<span class="muted">-</span>{{end}}</td><td>{{tsv .ObservedAt}}</td></tr>{{else}}<tr><td colspan="8" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
+<section class="section panel"><div class="panel-head"><div><h2>Meilleures offres récentes</h2><span class="hint">Classées par coût réel au téraoctet.</span></div><a class="button" href="/alerts">Créer une alerte</a></div><div class="table-wrap"><table><thead><tr><th>Produit</th><th>Profil stockage</th><th>Source</th><th>Capacité</th><th>Prix</th><th>€/To</th><th>7j</th><th>Dernier refresh</th><th>Offre</th></tr></thead><tbody>
+{{range .Prices}}{{$pts := index $.Sparklines .ProductID}}{{$spark := Sparkline $pts}}<tr><td class="truncate"><a href="/product?id={{.ProductID}}">{{.Title}}</a></td><td><strong>{{ptr .Brand}}</strong><br><span class="muted">{{ptr .MediaType}}{{if .DriveCategory}} · {{ptr .DriveCategory}}{{end}}{{if .RecordingMethod}} · {{ptr .RecordingMethod}}{{end}}{{if .Interfaces}} · {{csv .Interfaces}}{{end}}</span></td><td>{{.Source}}</td><td>{{cap .CapacityTB}}</td><td>{{price .PriceEUR}} EUR</td><td><strong>{{price .PricePerTB}}</strong></td><td>{{if $spark.Coords}}<svg class="sparkline" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{else}}<span class="muted">-</span>{{end}}</td><td>{{tsv .ObservedAt}}</td><td><a class="offer-link" href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir le site ↗</a></td></tr>{{else}}<tr><td colspan="9" class="empty">Aucun produit ne correspond aux filtres.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
 
@@ -1511,7 +1636,7 @@ const productDetailTpl = `{{define "body"}}
 <section class="panel"><div class="panel-head"><h2>Historique de prix ({{.Days}} jours)</h2><div class="range-links"><a href="/product?id={{.Product.ID}}&days=7" {{if eq .Days 7}}class="active"{{end}}>7j</a> <a href="/product?id={{.Product.ID}}&days=30" {{if eq .Days 30}}class="active"{{end}}>30j</a> <a href="/product?id={{.Product.ID}}&days=90" {{if eq .Days 90}}class="active"{{end}}>90j</a> <a href="/product?id={{.Product.ID}}&days=365" {{if eq .Days 365}}class="active"{{end}}>1an</a></div></div>
 {{if .History}}
 <div class="stats-row"><div class="stat"><span class="label">Min EUR/To</span><span class="value">{{price .MinPT}}</span></div><div class="stat"><span class="label">Moy EUR/To</span><span class="value">{{price .AvgPT}}</span></div><div class="stat"><span class="label">Max EUR/To</span><span class="value">{{price .MaxPT}}</span></div></div>
-<div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none"><polyline fill="none" stroke="#4a9" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de donnees pour un graphique.</p>{{end}}</div>
+<div class="chart-wrap">{{if .ChartPoints}}<svg class="price-chart" viewBox="0 0 800 200" preserveAspectRatio="none"><polyline fill="none" stroke="#3b9cff" stroke-width="2" points="{{.ChartPoints}}"/></svg>{{else}}<p class="empty">Pas assez de donnees pour un graphique.</p>{{end}}</div>
 <div class="table-wrap"><table><thead><tr><th>Date</th><th>Prix</th><th>EUR/To</th><th>Source</th></tr></thead><tbody>
 {{range .History}}<tr><td>{{tsv .ObservedAt}}</td><td>{{price .PriceEUR}} EUR</td><td>{{price .PricePerTB}}</td><td>{{.Source}}</td></tr>{{end}}
 </tbody></table></div>
@@ -1524,11 +1649,19 @@ const productDetailTpl = `{{define "body"}}
 const alertsTpl = `{{define "body"}}
 {{if .Saved}}<div class="notice">Alertes mises a jour.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-<div class="warnbox">Creation et edition detaillee via Telegram. Cette page permet uniquement pause, reprise et suppression.</div>
-<section class="panel"><div class="panel-head"><h2>Alertes existantes</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Proprietaire</th><th>Etat</th><th>Capacites</th><th>Media</th><th>Prix max</th><th>Actions</th></tr></thead><tbody>
-{{range .Alerts}}<tr><td>{{.Alert.Name}}</td><td>{{.Owner}}</td><td>{{if .Alert.Enabled}}<span class="badge good">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}</td><td>{{csv .Alert.CapacityPresets}}</td><td>{{csv .Alert.MediaTypes}}</td><td>{{alertPrice .Alert}}</td><td><div class="actions">
-<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}">{{if .Alert.Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Mettre en pause l'alerte {{.Alert.Name}}">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reprendre l'alerte {{.Alert.Name}}">Reprendre</button>{{end}}</form>
-<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="owner_user_id" value="{{.Alert.OwnerUserID}}"><input type="hidden" name="alert_id" value="{{.Alert.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit" aria-label="Supprimer l'alerte {{.Alert.Name}}">Supprimer</button></form>
+<section class="panel"><div class="panel-head"><div><h2>Créer une alerte</h2><div class="hint">Tous les critères sont gérés ici. Discord reste optionnel pour la diffusion.</div></div></div><div class="panel-body">
+<form method="post" action="/alerts/add" class="alert-form">
+<div class="alert-grid"><div><label for="alert_name">Nom</label><input id="alert_name" name="name" required placeholder="NAS 20 To"></div><div><label for="alert_price">Prix max €/To</label><input id="alert_price" name="max_price_per_tb" inputmode="decimal" placeholder="20"></div><div><label for="alert_discount">Baisse minimale %</label><input id="alert_discount" name="min_discount_pct" type="number" min="0" max="100" step="0.1" value="5"></div><div><label for="alert_cooldown">Délai entre alertes (h)</label><input id="alert_cooldown" name="cooldown_hours" type="number" min="0" value="24"></div><div><label for="alert_keywords">Mots inclus</label><input id="alert_keywords" name="keywords" placeholder="IronWolf, Exos"></div><div><label for="alert_exclude">Mots exclus</label><input id="alert_exclude" name="exclude_keywords" placeholder="reconditionné"></div><div><label class="check-chip"><input type="checkbox" name="discord_enabled" value="1"> Diffuser cette alerte sur Discord</label></div></div>
+<div><div class="label">Support</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="media" value="rotational"> HDD</label><label class="check-chip"><input type="checkbox" name="media" value="solid_state"> SSD</label></div></div>
+<div><div class="label">État</div><div class="check-grid"><label class="check-chip"><input type="checkbox" name="condition" value="new"> Neuf</label><label class="check-chip"><input type="checkbox" name="condition" value="used"> Occasion</label></div></div>
+<div><div class="label">Capacité</div><div class="check-grid">{{range $key, $preset := .CapacityPresets}}<label class="check-chip"><input type="checkbox" name="capacity" value="{{$key}}"> {{$preset.Label}}</label>{{end}}</div></div>
+<div><div class="label">Sources</div><div class="check-grid">{{range .Sources}}<label class="check-chip"><input type="checkbox" name="source" value="{{.}}"> {{.}}</label>{{end}}</div></div>
+<div><button type="submit">Créer l'alerte</button></div></form>
+</div></section>
+<section class="panel"><div class="panel-head"><h2>Alertes existantes</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>État</th><th>Discord</th><th>Capacités</th><th>Media</th><th>Prix max</th><th>Actions</th></tr></thead><tbody>
+{{range .Alerts}}<tr><td>{{.Name}}</td><td>{{if .Enabled}}<span class="badge good">active</span>{{else}}<span class="badge warn">inactive</span>{{end}}</td><td>{{if .DiscordEnabled}}<span class="badge good">coché</span>{{else}}<span class="badge">non</span>{{end}}</td><td>{{csv .CapacityPresets}}</td><td>{{csv .MediaTypes}}</td><td>{{alertPrice .}}</td><td><div class="actions">
+<form class="inline" method="post" action="/alerts/toggle"><input type="hidden" name="alert_id" value="{{.ID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Mettre en pause l'alerte {{.Name}}">Pause</button>{{else}}<input type="hidden" name="enabled" value="1"><button type="submit" aria-label="Reprendre l'alerte {{.Name}}">Reprendre</button>{{end}}</form>
+<form class="inline" method="post" action="/alerts/delete" onsubmit="return confirm('Supprimer cette alerte ?')"><input type="hidden" name="alert_id" value="{{.ID}}"><input type="hidden" name="confirm" value="delete"><button class="danger" type="submit" aria-label="Supprimer l'alerte {{.Name}}">Supprimer</button></form>
 </div></td></tr>{{else}}<tr><td colspan="7" class="empty">Aucune alerte.</td></tr>{{end}}
 </tbody></table></div></section>
 {{end}}`
@@ -1565,11 +1698,13 @@ const metricsTpl = `{{define "body"}}
 </tbody></table></div></section>
 {{end}}`
 
-const usersTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">Utilisateurs mis a jour.</div>{{end}}
+const discordTpl = `{{define "body"}}
+{{if .Saved}}<div class="notice">Configuration Discord sauvegardée et appliquée.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
-<section class="panel"><div class="panel-head"><h2>Ajouter ou reactiver</h2></div><div class="panel-body"><form method="post" action="/users/add" class="form-grid"><div><label for="add_user_id">Identifiant Telegram</label><input id="add_user_id" type="number" name="telegram_user_id" required></div><div><label for="add_user_label">Nom</label><input id="add_user_label" type="text" name="label" required></div><div><button type="submit">Enregistrer</button></div></form></div></section>
-<section class="section panel"><div class="panel-head"><h2>Utilisateurs autorises</h2></div><div class="table-wrap"><table><thead><tr><th>Nom</th><th>Identifiant</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range .Users}}<tr><td>{{.Label}}</td><td>{{.TelegramUserID}}</td><td>{{if .Enabled}}<span class="badge good">actif</span>{{else}}<span class="badge warn">desactive</span>{{end}}</td><td><form class="inline" method="post" action="/users/toggle"><input type="hidden" name="telegram_user_id" value="{{.TelegramUserID}}">{{if .Enabled}}<input type="hidden" name="enabled" value="0"><button class="secondary" type="submit" aria-label="Desactiver l'utilisateur {{.Label}}">Desactiver</button>{{else}}<input type="hidden" name="enabled" value="1"><button class="secondary" type="submit" aria-label="Reactiver l'utilisateur {{.Label}}">Reactiver</button>{{end}}</form></td></tr>{{else}}<tr><td colspan="4" class="empty">Aucun utilisateur.</td></tr>{{end}}
-</tbody></table></div></section>
+<section class="panel"><div class="panel-head"><div><h2>Bot Discord de diffusion</h2><div class="hint">Le bot publie uniquement les alertes créées dans DiskCount dont la case Discord est cochée.</div></div></div><div class="panel-body">
+<form method="post" action="/discord/save" class="alert-form">
+<div class="alert-grid"><div><label for="discord_channel">Identifiant du salon</label><input id="discord_channel" name="DISCORD_CHANNEL_ID" value="{{.ChannelID}}" inputmode="numeric" placeholder="123456789012345678"></div><div><label for="discord_token">Token du bot</label><input id="discord_token" name="DISCORD_BOT_TOKEN" type="password" placeholder="{{if .TokenConfigured}}********{{else}}Token du bot{{end}}" autocomplete="off"></div>{{if .TokenConfigured}}<div><label class="check-chip"><input type="checkbox" name="replace_token" value="1"> Remplacer le token enregistré</label></div>{{end}}</div>
+<div class="warnbox">Permissions minimales du bot dans ce salon : Voir le salon et Envoyer des messages. Aucun message entrant ni commande Discord n'est traité.</div>
+<div><button type="submit">Sauvegarder Discord</button></div></form>
+</div></section>
 {{end}}`

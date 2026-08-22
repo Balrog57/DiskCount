@@ -6,40 +6,32 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
-	"github.com/Balrog57/DiskCount/internal/i18n"
 	"github.com/Balrog57/DiskCount/internal/normalize"
-	"github.com/Balrog57/DiskCount/internal/notifier"
 	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/sources"
 	"github.com/sony/gobreaker"
 )
 
-// Notifier is the subset of notifier.TelegramNotifier that the scanner
-// needs. Defining it here breaks the import cycle that would otherwise
-// exist between scanner and notifier if we used the concrete type, and
-// makes the scanner trivially mockable in tests.
 type Notifier interface {
-	SendDeal(chatID int64, alert *db.Alert, deal domain.Deal, dec domain.NotificationDecision) error
-	SendAdminMessage(chatID int64, text string) error
+	SendDeal(alert *db.Alert, deal domain.Deal, dec domain.NotificationDecision) error
 }
 
 // SourceMetrics captures per-source statistics for the most recent scan.
 type SourceMetrics struct {
-	Name            string
-	FetchDuration   time.Duration
-	HTTPStatusCodes map[int]int
-	RetryCount      int
-	DealsFetched    int
-	BreakerState    string
+	Name             string
+	FetchDuration    time.Duration
+	HTTPStatusCodes  map[int]int
+	RetryCount       int
+	DealsFetched     int
+	BreakerState     string
 	BlockedByKeyword string
-	Error           string
+	Error            string
 }
 
 type ScanReport struct {
@@ -74,14 +66,15 @@ type SourceHealthEntry struct {
 }
 
 type Scanner struct {
-	cfg  *config.Config
-	db   *db.DB
-	srcs []sources.Source
-	ntf  Notifier
+	cfg   *config.Config
+	db    *db.DB
+	srcs  []sources.Source
+	ntf   Notifier
+	ntfMu sync.RWMutex
 
-	mu       sync.RWMutex
-	last     *ScanReport
-	breakers map[string]*gobreaker.CircuitBreaker
+	mu        sync.RWMutex
+	last      *ScanReport
+	breakers  map[string]*gobreaker.CircuitBreaker
 	breakerMu sync.Mutex
 
 	// zeroStreak tracks consecutive scans that returned zero deals per source.
@@ -92,12 +85,7 @@ type Scanner struct {
 	// lastDealsCount caches the most recent deal count for each source so
 	// the health endpoint can report it without re-running a scan.
 	lastDealsCount map[string]int
-	// notifiedSources remembers whether we already paged the admin for a
-	// given source's current streak, so a source that stays broken across
-	// many scans does not flood Telegram. The flag is cleared as soon as
-	// the source returns at least one deal.
-	notifiedSources   map[string]bool
-	zeroStreakMu      sync.RWMutex
+	zeroStreakMu   sync.RWMutex
 }
 
 func New(cfg *config.Config, dbase *db.DB, srcs []sources.Source, n Notifier) *Scanner {
@@ -114,8 +102,19 @@ func New(cfg *config.Config, dbase *db.DB, srcs []sources.Source, n Notifier) *S
 		zeroStreak:          make(map[string]int),
 		zeroStreakThreshold: threshold,
 		lastDealsCount:      make(map[string]int),
-		notifiedSources:     make(map[string]bool),
 	}
+}
+
+func (s *Scanner) SetNotifier(n Notifier) {
+	s.ntfMu.Lock()
+	s.ntf = n
+	s.ntfMu.Unlock()
+}
+
+func (s *Scanner) notifier() Notifier {
+	s.ntfMu.RLock()
+	defer s.ntfMu.RUnlock()
+	return s.ntf
 }
 
 // ZeroStreakThreshold returns the current alerting threshold. It is exposed
@@ -271,7 +270,6 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		// Track consecutive zero-deal scans to detect broken selectors.
 		s.recordScanResult(src.Name(), len(deals), r)
 
-
 		if len(deals) > 0 {
 			s.proc(ctx, deals, now, dryRun, r)
 		}
@@ -305,23 +303,20 @@ func (s *Scanner) jitterBefore(ctx context.Context) {
 }
 
 // recordScanResult updates the zero-deal streak counters for a single source
-// and, when the threshold is crossed for the first time in a streak, pushes
-// an administrative Telegram message and appends a SourceWarning to the
-// report. The mutex guards both maps so SourceHealth() can read them
+// and appends a SourceWarning once the threshold is crossed. The mutex
+// guards both maps so SourceHealth() can read them
 // concurrently from the web layer.
 func (s *Scanner) recordScanResult(name string, deals int, r *ScanReport) {
 	s.zeroStreakMu.Lock()
 	s.lastDealsCount[name] = deals
 	if deals > 0 {
 		s.zeroStreak[name] = 0
-		s.notifiedSources[name] = false
 		s.zeroStreakMu.Unlock()
 		return
 	}
 	s.zeroStreak[name]++
 	streak := s.zeroStreak[name]
 	threshold := s.zeroStreakThreshold
-	alreadyNotified := s.notifiedSources[name]
 	s.zeroStreakMu.Unlock()
 
 	if streak < threshold {
@@ -335,9 +330,6 @@ func (s *Scanner) recordScanResult(name string, deals int, r *ScanReport) {
 	})
 	slog.Warn("source health", "src", name, "consecutive_zeros", streak)
 
-	if s.cfg.SourceHealthNotify && !alreadyNotified {
-		s.notifyAdminSourceHealth(name, streak)
-	}
 }
 
 // RecordSourceScanResult is the exported wrapper around recordScanResult.
@@ -345,28 +337,6 @@ func (s *Scanner) recordScanResult(name string, deals int, r *ScanReport) {
 // without going through a full RunOnce cycle.
 func (s *Scanner) RecordSourceScanResult(name string, deals int) {
 	s.recordScanResult(name, deals, &ScanReport{})
-}
-
-// notifyAdminSourceHealth sends a one-shot Telegram ping to the configured
-// admin chat ID and marks the source as notified so the next scans in the
-// same streak do not flood the channel. It is a no-op when the admin chat
-// ID is unset, the notifier is nil, or delivery fails (we still log).
-func (s *Scanner) notifyAdminSourceHealth(name string, streak int) {
-	if s.ntf == nil {
-		return
-	}
-	chatID, err := strconv.ParseInt(s.cfg.TelegramAdminChatID, 10, 64)
-	if err != nil || chatID <= 0 {
-		return
-	}
-	loc := i18n.ParseLocale(s.cfg.AdminLocale)
-	if err := s.ntf.SendAdminMessage(chatID, notifier.FormatSourceHealthAlert(name, streak, loc)); err != nil {
-		slog.Warn("admin notify", "src", name, "err", err)
-		return
-	}
-	s.zeroStreakMu.Lock()
-	s.notifiedSources[name] = true
-	s.zeroStreakMu.Unlock()
 }
 
 func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (SourceMetrics, []domain.Deal, error) {
@@ -391,7 +361,12 @@ func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (Sou
 func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) {
 	var alerts []db.Alert
 	if s.db != nil {
-		alerts, _ = s.db.ListAlerts(ctx, true)
+		var err error
+		alerts, err = s.db.ListAlerts(ctx, true)
+		if err != nil {
+			slog.Warn("list alerts", "err", err)
+			r.Errors = append(r.Errors, "list alerts: "+err.Error())
+		}
 	}
 	// Snapshot every product's last_seen_at *before* we record new
 	// observations. This is the baseline the back-in-stock heuristic
@@ -524,18 +499,27 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				r.DryRunNotified++
 				continue
 			}
-			if s.ntf != nil {
-				s.ntf.SendDeal(a.ChatID, a, deal, dec)
-				time.Sleep(time.Duration(s.cfg.TelegramMessageDelayS * float64(time.Second)))
-			}
 			// ⚡ Bolt optimization: product already upserted earlier in the
 			// loop; record just the notification row, skipping the redundant
 			// product upsert + wrapping transaction.
 			if err := s.db.RecordNotificationNoUpsert(ctx, a, deal, dec.Reason, dec.DiscountPct); err != nil {
 				slog.Warn("record notification", "alert", a.ID, "pid", deal.ProductID(), "err", err)
 				r.Errors = append(r.Errors, "record notification: "+err.Error())
+				continue
 			}
 			r.Notified++
+			if !a.DiscordEnabled {
+				continue
+			}
+			ntf := s.notifier()
+			if ntf == nil {
+				r.Errors = append(r.Errors, "discord non configure")
+				continue
+			}
+			if err := ntf.SendDeal(a, deal, dec); err != nil {
+				slog.Warn("send discord", "alert", a.ID, "err", err)
+				r.Errors = append(r.Errors, "envoi Discord: "+err.Error())
+			}
 		}
 		if !dryRun && s.db != nil {
 			// ⚡ Bolt optimization: see above; skip the redundant upsert.

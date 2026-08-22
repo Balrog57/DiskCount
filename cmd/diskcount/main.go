@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Balrog57/DiskCount/internal/bot"
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/notifier"
@@ -32,7 +31,8 @@ func main() {
 	defer dbase.Close()
 
 	if err := dbase.Migrate(ctx); err != nil {
-		slog.Warn("db migrate", "error", err)
+		slog.Error("db migrate", "error", err)
+		os.Exit(1)
 	}
 
 	imported, err := dbase.ImportAppConfig(ctx, config.ImportableEnvValues())
@@ -64,47 +64,20 @@ func main() {
 		sourceNames = append(sourceNames, src.Name())
 	}
 
-	notify := notifier.New(nil, cfg.TelegramMessageDelayS)
+	notify := notifier.NewDiscord(cfg.DiscordBotToken, cfg.DiscordChannelID)
 	scan := scanner.New(cfg, dbase, srcs, notify)
-
-	telegramRunning := false
-	var b *bot.Bot
-	if cfg.TelegramBotToken == "" {
-		slog.Warn("telegram bot token is missing; web admin only")
-	} else {
-		b, err = bot.New(cfg, dbase, scan)
-		if err != nil {
-			slog.Error("bot create", "error", err)
-		} else {
-			notify.Bot = b.TB
-			telegramRunning = true
-		}
-	}
-
-	webSrv := web.New(dbase, scan, cfg, sourceNames, telegramRunning)
+	webSrv := web.New(dbase, scan, cfg, sourceNames)
 	errCh := make(chan error, 1)
 	go func() { errCh <- webSrv.Run(ctx, cfg.WebAdminAddr) }()
 
-	if telegramRunning {
-		go func() {
-			slog.Info("initial scan starting")
-			report := scan.RunOnce(context.Background(), false)
-			slog.Info("initial scan done", "fetched", report.Fetched, "notified", report.Notified, "errors", len(report.Errors))
-		}()
-
-		go scanner.ScheduleLoop(ctx, scan, cfg.ScrapeIntervalCron)
-	}
+	go func() {
+		slog.Info("initial scan starting")
+		report := scan.RunOnce(context.Background(), false)
+		slog.Info("initial scan done", "fetched", report.Fetched, "notified", report.Notified, "errors", len(report.Errors))
+	}()
+	go scanner.ScheduleLoop(ctx, scan, cfg.ScrapeIntervalCron)
 
 	fmt.Println("DiskCount v2.0 running...")
-	if telegramRunning {
-		go func() {
-			if err := b.Run(ctx); err != nil {
-				slog.Error("bot run", "error", err)
-				cancel()
-			}
-		}()
-	}
-
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:

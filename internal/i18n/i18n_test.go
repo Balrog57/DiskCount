@@ -5,17 +5,17 @@ import (
 )
 
 func TestTReturnsTranslation(t *testing.T) {
-	if got := T("bot.welcome", FR); got != "Bienvenue sur DiskCount. Que veux-tu faire ?" {
-		t.Fatalf("FR bot.welcome = %q", got)
+	if got := T("web.nav.alerts", FR); got != "Alertes" {
+		t.Fatalf("FR web.nav.alerts = %q", got)
 	}
-	if got := T("bot.welcome", EN); got != "Welcome to DiskCount. What do you want to do?" {
-		t.Fatalf("EN bot.welcome = %q", got)
+	if got := T("web.nav.alerts", EN); got != "Alerts" {
+		t.Fatalf("EN web.nav.alerts = %q", got)
 	}
 }
 
 func TestTFallsBackToDefaultOnMissingLocale(t *testing.T) {
-	got := T("bot.welcome", Locale("xx"))
-	if got != T("bot.welcome", Default) {
+	got := T("web.nav.alerts", Locale("xx"))
+	if got != T("web.nav.alerts", Default) {
 		t.Fatalf("unknown locale should fall back to default: %q", got)
 	}
 }
@@ -28,21 +28,21 @@ func TestTFallsBackToKeyWhenMissing(t *testing.T) {
 }
 
 func TestTEmptyLocaleUsesDefault(t *testing.T) {
-	got := T("bot.welcome", "")
-	if got != T("bot.welcome", Default) {
+	got := T("web.nav.alerts", "")
+	if got != T("web.nav.alerts", Default) {
 		t.Fatalf("empty locale should use default, got %q", got)
 	}
 }
 
 func TestParseLocale(t *testing.T) {
 	cases := map[string]Locale{
-		"fr":      FR,
-		"fr-FR":   FR,
-		"en":      EN,
-		"en-US":   EN,
-		"de":      Default,
-		"":        Default,
-		"f":       Default, // too short
+		"fr":    FR,
+		"fr-FR": FR,
+		"en":    EN,
+		"en-US": EN,
+		"de":    Default,
+		"":      Default,
+		"f":     Default, // too short
 	}
 	for in, want := range cases {
 		if got := ParseLocale(in); got != want {
@@ -55,11 +55,11 @@ func TestSetDefault(t *testing.T) {
 	prev := Default
 	defer SetDefault(prev)
 	SetDefault(EN)
-	if T("bot.welcome", "") != T("bot.welcome", EN) {
+	if T("web.nav.alerts", "") != T("web.nav.alerts", EN) {
 		t.Fatal("SetDefault(EN) should make empty locale resolve to EN")
 	}
 	SetDefault(FR)
-	if T("bot.welcome", "") != T("bot.welcome", FR) {
+	if T("web.nav.alerts", "") != T("web.nav.alerts", FR) {
 		t.Fatal("SetDefault(FR) should make empty locale resolve to FR")
 	}
 }

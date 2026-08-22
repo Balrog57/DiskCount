@@ -53,30 +53,6 @@ func TestAppConfigImportDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-func TestAuthorizedUserManagementAndStats(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	const uid int64 = 42
-	_, _ = d.Pool.Exec(ctx, `DELETE FROM authorized_users WHERE telegram_user_id=$1`, uid)
-
-	if err := d.UpsertAuthorizedUser(ctx, uid, "Test User", true); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.SetAuthorizedUserEnabled(ctx, uid, false); err != nil {
-		t.Fatal(err)
-	}
-	allowed, err := d.IsUserAllowed(ctx, uid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if allowed {
-		t.Fatalf("disabled user should not be allowed")
-	}
-	if _, err := d.Stats(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestLatestPricesUsesLatestObservationAndSortsByPricePerTB(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

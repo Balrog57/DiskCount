@@ -23,7 +23,8 @@ type SettingMeta struct {
 
 var AppSettings = []SettingMeta{
 	{"WEB_ADMIN_PASSWORD", "Web admin password", true, true, ""},
-	{"TELEGRAM_BOT_TOKEN", "Telegram bot token", true, true, ""},
+	{"DISCORD_BOT_TOKEN", "Discord bot token", true, true, ""},
+	{"DISCORD_CHANNEL_ID", "Discord channel ID", false, true, ""},
 	{"REQUEST_TIMEOUT_SECONDS", "Request timeout seconds", false, true, "30"},
 	{"USER_AGENT", "HTTP user agent", false, true, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"},
 	{"DISKPRICES_URL", "DiskPrices URL", false, true, "https://diskprices.com/?locale=fr"},
@@ -60,7 +61,6 @@ var AppSettings = []SettingMeta{
 	{"SOURCE_HEADLESS_FALLBACK", "Headless fallback", false, true, "true"},
 	{"BYPARR_URL", "Byparr URL", false, true, "http://byparr:8191"},
 	{"NOTIFICATION_PRICE_DROP_PCT", "Notification price drop percent", false, true, "2.0"},
-	{"TELEGRAM_MESSAGE_DELAY_SECONDS", "Telegram message delay seconds", false, true, "0.5"},
 	{"SCRAPE_INTERVAL_CRON", "Scan interval", false, true, "@every 4h"},
 	{"RETRY_MAX_ATTEMPTS", "Retry max attempts", false, false, "3"},
 	{"RETRY_BASE_DELAY_SECONDS", "Retry base delay seconds", false, false, "0.5"},
@@ -73,16 +73,14 @@ var AppSettings = []SettingMeta{
 	{"CIRCUIT_BREAKER_THRESHOLD", "Circuit breaker failure threshold", false, false, "5"},
 	{"CIRCUIT_BREAKER_TIMEOUT_SECONDS", "Circuit breaker open timeout seconds", false, false, "60"},
 	{"PER_REQUEST_TIMEOUT_SECONDS", "Per-request timeout seconds", false, false, "10"},
-	{"TELEGRAM_ADMIN_CHAT_ID", "Telegram admin chat ID for source health alerts", false, false, ""},
 	{"SOURCE_HEALTH_STREAK_THRESHOLD", "Consecutive zero-deal scans before a source is flagged", false, false, "3"},
-	{"SOURCE_HEALTH_NOTIFY", "Notify admin via Telegram when a source is flagged", false, false, "true"},
-	{"ADMIN_LOCALE", "Locale for admin-facing notifications (fr|en)", false, false, "fr"},
 	{"BACK_IN_STOCK_HOURS", "Hours of absence after which a returning deal is flagged as back-in-stock", false, false, "48"},
 }
 
 type Config struct {
 	WebAdminPassword         string
-	TelegramBotToken         string
+	DiscordBotToken          string
+	DiscordChannelID         string
 	DatabaseURL              string
 	WebAdminAddr             string
 	RequestTimeoutSeconds    float64
@@ -121,7 +119,6 @@ type Config struct {
 	HeadlessFallback         bool
 	ByparrURL                string
 	NotificationPriceDropPct float64
-	TelegramMessageDelayS    float64
 	ScrapeIntervalCron       string
 	RetryMaxAttempts         int
 	RetryBaseDelaySeconds    float64
@@ -134,10 +131,7 @@ type Config struct {
 	CircuitBreakerThreshold  int
 	CircuitBreakerTimeoutS   float64
 	PerRequestTimeoutSeconds float64
-	TelegramAdminChatID      string
 	SourceHealthThreshold    int
-	SourceHealthNotify       bool
-	AdminLocale              string
 	BackInStockHours         float64
 }
 
@@ -166,7 +160,8 @@ func LoadWithAppValues(appValues map[string]string) *Config {
 func loadConfig(values map[string]string) *Config {
 	cfg := &Config{
 		WebAdminPassword:      values["WEB_ADMIN_PASSWORD"],
-		TelegramBotToken:      values["TELEGRAM_BOT_TOKEN"],
+		DiscordBotToken:       values["DISCORD_BOT_TOKEN"],
+		DiscordChannelID:      values["DISCORD_CHANNEL_ID"],
 		DatabaseURL:           value(values, "DATABASE_URL", "postgres://localhost:5432/diskcount"),
 		WebAdminAddr:          value(values, "WEB_ADMIN_ADDR", "0.0.0.0:47832"),
 		RequestTimeoutSeconds: parseFloat(values["REQUEST_TIMEOUT_SECONDS"], 30),
@@ -207,26 +202,20 @@ func loadConfig(values map[string]string) *Config {
 		NotificationPriceDropPct: parseFloat(
 			values["NOTIFICATION_PRICE_DROP_PCT"], 2,
 		),
-		TelegramMessageDelayS: parseFloat(
-			values["TELEGRAM_MESSAGE_DELAY_SECONDS"], 0.5,
-		),
-		ScrapeIntervalCron: value(values, "SCRAPE_INTERVAL_CRON", "@every 4h"),
-		RetryMaxAttempts:            int(parseFloat(values["RETRY_MAX_ATTEMPTS"], 3)),
-		RetryBaseDelaySeconds:       parseFloat(values["RETRY_BASE_DELAY_SECONDS"], 0.5),
-		RetryMaxDelaySeconds:        parseFloat(values["RETRY_MAX_DELAY_SECONDS"], 30),
-		EnabledSources:              splitCSV(values["ENABLED_SOURCES"]),
-		HeadersExtra:                values["HEADERS_EXTRA"],
-		UserAgentPool:               splitCSV(values["USER_AGENT_POOL"]),
-		BlockedDetectionKeywords:    splitCSV(values["BLOCKED_DETECTION_KEYWORDS"]),
-		CircuitBreakerEnabled:       parseBool(values["CIRCUIT_BREAKER_ENABLED"], true),
-		CircuitBreakerThreshold:     int(parseFloat(values["CIRCUIT_BREAKER_THRESHOLD"], 5)),
-		CircuitBreakerTimeoutS:      parseFloat(values["CIRCUIT_BREAKER_TIMEOUT_SECONDS"], 60),
-		PerRequestTimeoutSeconds:    parseFloat(values["PER_REQUEST_TIMEOUT_SECONDS"], 10),
-		TelegramAdminChatID:         values["TELEGRAM_ADMIN_CHAT_ID"],
-		SourceHealthThreshold:       int(parseFloat(values["SOURCE_HEALTH_STREAK_THRESHOLD"], 3)),
-		SourceHealthNotify:          parseBool(values["SOURCE_HEALTH_NOTIFY"], true),
-		AdminLocale:                 values["ADMIN_LOCALE"],
-		BackInStockHours:            parseFloat(values["BACK_IN_STOCK_HOURS"], 48),
+		ScrapeIntervalCron:       value(values, "SCRAPE_INTERVAL_CRON", "@every 4h"),
+		RetryMaxAttempts:         int(parseFloat(values["RETRY_MAX_ATTEMPTS"], 3)),
+		RetryBaseDelaySeconds:    parseFloat(values["RETRY_BASE_DELAY_SECONDS"], 0.5),
+		RetryMaxDelaySeconds:     parseFloat(values["RETRY_MAX_DELAY_SECONDS"], 30),
+		EnabledSources:           splitCSV(values["ENABLED_SOURCES"]),
+		HeadersExtra:             values["HEADERS_EXTRA"],
+		UserAgentPool:            splitCSV(values["USER_AGENT_POOL"]),
+		BlockedDetectionKeywords: splitCSV(values["BLOCKED_DETECTION_KEYWORDS"]),
+		CircuitBreakerEnabled:    parseBool(values["CIRCUIT_BREAKER_ENABLED"], true),
+		CircuitBreakerThreshold:  int(parseFloat(values["CIRCUIT_BREAKER_THRESHOLD"], 5)),
+		CircuitBreakerTimeoutS:   parseFloat(values["CIRCUIT_BREAKER_TIMEOUT_SECONDS"], 60),
+		PerRequestTimeoutSeconds: parseFloat(values["PER_REQUEST_TIMEOUT_SECONDS"], 10),
+		SourceHealthThreshold:    int(parseFloat(values["SOURCE_HEALTH_STREAK_THRESHOLD"], 3)),
+		BackInStockHours:         parseFloat(values["BACK_IN_STOCK_HOURS"], 48),
 	}
 
 	// Warn about Keepa multi-domain timeout risk: the scanner wraps each
@@ -396,6 +385,14 @@ func resolveKeepaDomains(values map[string]string) []int {
 
 func (c *Config) Validate() []error {
 	var errs []error
+	if (c.DiscordBotToken == "") != (c.DiscordChannelID == "") {
+		errs = append(errs, fmt.Errorf("DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID must be configured together"))
+	}
+	if c.DiscordChannelID != "" {
+		if _, err := strconv.ParseUint(c.DiscordChannelID, 10, 64); err != nil {
+			errs = append(errs, fmt.Errorf("DISCORD_CHANNEL_ID must be numeric"))
+		}
+	}
 	if c.RequestTimeoutSeconds <= 0 {
 		errs = append(errs, fmt.Errorf("REQUEST_TIMEOUT_SECONDS must be positive"))
 	}

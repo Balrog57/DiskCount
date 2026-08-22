@@ -186,7 +186,7 @@ func host(raw string) string {
 // knownBrands is the canonical list of brands we recognise. It is matched
 // case-insensitively against the full title so brands appear even when the
 // title does not start with them (e.g. "2 To Seagate IronWolf" → "Seagate").
-// The list mirrors the brand picker exposed in the Telegram bot so an alert
+// The list mirrors the brand picker exposed in the alert form so an alert
 // configured by brand matches the same spelling the normaliser produces.
 var knownBrands = []string{
 	"Seagate", "Western Digital", "WD", "Toshiba", "Samsung",

@@ -16,15 +16,15 @@ func TestReadEnvFileAndImportableValues(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	env := "TELEGRAM_BOT_TOKEN=abc\nDATABASE_URL=postgres://ignored\nPRICEPERGIG_ENABLED=false\nUNKNOWN=value\n"
+	env := "DISCORD_BOT_TOKEN=abc\nDATABASE_URL=postgres://ignored\nPRICEPERGIG_ENABLED=false\nUNKNOWN=value\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KEEPA_API_KEY", "test-keepa-value")
 
 	values := ImportableEnvValues()
-	if values["TELEGRAM_BOT_TOKEN"] != "abc" {
-		t.Fatalf("token not imported: %q", values["TELEGRAM_BOT_TOKEN"])
+	if values["DISCORD_BOT_TOKEN"] != "abc" {
+		t.Fatalf("token not imported: %q", values["DISCORD_BOT_TOKEN"])
 	}
 	if values["DATABASE_URL"] != "" {
 		t.Fatalf("bootstrap DATABASE_URL must not be imported as app config")
@@ -47,18 +47,19 @@ func TestLoadWithAppValuesOverridesEnvButKeepsBootstrap(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	env := "TELEGRAM_BOT_TOKEN=from-env\nDATABASE_URL=postgres://boot\nWEB_ADMIN_ADDR=:47832\nPRICEPERGIG_ENABLED=true\n"
+	env := "DISCORD_BOT_TOKEN=from-env\nDATABASE_URL=postgres://boot\nWEB_ADMIN_ADDR=:47832\nPRICEPERGIG_ENABLED=true\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(env), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := LoadWithAppValues(map[string]string{
-		"TELEGRAM_BOT_TOKEN":  "from-db",
+		"DISCORD_BOT_TOKEN":   "from-db",
+		"DISCORD_CHANNEL_ID":  "123456789012345678",
 		"PRICEPERGIG_ENABLED": "false",
 		"PRICEPERTB_URLS":     "",
 	})
-	if cfg.TelegramBotToken != "from-db" {
-		t.Fatalf("app config did not override env: %q", cfg.TelegramBotToken)
+	if cfg.DiscordBotToken != "from-db" {
+		t.Fatalf("app config did not override env: %q", cfg.DiscordBotToken)
 	}
 	if cfg.DatabaseURL != "postgres://boot" {
 		t.Fatalf("bootstrap database URL changed: %q", cfg.DatabaseURL)
@@ -87,6 +88,16 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	errs := cfg.Validate()
 	if len(errs) < 5 {
 		t.Fatalf("expected several validation errors, got %d: %v", len(errs), errs)
+	}
+}
+
+func TestValidateDiscordPair(t *testing.T) {
+	cfg := LoadWithAppValues(map[string]string{
+		"DISCORD_BOT_TOKEN":  "token",
+		"DISCORD_CHANNEL_ID": "not-a-channel",
+	})
+	if errs := cfg.Validate(); len(errs) == 0 {
+		t.Fatal("invalid Discord channel should be rejected")
 	}
 }
 

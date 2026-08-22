@@ -11,6 +11,7 @@ import (
 	"github.com/Balrog57/DiskCount/internal/config"
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
@@ -21,7 +22,7 @@ func TestConfigTemplateMasksSecret(t *testing.T) {
 		"Title":  "Configuration",
 		"Active": "config",
 		"Rows": []configRow{{
-			Meta:  config.SettingMeta{Key: "TELEGRAM_BOT_TOKEN", Label: "Token", Secret: true},
+			Meta:  config.SettingMeta{Key: "DISCORD_BOT_TOKEN", Label: "Token", Secret: true},
 			Value: "masked-sensitive-fixture",
 		}},
 		"RestartMsg": "restart",
@@ -38,67 +39,115 @@ func TestConfigTemplateMasksSecret(t *testing.T) {
 	}
 }
 
-func TestUsersTemplateDoesNotExposeAdminControls(t *testing.T) {
+func TestDiscordTemplateMasksConfiguredToken(t *testing.T) {
 	rec := httptest.NewRecorder()
-	render(rec, usersTpl, map[string]any{
-		"Title":  "Utilisateurs",
-		"Active": "users",
+	render(rec, discordTpl, map[string]any{
+		"Title":           "Discord",
+		"Active":          "discord",
+		"TokenConfigured": true,
 	})
 	body := rec.Body.String()
-	for _, forbidden := range []string{"is_admin", ">Role<", ">admin<"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("admin control leaked in users template: %q", forbidden)
-		}
+	if !strings.Contains(body, "********") {
+		t.Fatalf("masked token missing: %s", body)
 	}
 }
 
-func TestAlertsTemplateDoesNotCreateAlerts(t *testing.T) {
+func TestAlertsTemplateCreatesAndManagesAlerts(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, alertsTpl, map[string]any{
-		"Title":  "Alertes",
-		"Active": "alerts",
-		"Alerts": []alertRow{{
-			Alert: db.Alert{ID: 42, OwnerUserID: 84, Name: "Fixture", Enabled: true},
-			Owner: "Owner",
-		}},
+		"Title":           "Alertes",
+		"Active":          "alerts",
+		"CapacityPresets": rules.CapacityPresets,
+		"Alerts":          []db.Alert{{ID: 42, Name: "Fixture", Enabled: true, DiscordEnabled: true}},
 	})
 	body := rec.Body.String()
 	if rec.Code != 200 {
 		t.Fatalf("unexpected status %d: %s", rec.Code, body)
 	}
-	for _, required := range []string{"/alerts/toggle", "/alerts/delete", "Pause", "Supprimer"} {
+	for _, required := range []string{"/alerts/add", "/alerts/toggle", "/alerts/delete", "Créer une alerte", "Pause", "Supprimer"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing alert action %q", required)
 		}
 	}
-	for _, forbidden := range []string{"/alerts/add", "Creer une alerte", "draft:start"} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("alert creation leaked in web template: %q", forbidden)
-		}
+}
+
+func TestAlertDraftFromForm(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/alerts/add", strings.NewReader("capacity=hdd_16_20&media=rotational&keywords=Exos%2CIronWolf&max_price_per_tb=20%2C5&min_discount_pct=7.5&cooldown_hours=12&discord_enabled=1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := req.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := alertDraftFromForm(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.MaxPricePerTB == nil || *draft.MaxPricePerTB != 20.5 || draft.MinDiscountPct != 7.5 || draft.CooldownHours != 12 {
+		t.Fatalf("unexpected draft: %+v", draft)
+	}
+	if len(draft.Keywords) != 2 || len(draft.CapacityPresets) != 1 {
+		t.Fatalf("filters were not parsed: %+v", draft)
+	}
+	if !draft.DiscordEnabled {
+		t.Fatal("Discord checkbox was not parsed")
 	}
 }
 
 func TestProductsTemplateRendersFilters(t *testing.T) {
 	rec := httptest.NewRecorder()
 	render(rec, productsTpl, map[string]any{
-		"Title":   "Produits",
-		"Active":  "products",
-		"Sources": []string{"diskprices"},
+		"Title": "Produits", "Active": "products", "Sources": []string{"diskprices"},
+		"Brands": []string{"Seagate"}, "Categories": []string{"nas"}, "Interfaces": []string{"sata"}, "Recordings": []string{"cmr"},
+		"Prices":     []db.CurrentPrice{{ProductID: "fixture", Title: "IronWolf", URL: "https://example.test", CapacityTB: 16, PriceEUR: 300, PricePerTB: 18.75}},
+		"Sparklines": map[string][]db.SparklinePoint{"fixture": {{PricePerTB: 20}, {PricePerTB: 18.75}}},
 	})
 	body := rec.Body.String()
 	if rec.Code != 200 {
 		t.Fatalf("unexpected status %d: %s", rec.Code, body)
 	}
-	for _, required := range []string{"name=\"source\"", "name=\"media\"", "name=\"max_eur_tb\""} {
+	for _, required := range []string{"name=\"q\"", "name=\"source\"", "name=\"media\"", "name=\"brand\"", "name=\"category\"", "name=\"interface\"", "name=\"recording\"", "name=\"max_eur_tb\""} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing product filter %q", required)
 		}
+	}
+	if !strings.Contains(body, "Tendance 7 jours") || strings.Contains(body, "template:") {
+		t.Fatalf("sparkline did not render: %s", body)
+	}
+}
+
+func TestDashboardRendersRecentNotifications(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, statsTpl, map[string]any{
+		"Title":     "Tableau de bord",
+		"StartedAt": time.Now(),
+		"Notifications": []db.Notification{{
+			AlertName: "NAS", Title: "IronWolf", URL: "https://example.test/offer",
+			PriceEUR: 299.99, PricePerTB: 18.75, Reason: "threshold", SentAt: time.Now(),
+		}},
+	})
+	body := rec.Body.String()
+	for _, required := range []string{"Dernières alertes déclenchées", "NAS", "IronWolf", "https://example.test/offer"} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing notification value %q: %s", required, body)
+		}
+	}
+}
+
+func TestFilterPricesUsesStorageFacets(t *testing.T) {
+	brand, category, iface, recording, media := "Seagate", "nas", "sata", "cmr", "rotational"
+	prices := []db.CurrentPrice{
+		{Title: "Seagate IronWolf", Brand: &brand, DriveCategory: &category, Interfaces: []string{iface}, RecordingMethod: &recording, MediaType: &media, CapacityTB: 16, PricePerTB: 18},
+		{Title: "Other SSD", CapacityTB: 2, PricePerTB: 60},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/products?q=ironwolf&brand=Seagate&category=nas&interface=sata&recording=cmr&max_eur_tb=20", nil)
+	got := filterPrices(prices, req)
+	if len(got) != 1 || got[0].Title != "Seagate IronWolf" {
+		t.Fatalf("unexpected filtered prices: %#v", got)
 	}
 }
 
 func TestFeedEndpointIsPublic(t *testing.T) {
 	// /feed.xml should be accessible without auth (no redirect to /login).
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/feed.xml", nil)
 	req.Header.Set("Accept", "text/html")
@@ -111,7 +160,7 @@ func TestFeedEndpointIsPublic(t *testing.T) {
 }
 
 func TestFeedEndpointAliasWorks(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/feed", nil)
 	srv.handler().ServeHTTP(rec, req)
@@ -210,11 +259,11 @@ func TestComputeSparklineFlat(t *testing.T) {
 
 func TestDurationHuman(t *testing.T) {
 	cases := map[time.Duration]string{
-		30 * time.Second:                  "30s",
-		90 * time.Second:                  "1m 30s",
-		2*time.Hour + 14*time.Minute:      "2h 14m",
-		26 * time.Hour:                    "1j 2h",
-		-5 * time.Second:                  "0s", // overdue → clamp
+		30 * time.Second:             "30s",
+		90 * time.Second:             "1m 30s",
+		2*time.Hour + 14*time.Minute: "2h 14m",
+		26 * time.Hour:               "1j 2h",
+		-5 * time.Second:             "0s", // overdue → clamp
 	}
 	for d, want := range cases {
 		if got := durationHuman(d); got != want {
@@ -228,14 +277,14 @@ func TestParseCronInterval(t *testing.T) {
 		want time.Duration
 		ok   bool
 	}{
-		"@every 4h":      {4 * time.Hour, true},
-		"@every 30m":     {30 * time.Minute, true},
-		"@every  1h30m":  {90 * time.Minute, true},
-		"@every 1h ":     {time.Hour, true},
-		"":               {0, false},
-		"0 0 * * *":      {0, false}, // real cron → not supported here
-		"@every bogus":   {0, false},
-		"@every -5m":     {0, false}, // negative → rejected
+		"@every 4h":     {4 * time.Hour, true},
+		"@every 30m":    {30 * time.Minute, true},
+		"@every  1h30m": {90 * time.Minute, true},
+		"@every 1h ":    {time.Hour, true},
+		"":              {0, false},
+		"0 0 * * *":     {0, false}, // real cron → not supported here
+		"@every bogus":  {0, false},
+		"@every -5m":    {0, false}, // negative → rejected
 	}
 	for in, want := range cases {
 		got, ok := parseCronInterval(in)
@@ -250,8 +299,8 @@ func TestParseCronInterval(t *testing.T) {
 }
 
 func TestRoutesRejectUnsupportedMethodsBeforeDBUse(t *testing.T) {
-	srv := New(nil, nil, &config.Config{}, nil, false)
-	for _, path := range []string{"/alerts/toggle", "/alerts/delete", "/config/save", "/users/add", "/users/toggle"} {
+	srv := New(nil, nil, &config.Config{}, nil)
+	for _, path := range []string{"/alerts/add", "/alerts/toggle", "/alerts/delete", "/config/save", "/discord/save"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		srv.routes().ServeHTTP(rec, req)
@@ -276,7 +325,6 @@ func TestApiSourcesHealthJSON(t *testing.T) {
 	cfg := &config.Config{
 		WebAdminPassword:      "secret",
 		SourceHealthThreshold: 2,
-		SourceHealthNotify:    false,
 	}
 	scan := scanner.New(cfg, nil, []sources.Source{
 		fakeSource{n: "alpha"},
@@ -287,7 +335,7 @@ func TestApiSourcesHealthJSON(t *testing.T) {
 	scan.RecordSourceScanResult("alpha", 0)
 	scan.RecordSourceScanResult("beta", 3)
 
-	srv := New(nil, scan, cfg, nil, false)
+	srv := New(nil, scan, cfg, nil)
 	// Mint a valid session by going through the login flow.
 	mux := srv.handler()
 	loginRec := httptest.NewRecorder()
@@ -333,7 +381,7 @@ func TestApiSourcesHealthJSON(t *testing.T) {
 // TestApiSourcesHealthRejectsPOST enforces the GET-only contract.
 func TestApiSourcesHealthRejectsPOST(t *testing.T) {
 	cfg := &config.Config{WebAdminPassword: "secret"}
-	srv := New(nil, nil, cfg, nil, false)
+	srv := New(nil, nil, cfg, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sources/health", nil)
 	srv.routes().ServeHTTP(rec, req)
@@ -348,7 +396,7 @@ func TestApiSourcesHealthRejectsPOST(t *testing.T) {
 func TestApiSourcePreviewUnknownName(t *testing.T) {
 	cfg := &config.Config{WebAdminPassword: "secret"}
 	scan := scanner.New(cfg, nil, []sources.Source{fakeSource{n: "alpha"}}, nil)
-	srv := New(nil, scan, cfg, nil, false)
+	srv := New(nil, scan, cfg, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sources/preview?name=nope", nil)
 	srv.routes().ServeHTTP(rec, req)
@@ -361,7 +409,7 @@ func TestApiSourcePreviewUnknownName(t *testing.T) {
 // contract.
 func TestApiSourcePreviewRequiresName(t *testing.T) {
 	cfg := &config.Config{WebAdminPassword: "secret"}
-	srv := New(nil, nil, cfg, nil, false)
+	srv := New(nil, nil, cfg, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/sources/preview", nil)
 	srv.routes().ServeHTTP(rec, req)
@@ -373,7 +421,7 @@ func TestApiSourcePreviewRequiresName(t *testing.T) {
 // TestApiSourcePreviewRejectsPOST enforces the GET-only contract.
 func TestApiSourcePreviewRejectsPOST(t *testing.T) {
 	cfg := &config.Config{WebAdminPassword: "secret"}
-	srv := New(nil, nil, cfg, nil, false)
+	srv := New(nil, nil, cfg, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/sources/preview", nil)
 	srv.routes().ServeHTTP(rec, req)
@@ -383,7 +431,7 @@ func TestApiSourcePreviewRejectsPOST(t *testing.T) {
 }
 
 func TestLoginPageIsServedWithoutBasicAuth(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	req.Header.Set("Accept", "text/html")
@@ -401,7 +449,7 @@ func TestLoginPageIsServedWithoutBasicAuth(t *testing.T) {
 }
 
 func TestProtectedPathRedirectsToLoginWhenNoSession(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/alerts", nil)
 	req.Header.Set("Accept", "text/html")
@@ -416,7 +464,7 @@ func TestProtectedPathRedirectsToLoginWhenNoSession(t *testing.T) {
 }
 
 func TestLoginPostSetsSessionAndReachesDashboard(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
@@ -451,7 +499,7 @@ func TestLoginPostSetsSessionAndReachesDashboard(t *testing.T) {
 }
 
 func TestLoginPostRejectsBadPassword(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -470,7 +518,7 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 // TestLoginPageRendersInEnglish verifies the language switcher: setting the
 // lang cookie to "en" must surface the English strings in the login page.
 func TestLoginPageRendersInEnglish(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	req.AddCookie(&http.Cookie{Name: langCookieName, Value: "en"})
@@ -494,7 +542,7 @@ func TestLoginPageRendersInEnglish(t *testing.T) {
 // posting lang=en must set the cookie and redirect (303), and the next
 // request must see the cookie honoured.
 func TestSetLangSwitchesLocaleAndPinsCookie(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	mux := srv.handler()
 
 	rec := httptest.NewRecorder()
@@ -517,7 +565,7 @@ func TestSetLangSwitchesLocaleAndPinsCookie(t *testing.T) {
 
 // TestSetLangRejectsBadMethod enforces the POST-only contract.
 func TestSetLangRejectsBadMethod(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/lang", nil)
 	srv.routes().ServeHTTP(rec, req)
@@ -530,7 +578,7 @@ func TestSetLangRejectsBadMethod(t *testing.T) {
 // set, the redirect goes back, and the next render shows the active
 // "dark" state in the layout attribute.
 func TestSetThemePinsCookieAndRenders(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	mux := srv.handler()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=dark&next=/"))
@@ -552,7 +600,7 @@ func TestSetThemePinsCookieAndRenders(t *testing.T) {
 
 // TestSetThemeRejectsBadValue enforces the light|dark|auto contract.
 func TestSetThemeRejectsBadValue(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=neon"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -566,7 +614,7 @@ func TestSetThemeRejectsBadValue(t *testing.T) {
 // the public handler (/theme lives outside the auth-guarded routes
 // mux so the switcher works on the login page).
 func TestSetThemeRejectsBadMethod(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/theme", nil)
 	srv.handler().ServeHTTP(rec, req)
@@ -576,7 +624,7 @@ func TestSetThemeRejectsBadMethod(t *testing.T) {
 }
 
 func TestJSONEndpointStillSpeaksBasicAuth(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	guarded := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -591,7 +639,7 @@ func TestJSONEndpointStillSpeaksBasicAuth(t *testing.T) {
 }
 
 func TestJSONEndpointRejectsAnonymous(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	guarded := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not run for anonymous JSON request")
 	}))
@@ -608,7 +656,7 @@ func TestJSONEndpointRejectsAnonymous(t *testing.T) {
 }
 
 func TestLogoutClearsSession(t *testing.T) {
-	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil, false)
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))

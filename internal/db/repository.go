@@ -44,8 +44,8 @@ func (db *DB) Close() { db.Pool.Close() }
 // run on a fresh database in one pass without special-casing the "create
 // table" vs "add column" distinction.
 var migrations = []struct {
-	n    int
-	sql  string
+	n   int
+	sql string
 }{
 	{n: 1, sql: `
 CREATE TABLE IF NOT EXISTS subscribers (chat_id BIGINT PRIMARY KEY, username VARCHAR(255), first_seen_at TIMESTAMPTZ DEFAULT NOW(), last_seen_at TIMESTAMPTZ DEFAULT NOW(), enabled BOOLEAN DEFAULT TRUE);
@@ -83,6 +83,17 @@ ALTER TABLE alerts ADD COLUMN IF NOT EXISTS brands JSONB DEFAULT '[]';
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS keywords JSONB DEFAULT '[]';
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS exclude_keywords JSONB DEFAULT '[]';
 ALTER TABLE alerts ADD COLUMN IF NOT EXISTS recording_methods JSONB DEFAULT '[]';
+`},
+	{n: 3, sql: `
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS discord_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+DROP INDEX IF EXISTS idx_alerts_owner;
+ALTER TABLE alerts DROP COLUMN IF EXISTS chat_id;
+ALTER TABLE alerts DROP COLUMN IF EXISTS owner_user_id;
+DROP TABLE IF EXISTS subscribers;
+DROP TABLE IF EXISTS authorized_users;
+ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_alert_id_fkey;
+ALTER TABLE notifications ADD CONSTRAINT notifications_alert_id_fkey FOREIGN KEY (alert_id) REFERENCES alerts(id) ON DELETE CASCADE;
+DELETE FROM app_config WHERE key LIKE 'TELEGRAM_%';
 `},
 }
 
@@ -151,14 +162,14 @@ func (db *DB) applyMigration(ctx context.Context, n int, sql string) error {
 }
 
 type Alert struct {
-	ID, ChatID, OwnerUserID                                                       int64
+	ID                                                                            int64
 	Name                                                                          string
 	MinCapacityTB, MaxCapacityTB, MaxPricePerTB                                   *float64
 	CapacityPresets, Conditions, MediaTypes, DriveCategories, Interfaces, Sources []string
 	Brands, Keywords, ExcludeKeywords, RecordingMethods                           []string
 	MinDiscountPct                                                                float64
 	CooldownHours                                                                 int
-	Enabled                                                                       bool
+	Enabled, DiscordEnabled                                                       bool
 	CreatedAt, UpdatedAt                                                          time.Time
 }
 type Product struct {
@@ -180,29 +191,23 @@ type PriceObservation struct {
 	RawJSON              string
 }
 type Notification struct {
-	ID, AlertID                   int64
-	ProductID, Reason, Title, URL string
-	SentAt                        time.Time
-	PriceEUR, PricePerTB          float64
-	DiscountPct                   *float64
-}
-type AuthorizedUser struct {
-	TelegramUserID       int64
-	Label                string
-	IsAdmin, Enabled     bool
-	CreatedAt, UpdatedAt time.Time
+	ID, AlertID                              int64
+	ProductID, AlertName, Reason, Title, URL string
+	SentAt                                   time.Time
+	PriceEUR, PricePerTB                     float64
+	DiscountPct                              *float64
 }
 type CurrentPrice struct {
-	ProductID            string
-	Source, Title, URL   string
-	MediaType            *string
-	CapacityTB           float64
-	PriceEUR, PricePerTB float64
-	ObservedAt           time.Time
+	ProductID                                                   string
+	Source, Title, URL                                          string
+	Condition, MediaType, DriveCategory, Brand, RecordingMethod *string
+	Interfaces                                                  []string
+	CapacityTB                                                  float64
+	PriceEUR, PricePerTB                                        float64
+	ObservedAt                                                  time.Time
 }
 type Stats struct {
 	ActiveAlerts, InactiveAlerts          int64
-	AuthorizedEnabled, AuthorizedDisabled int64
 	Products, Observations, Notifications int64
 	RejectedDeals                         int64
 	LastObservationAt, LastNotificationAt *time.Time
@@ -279,54 +284,27 @@ func (db *DB) SetAppConfig(ctx context.Context, values map[string]string) error 
 	return tx.Commit(ctx)
 }
 
-func (db *DB) UpsertSubscriber(ctx context.Context, chatID int64, username *string) error {
-	_, err := db.Pool.Exec(ctx, `INSERT INTO subscribers (chat_id, username) VALUES ($1,$2) ON CONFLICT(chat_id) DO UPDATE SET username=$2, last_seen_at=NOW(), enabled=TRUE`, chatID, username)
-	return err
-}
-func (db *DB) IsUserAllowed(ctx context.Context, uid int64) (bool, error) {
-	var e bool
-	err := db.Pool.QueryRow(ctx, `SELECT enabled FROM authorized_users WHERE telegram_user_id=$1`, uid).Scan(&e)
-	if err == pgx.ErrNoRows {
-		return false, nil
-	}
-	return e, err
-}
-func (db *DB) UpsertAuthorizedUser(ctx context.Context, uid int64, label string, enabled bool) error {
-	if label == "" {
-		label = fmt.Sprintf("%d", uid)
-	}
-	_, err := db.Pool.Exec(ctx, `INSERT INTO authorized_users (telegram_user_id,label,is_admin,enabled) VALUES ($1,$2,FALSE,$3) ON CONFLICT(telegram_user_id) DO UPDATE SET label=$2,is_admin=FALSE,enabled=$3,updated_at=NOW()`, uid, label, enabled)
-	return err
-}
-func (db *DB) SetAuthorizedUserEnabled(ctx context.Context, uid int64, enabled bool) error {
-	_, err := db.Pool.Exec(ctx, `UPDATE authorized_users SET enabled=$1, updated_at=NOW() WHERE telegram_user_id=$2`, enabled, uid)
-	return err
-}
-
 // AlertDraft carries all filter slices for alert creation in a single value,
 // keeping the CreateAlert signature readable as new filter dimensions are added.
 type AlertDraft struct {
 	CapacityPresets, Conditions, MediaTypes, DriveCategories, Interfaces, Sources []string
 	Brands, Keywords, ExcludeKeywords, RecordingMethods                           []string
-	MaxPricePerTB                                                                  *float64
-	MinDiscountPct                                                                 float64
-	CooldownHours                                                                  int
+	MaxPricePerTB                                                                 *float64
+	MinDiscountPct                                                                float64
+	CooldownHours                                                                 int
+	DiscordEnabled                                                                bool
 }
 
-func (db *DB) CreateAlert(ctx context.Context, chatID, ownerID int64, name string, d AlertDraft) (*Alert, error) {
-	a := &Alert{ChatID: chatID, OwnerUserID: ownerID, Name: name, MaxPricePerTB: d.MaxPricePerTB, MinDiscountPct: d.MinDiscountPct, CooldownHours: d.CooldownHours, CapacityPresets: d.CapacityPresets, Conditions: d.Conditions, MediaTypes: d.MediaTypes, DriveCategories: d.DriveCategories, Interfaces: d.Interfaces, Sources: d.Sources, Brands: d.Brands, Keywords: d.Keywords, ExcludeKeywords: d.ExcludeKeywords, RecordingMethods: d.RecordingMethods, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	// The column list has 16 columns and we pass 16 args; the placeholder
-	// count must match exactly or Postgres rejects the INSERT with
-	// "INSERT has more expressions than target columns". The phantom $17/$18
-	// was a latent bug that surfaced on every alert creation via the bot.
-	const cols = "chat_id,owner_user_id,name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours"
-	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`,
-		chatID, ownerID, name, ja(d.CapacityPresets), ja(d.Conditions), ja(d.MediaTypes), ja(d.DriveCategories), ja(d.Interfaces), ja(d.Sources), ja(d.Brands), ja(d.Keywords), ja(d.ExcludeKeywords), ja(d.RecordingMethods), d.MaxPricePerTB, d.MinDiscountPct, d.CooldownHours).Scan(&a.ID)
+func (db *DB) CreateAlert(ctx context.Context, name string, d AlertDraft) (*Alert, error) {
+	a := &Alert{Name: name, MaxPricePerTB: d.MaxPricePerTB, MinDiscountPct: d.MinDiscountPct, CooldownHours: d.CooldownHours, CapacityPresets: d.CapacityPresets, Conditions: d.Conditions, MediaTypes: d.MediaTypes, DriveCategories: d.DriveCategories, Interfaces: d.Interfaces, Sources: d.Sources, Brands: d.Brands, Keywords: d.Keywords, ExcludeKeywords: d.ExcludeKeywords, RecordingMethods: d.RecordingMethods, DiscordEnabled: d.DiscordEnabled, Enabled: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	const cols = "name,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,discord_enabled"
+	err := db.Pool.QueryRow(ctx, `INSERT INTO alerts (`+cols+`) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+		name, ja(d.CapacityPresets), ja(d.Conditions), ja(d.MediaTypes), ja(d.DriveCategories), ja(d.Interfaces), ja(d.Sources), ja(d.Brands), ja(d.Keywords), ja(d.ExcludeKeywords), ja(d.RecordingMethods), d.MaxPricePerTB, d.MinDiscountPct, d.CooldownHours, d.DiscordEnabled).Scan(&a.ID)
 	return a, err
 }
 
 func (db *DB) ListAlerts(ctx context.Context, onlyEnabled bool) ([]Alert, error) {
-	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts"
+	q := "SELECT id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,discord_enabled,created_at,updated_at FROM alerts"
 	if onlyEnabled {
 		q += " WHERE enabled=TRUE"
 	}
@@ -334,32 +312,13 @@ func (db *DB) ListAlerts(ctx context.Context, onlyEnabled bool) ([]Alert, error)
 	return scanAlerts(db.Pool.Query(ctx, q))
 }
 
-func (db *DB) GetAlertsByOwner(ctx context.Context, ownerID int64, onlyEnabled bool) ([]Alert, error) {
-	q := "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1"
-	if onlyEnabled {
-		q += " AND enabled=TRUE"
-	}
-	q += " ORDER BY id"
-	return scanAlerts(db.Pool.Query(ctx, q, ownerID))
-}
-
-func (db *DB) GetAlert(ctx context.Context, ownerID, aID int64) (*Alert, error) {
-	a := &Alert{}
-	err := db.Pool.QueryRow(ctx, "SELECT id,chat_id,owner_user_id,name,min_capacity_tb,max_capacity_tb,capacity_presets,conditions,media_types,drive_categories,interfaces,sources,brands,keywords,exclude_keywords,recording_methods,max_price_per_tb,min_discount_pct,cooldown_hours,enabled,created_at,updated_at FROM alerts WHERE owner_user_id=$1 AND id=$2", ownerID, aID).Scan(
-		&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), jsonScan(&a.Brands), jsonScan(&a.Keywords), jsonScan(&a.ExcludeKeywords), jsonScan(&a.RecordingMethods), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	return a, err
-}
-
-func (db *DB) SetAlertEnabled(ctx context.Context, ownerID, aID int64, enabled bool) error {
-	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET enabled=$1, updated_at=NOW() WHERE owner_user_id=$2 AND id=$3", enabled, ownerID, aID)
+func (db *DB) SetAlertEnabled(ctx context.Context, aID int64, enabled bool) error {
+	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET enabled=$1, updated_at=NOW() WHERE id=$2", enabled, aID)
 	return err
 }
 
-func (db *DB) DeleteAlert(ctx context.Context, ownerID, aID int64) error {
-	_, err := db.Pool.Exec(ctx, "DELETE FROM alerts WHERE owner_user_id=$1 AND id=$2", ownerID, aID)
+func (db *DB) DeleteAlert(ctx context.Context, aID int64) error {
+	_, err := db.Pool.Exec(ctx, "DELETE FROM alerts WHERE id=$1", aID)
 	return err
 }
 
@@ -503,6 +462,29 @@ func (db *DB) LastNotification(ctx context.Context, aID int64, pid string) (*Not
 	return n, err
 }
 
+func (db *DB) RecentNotifications(ctx context.Context, limit int) ([]Notification, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := db.Pool.Query(ctx, `
+		SELECT n.id,n.alert_id,n.product_id,a.name,n.sent_at,n.price_eur,n.price_per_tb,n.discount_pct,n.reason,n.title,n.url
+		FROM notifications n JOIN alerts a ON a.id=n.alert_id
+		ORDER BY n.sent_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Notification, 0, limit)
+	for rows.Next() {
+		var n Notification
+		if err := rows.Scan(&n.ID, &n.AlertID, &n.ProductID, &n.AlertName, &n.SentAt, &n.PriceEUR, &n.PricePerTB, &n.DiscountPct, &n.Reason, &n.Title, &n.URL); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // LastNotificationsMap returns the most recent notification for every
 // (alert_id, product_id) pair the scanner might evaluate, in a single
 // round-trip. The key is "alertID:productID". Pairs with no notification
@@ -574,65 +556,6 @@ func (db *DB) RecordNotificationNoUpsert(ctx context.Context, alert *Alert, deal
 	return err
 }
 
-func (db *DB) ToggleAlertFilter(ctx context.Context, ownerID, aID int64, field, value string) error {
-	m := map[string][]string{"condition": nil, "media": nil, "category": nil, "interface": nil, "source": nil, "brand": nil, "recording_method": nil}
-	a, err := db.GetAlert(ctx, ownerID, aID)
-	if err != nil || a == nil {
-		return err
-	}
-	switch field {
-	case "condition":
-		m[field] = a.Conditions
-	case "media":
-		m[field] = a.MediaTypes
-	case "category":
-		m[field] = a.DriveCategories
-	case "interface":
-		m[field] = a.Interfaces
-	case "source":
-		m[field] = a.Sources
-	case "brand":
-		m[field] = a.Brands
-	case "recording_method":
-		m[field] = a.RecordingMethods
-	default:
-		return fmt.Errorf("invalid field")
-	}
-	vals := m[field]
-	found := -1
-	for i, v := range vals {
-		if v == value {
-			found = i
-			break
-		}
-	}
-	if found >= 0 {
-		vals = append(vals[:found], vals[found+1:]...)
-	} else {
-		vals = append(vals, value)
-	}
-	cols := map[string]string{"condition": "conditions", "media": "media_types", "category": "drive_categories", "interface": "interfaces", "source": "sources", "brand": "brands", "recording_method": "recording_methods"}
-	_, err = db.Pool.Exec(ctx, fmt.Sprintf("UPDATE alerts SET %s=$1, updated_at=NOW() WHERE owner_user_id=$2 AND id=$3", cols[field]), ja(vals), ownerID, aID)
-	return err
-}
-
-// SetAlertKeywords replaces the keyword and exclude-keyword lists of an alert.
-// Either slice may be nil to clear that list.
-func (db *DB) SetAlertKeywords(ctx context.Context, ownerID, aID int64, keywords, excludeKeywords []string) error {
-	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET keywords=$1, exclude_keywords=$2, updated_at=NOW() WHERE owner_user_id=$3 AND id=$4", ja(keywords), ja(excludeKeywords), ownerID, aID)
-	return err
-}
-
-func (db *DB) SetAlertMaxPrice(ctx context.Context, ownerID, aID int64, price *float64) error {
-	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET max_price_per_tb=$1, updated_at=NOW() WHERE owner_user_id=$2 AND id=$3", price, ownerID, aID)
-	return err
-}
-
-func (db *DB) UpdateAlertCaps(ctx context.Context, ownerID, aID int64, presets []string) error {
-	_, err := db.Pool.Exec(ctx, "UPDATE alerts SET capacity_presets=$1, min_capacity_tb=NULL, max_capacity_tb=NULL, updated_at=NOW() WHERE owner_user_id=$2 AND id=$3", ja(presets), ownerID, aID)
-	return err
-}
-
 func (db *DB) LatestPrices(ctx context.Context, limit int) ([]CurrentPrice, error) {
 	if limit <= 0 {
 		limit = 10
@@ -645,7 +568,7 @@ WITH latest AS (
 	WHERE price_per_tb > 0 AND quality_score >= 70
 	ORDER BY product_id, observed_at DESC
 )
-SELECT l.product_id, l.source, p.title, p.url, p.media_type, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
+SELECT l.product_id, l.source, p.title, p.url, p.condition, p.media_type, p.drive_category, p.brand, p.recording_method, p.interfaces, p.capacity_tb, l.price_eur, l.price_per_tb, l.observed_at
 FROM latest l
 JOIN products p ON p.id = l.product_id
 WHERE p.quality_score >= 50
@@ -658,7 +581,7 @@ LIMIT $1`, limit)
 	var out []CurrentPrice
 	for rows.Next() {
 		var p CurrentPrice
-		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.MediaType, &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
+		if err := rows.Scan(&p.ProductID, &p.Source, &p.Title, &p.URL, &p.Condition, &p.MediaType, &p.DriveCategory, &p.Brand, &p.RecordingMethod, jsonScan(&p.Interfaces), &p.CapacityTB, &p.PriceEUR, &p.PricePerTB, &p.ObservedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -736,8 +659,8 @@ func (db *DB) PriceHistory(ctx context.Context, productID string, days int) ([]P
 // goal is to be cheap enough to render for every row on the products
 // page: one query, one row per product, at most 50 observations.
 type SparklinePoint struct {
-	ObservedAt  time.Time
-	PricePerTB  float64
+	ObservedAt time.Time
+	PricePerTB float64
 }
 
 // Sparklines returns a small 7-day history per product, capped at
@@ -788,26 +711,6 @@ func (db *DB) Sparklines(ctx context.Context, productIDs []string, days int, max
 	return out, rows.Err()
 }
 
-func (db *DB) ListAuthorizedUsers(ctx context.Context, includeDisabled bool) ([]AuthorizedUser, error) {
-	q := "SELECT telegram_user_id,label,is_admin,enabled,created_at,updated_at FROM authorized_users"
-	if !includeDisabled {
-		q += " WHERE enabled=TRUE"
-	}
-	q += " ORDER BY label"
-	rows, err := db.Pool.Query(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var users []AuthorizedUser
-	for rows.Next() {
-		var u AuthorizedUser
-		rows.Scan(&u.TelegramUserID, &u.Label, &u.IsAdmin, &u.Enabled, &u.CreatedAt, &u.UpdatedAt)
-		users = append(users, u)
-	}
-	return users, nil
-}
-
 // Stats returns the dashboard counters in a single round-trip. The previous
 // implementation issued 6 sequential queries; the dashboard renders on every
 // page load, so batching them keeps the latency low under load.
@@ -822,17 +725,13 @@ func (db *DB) Stats(ctx context.Context) (*Stats, error) {
 SELECT
   (SELECT COUNT(*) FILTER (WHERE enabled)      FROM alerts),
   (SELECT COUNT(*) FILTER (WHERE NOT enabled)  FROM alerts),
-  (SELECT COUNT(*) FILTER (WHERE enabled)      FROM authorized_users),
-  (SELECT COUNT(*) FILTER (WHERE NOT enabled)  FROM authorized_users),
   (SELECT COUNT(*)                             FROM products),
   (SELECT COUNT(*)                             FROM price_observations),
   (SELECT MAX(observed_at)                     FROM price_observations),
   (SELECT COUNT(*)                             FROM notifications),
   (SELECT MAX(sent_at)                         FROM notifications),
   (SELECT COUNT(*)                             FROM rejected_deals)
-`).Scan(&s.ActiveAlerts, &s.InactiveAlerts,
-		&s.AuthorizedEnabled, &s.AuthorizedDisabled,
-		&s.Products,
+`).Scan(&s.ActiveAlerts, &s.InactiveAlerts, &s.Products,
 		&s.Observations, &s.LastObservationAt,
 		&s.Notifications, &s.LastNotificationAt,
 		&s.RejectedDeals)
@@ -916,7 +815,7 @@ func scanAlerts(rows pgx.Rows, err error) ([]Alert, error) {
 	var out []Alert
 	for rows.Next() {
 		var a Alert
-		rows.Scan(&a.ID, &a.ChatID, &a.OwnerUserID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), jsonScan(&a.Brands), jsonScan(&a.Keywords), jsonScan(&a.ExcludeKeywords), jsonScan(&a.RecordingMethods), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.CreatedAt, &a.UpdatedAt)
+		rows.Scan(&a.ID, &a.Name, &a.MinCapacityTB, &a.MaxCapacityTB, jsonScan(&a.CapacityPresets), jsonScan(&a.Conditions), jsonScan(&a.MediaTypes), jsonScan(&a.DriveCategories), jsonScan(&a.Interfaces), jsonScan(&a.Sources), jsonScan(&a.Brands), jsonScan(&a.Keywords), jsonScan(&a.ExcludeKeywords), jsonScan(&a.RecordingMethods), &a.MaxPricePerTB, &a.MinDiscountPct, &a.CooldownHours, &a.Enabled, &a.DiscordEnabled, &a.CreatedAt, &a.UpdatedAt)
 		out = append(out, a)
 	}
 	return out, nil

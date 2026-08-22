@@ -8,7 +8,7 @@ __pycache__/
 venv/
 .env
 *.md
-!README.md
+!SPEC.md
 *.sqlite3
 *.db
 dist/
