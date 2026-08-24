@@ -16,6 +16,85 @@ import (
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
 
+func setSameOrigin(req *http.Request) {
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://example.com")
+}
+
+func TestSanitizeNextBlocksOpenRedirects(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", "/"},
+		{"/alerts", "/alerts"},
+		{"/login?foo=bar", "/login?foo=bar"},
+		{"https://evil.com", "/"},
+		{"//evil.com", "/"},
+		{"///evil.com", "/"},
+		{"/%2f%2fevil.com", "/"},
+		{`/\evil.com`, "/"},
+		{"  /products  ", "/products"},
+	}
+	for _, c := range cases {
+		if got := sanitizeNext(c.in); got != c.want {
+			t.Errorf("sanitizeNext(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestLoginPostRejectsOpenRedirectNext(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=///evil.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login POST: expected 303, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Fatalf("open redirect not blocked, Location = %q", loc)
+	}
+}
+
+func TestCSRFRejectsCrossOriginPOST(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "example.com"
+	req.Header.Set("Origin", "http://evil.com")
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for cross-origin POST, got %d", rec.Code)
+	}
+}
+
+func TestCSRFRejectsMissingOrigin(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "example.com"
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for missing Origin, got %d", rec.Code)
+	}
+}
+
+func TestCSRFAcceptsMatchingReferer(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Host = "example.com"
+	req.Header.Set("Referer", "http://example.com/login")
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 with valid Referer, got %d", rec.Code)
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
@@ -443,6 +522,7 @@ func TestApiSourcesHealthJSON(t *testing.T) {
 	loginRec := httptest.NewRecorder()
 	loginReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
 	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(loginReq)
 	mux.ServeHTTP(loginRec, loginReq)
 	if loginRec.Code != http.StatusSeeOther {
 		t.Fatalf("login failed: %d %s", loginRec.Code, loginRec.Body.String())
@@ -571,6 +651,7 @@ func TestLoginPostSetsSessionAndReachesDashboard(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=%2Falerts"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("login POST: expected 303, got %d body=%s", rec.Code, rec.Body.String())
@@ -605,6 +686,7 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login POST bad pass: expected 200, got %d", rec.Code)
@@ -650,6 +732,7 @@ func TestSetLangSwitchesLocaleAndPinsCookie(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/lang", strings.NewReader("lang=en&next=/login"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d", rec.Code)
@@ -685,6 +768,7 @@ func TestSetThemePinsCookieAndRenders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=dark&next=/"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("expected 303, got %d body=%s", rec.Code, rec.Body.String())
@@ -706,6 +790,7 @@ func TestSetThemeRejectsBadValue(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/theme", strings.NewReader("theme=neon"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -763,6 +848,7 @@ func TestLogoutClearsSession(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("login failed: %d", rec.Code)
@@ -771,6 +857,7 @@ func TestLogoutClearsSession(t *testing.T) {
 
 	rec2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	setSameOrigin(req2)
 	for _, c := range cookies {
 		req2.AddCookie(c)
 	}
