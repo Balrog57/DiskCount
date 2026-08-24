@@ -16,6 +16,41 @@ import (
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
 
+func TestSanitizeNextBlocksOpenRedirects(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", "/"},
+		{"/alerts", "/alerts"},
+		{"/login?foo=bar", "/login?foo=bar"},
+		{"https://evil.com", "/"},
+		{"//evil.com", "/"},
+		{"///evil.com", "/"},
+		{"/%2f%2fevil.com", "/"},
+		{"/\\evil.com", "/"},
+		{"  /products  ", "/products"},
+	}
+	for _, c := range cases {
+		if got := sanitizeNext(c.in); got != c.want {
+			t.Errorf("sanitizeNext(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestLoginPostRejectsOpenRedirectNext(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret&next=///evil.com"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login POST: expected 303, got %d", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/" {
+		t.Fatalf("open redirect not blocked, Location = %q", loc)
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string

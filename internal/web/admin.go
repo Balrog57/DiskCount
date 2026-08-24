@@ -386,6 +386,15 @@ func sanitizeNext(raw string) string {
 	if !strings.HasPrefix(u.Path, "/") {
 		return "/"
 	}
+	// Reject protocol-relative paths (///evil.com) and backslash tricks;
+	// browsers may treat these as off-site navigations after a redirect.
+	if strings.HasPrefix(u.Path, "//") || strings.Contains(u.Path, `\`) {
+		return "/"
+	}
+	if decoded, err := url.PathUnescape(u.Path); err != nil ||
+		strings.HasPrefix(decoded, "//") || strings.Contains(decoded, `\`) {
+		return "/"
+	}
 	return u.RequestURI()
 }
 
