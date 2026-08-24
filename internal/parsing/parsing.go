@@ -19,7 +19,21 @@ func asciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
-	// ⚡ Bolt: Use byte-level iteration and inline case folding to minimize allocations
+
+	// Fast-path: already lowercase ASCII — return as-is (zero alloc).
+	needsMutation := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 128 || (c >= 'A' && c <= 'Z') {
+			needsMutation = true
+			break
+		}
+	}
+	if !needsMutation {
+		return s
+	}
+
+	// Byte-level iteration and inline case folding; non-ASCII bytes are dropped.
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); i++ {
@@ -192,9 +206,24 @@ func NormalizeMediaType(text string) *domain.MediaType {
 
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
 	folded := asciiFold(text)
-	folded = strings.ReplaceAll(folded, "\"", "")
-	compact := strings.ReplaceAll(folded, ".", "")
-	compact = strings.ReplaceAll(compact, "-", " ")
+
+	compact := folded
+	if strings.ContainsAny(compact, "\".-") {
+		var b strings.Builder
+		b.Grow(len(compact))
+		for i := 0; i < len(compact); i++ {
+			c := compact[i]
+			if c == '"' || c == '.' {
+				continue
+			}
+			if c == '-' {
+				b.WriteByte(' ')
+				continue
+			}
+			b.WriteByte(c)
+		}
+		compact = b.String()
+	}
 
 	isExternal := false
 	for _, w := range externalWords {
@@ -356,7 +385,19 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 		return nil
 	}
 	folded := asciiFold(text)
-	compact := strings.ReplaceAll(strings.ReplaceAll(folded, "-", ""), "_", "")
+	compact := folded
+	if strings.ContainsAny(compact, "-_") {
+		var b strings.Builder
+		b.Grow(len(compact))
+		for i := 0; i < len(compact); i++ {
+			c := compact[i]
+			if c == '-' || c == '_' {
+				continue
+			}
+			b.WriteByte(c)
+		}
+		compact = b.String()
+	}
 
 	// Explicit declaration wins.
 	if strings.Contains(folded, "conventional") || strings.Contains(compact, "cmr") {

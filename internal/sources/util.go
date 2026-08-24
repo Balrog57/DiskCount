@@ -29,11 +29,47 @@ func strPtr(s string) *string {
 
 func parseFloatClean(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "€", "")
-	s = strings.ReplaceAll(s, "\u00a0", " ")
-	s = strings.ReplaceAll(s, " ", "")
-	s = strings.ReplaceAll(s, ",", ".")
-	return strconv.ParseFloat(s, 64)
+
+	needsClean := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == ' ' || c == ',' || c == 0xe2 || c == 0xc2 {
+			needsClean = true
+			break
+		}
+	}
+	if !needsClean {
+		return strconv.ParseFloat(s, 64)
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case ' ':
+			continue
+		case ',':
+			b.WriteByte('.')
+		case 0xe2:
+			// € is e2 82 ac
+			if i+2 < len(s) && s[i+1] == 0x82 && s[i+2] == 0xac {
+				i += 2
+				continue
+			}
+			b.WriteByte(c)
+		case 0xc2:
+			// NBSP \u00a0 is c2 a0
+			if i+1 < len(s) && s[i+1] == 0xa0 {
+				i++
+				continue
+			}
+			b.WriteByte(c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return strconv.ParseFloat(b.String(), 64)
 }
 
 func isAmazonURL(raw string) bool {
