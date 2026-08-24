@@ -265,6 +265,10 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !isSafeMethod(r.Method) && !sameOrigin(r) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		switch r.URL.Path {
 		case "/health", "/healthz", "/readyz":
 			s.health(w, r)
@@ -287,6 +291,27 @@ func (s *Server) handler() http.Handler {
 		}
 		s.withAuth(s.routes()).ServeHTTP(w, r)
 	})
+}
+
+func isSafeMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+// sameOrigin rejects cross-site state-changing requests by requiring Origin
+// (or Referer) to match this request's Host with an exact boundary check.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		origin = r.Header.Get("Referer")
+	}
+	if origin == "" || r.Host == "" {
+		return false
+	}
+	httpExact := "http://" + r.Host
+	httpsExact := "https://" + r.Host
+	return origin == httpExact || origin == httpsExact ||
+		strings.HasPrefix(origin, httpExact+"/") ||
+		strings.HasPrefix(origin, httpsExact+"/")
 }
 
 func (s *Server) routes() http.Handler {
@@ -384,6 +409,15 @@ func sanitizeNext(raw string) string {
 		return "/"
 	}
 	if !strings.HasPrefix(u.Path, "/") {
+		return "/"
+	}
+	// Reject protocol-relative paths (///evil.com) and backslash tricks;
+	// browsers may treat these as off-site navigations after a redirect.
+	if strings.HasPrefix(u.Path, "//") || strings.Contains(u.Path, `\`) {
+		return "/"
+	}
+	if decoded, err := url.PathUnescape(u.Path); err != nil ||
+		strings.HasPrefix(decoded, "//") || strings.Contains(decoded, `\`) {
 		return "/"
 	}
 	return u.RequestURI()
