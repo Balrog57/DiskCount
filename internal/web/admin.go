@@ -1873,11 +1873,11 @@ input,select{width:100%;min-height:40px;padding:8px 10px;border:2px solid var(--
 <header class="topbar">
 <h1>{{.Title}}</h1>
 <div class="status">
-<div class="lang-switch" role="group" aria-label="{{call .T "web.lang.label"}}">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Path}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
-<div class="theme-switch" role="group" aria-label="theme">
-<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "light"}}class="active"{{end}}>{{call .T "web.theme.light"}}</button></form>
-<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "dark"}}class="active"{{end}}>{{call .T "web.theme.dark"}}</button></form>
-<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" {{if eq .Theme "auto"}}class="active"{{end}}>{{call .T "web.theme.auto"}}</button></form>
+<div class="lang-switch" role="group" aria-label="{{call .T "web.lang.label"}}">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Path}}"><button type="submit" aria-label="{{if eq . "fr"}}{{call $.T "web.lang.fr"}}{{else}}{{call $.T "web.lang.en"}}{{end}}" {{if eq $.Locale .}}class="active" aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
+<div class="theme-switch" role="group" aria-label="{{call .T "web.theme.label"}}">
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="light"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" aria-label="{{call .T "web.theme.light"}}" {{if eq .Theme "light"}}class="active" aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{call .T "web.theme.light"}}</button></form>
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="dark"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" aria-label="{{call .T "web.theme.dark"}}" {{if eq .Theme "dark"}}class="active" aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{call .T "web.theme.dark"}}</button></form>
+<form method="post" action="/theme" style="display:inline;margin:0"><input type="hidden" name="theme" value="auto"><input type="hidden" name="next" value="{{.Path}}"><button type="submit" aria-label="{{call .T "web.theme.auto"}}" {{if eq .Theme "auto"}}class="active" aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{call .T "web.theme.auto"}}</button></form>
 </div>
 <span class="badge {{stateClass .Status.DiscordConfigured}}">Discord {{if .Status.DiscordConfigured}}{{call .T "web.topbar.discord_ok"}}{{else}}{{call .T "web.topbar.discord_off"}}{{end}}</span>
 <span class="badge">{{.Status.SourceCount}} {{call .T "web.topbar.sources"}}</span>
@@ -1916,7 +1916,7 @@ const loginTpl = `{{define "body"}}
 <span class="hint" style="margin-left:auto">{{call .T "web.login.restricted"}}</span>
 </div>
 </form>
-<div class="lang-switch" style="margin:14px auto 0;justify-content:center">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" {{if eq $.Locale .}}class="active"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
+<div class="lang-switch" style="margin:14px auto 0;justify-content:center" role="group" aria-label="{{call .T "web.lang.label"}}">{{range .KnownLangs}}<form method="post" action="/lang" style="display:inline;margin:0"><input type="hidden" name="lang" value="{{.}}"><input type="hidden" name="next" value="{{$.Title}}"><button type="submit" aria-label="{{if eq . "fr"}}{{call $.T "web.lang.fr"}}{{else}}{{call $.T "web.lang.en"}}{{end}}" {{if eq $.Locale .}}class="active" aria-pressed="true"{{else}}aria-pressed="false"{{end}}>{{if eq . "fr"}}FR{{else}}EN{{end}}</button></form>{{end}}</div>
 </div>
 {{end}}`
 
@@ -2107,7 +2107,7 @@ const metricsTpl = `{{define "body"}}
 </div>
 {{end}}
 <section class="section panel"><div class="panel-head"><h2>Sante des sources</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Etat</th><th>Action</th></tr></thead><tbody>
-{{range $name, $state := .Breakers}}<tr><td>{{$name}}</td><td>{{if eq $state "closed"}}<span class="badge good">closed</span>{{else if eq $state "half-open"}}<span class="badge warn">half-open</span>{{else}}<span class="badge bad">open</span>{{end}}</td><td><form class="inline" method="post" action="/api/sources/breaker/reset"><input type="hidden" name="name" value="{{$name}}"><button class="secondary" type="submit">Reinitialiser</button></form></td></tr>{{else}}<tr><td colspan="3" class="empty">Aucun breaker.</td></tr>{{end}}
+{{range $name, $state := .Breakers}}<tr><td>{{$name}}</td><td>{{if eq $state "closed"}}<span class="badge good">closed</span>{{else if eq $state "half-open"}}<span class="badge warn">half-open</span>{{else}}<span class="badge bad">open</span>{{end}}</td><td><form class="inline" method="post" action="/api/sources/breaker/reset"><input type="hidden" name="name" value="{{$name}}"><button class="secondary" type="submit" aria-label="{{call $.T "web.common.reset"}} {{$name}}">{{call $.T "web.common.reset"}}</button></form></td></tr>{{else}}<tr><td colspan="3" class="empty">{{call .T "web.common.no_breaker"}}</td></tr>{{end}}
 </tbody></table></div></section>
 <section class="section panel"><div class="panel-head"><h2>Metriques par source (dernier scan)</h2></div><div class="table-wrap"><table><thead><tr><th>Source</th><th>Deals</th><th>Breaker</th><th>Erreur</th></tr></thead><tbody>
 {{if .Report}}{{range .Report.SourceMetrics}}<tr><td>{{.Name}}</td><td>{{.DealsFetched}}</td><td>{{.BreakerState}}</td><td>{{.Error}}</td></tr>{{else}}<tr><td colspan="4" class="empty">Aucune metrique.</td></tr>{{end}}{{else}}<tr><td colspan="4" class="empty">Aucun scan.</td></tr>{{end}}

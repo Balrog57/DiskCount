@@ -63,6 +63,7 @@ var catalogs = map[Locale]map[string]string{
 		"web.theme.light": "Clair",
 		"web.theme.dark":  "Sombre",
 		"web.theme.auto":  "Auto",
+		"web.theme.label": "Thème",
 
 		// Web — topbar
 		"web.topbar.discord_ok":  "configure",
@@ -371,6 +372,7 @@ var catalogs = map[Locale]map[string]string{
 		"web.theme.light": "Light",
 		"web.theme.dark":  "Dark",
 		"web.theme.auto":  "Auto",
+		"web.theme.label": "Theme",
 
 		"web.topbar.discord_ok":  "configured",
 		"web.topbar.discord_off": "not configured",
