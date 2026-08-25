@@ -870,3 +870,51 @@ func TestLogoutClearsSession(t *testing.T) {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
 	}
 }
+
+func TestSecurityHeadersOnPublicEndpoints(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	srv.handler().ServeHTTP(rec, req)
+	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy", "Permissions-Policy"} {
+		if got := rec.Header().Get(h); got == "" {
+			t.Fatalf("missing %s header on /login", h)
+		}
+	}
+	if rec.Header().Get("X-Frame-Options") != "DENY" {
+		t.Fatalf("expected X-Frame-Options DENY, got %q", rec.Header().Get("X-Frame-Options"))
+	}
+}
+
+func TestSessionCookieSecureBehindTLSProxy(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login failed: %d", rec.Code)
+	}
+	cookie := rec.Header().Get("Set-Cookie")
+	if !strings.Contains(cookie, "Secure") {
+		t.Fatalf("expected Secure session cookie behind HTTPS proxy, got %q", cookie)
+	}
+}
+
+func TestSessionCookieOmitsSecureOnPlainHTTP(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login failed: %d", rec.Code)
+	}
+	cookie := rec.Header().Get("Set-Cookie")
+	if strings.Contains(cookie, "Secure") {
+		t.Fatalf("plain HTTP login should not set Secure cookie, got %q", cookie)
+	}
+}

@@ -210,7 +210,7 @@ func (s *Server) validSession(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, secure bool) {
 	issued := time.Now()
 	value := fmt.Sprintf("%d:%s", issued.UnixNano(), s.signSession(issued))
 	http.SetCookie(w, &http.Cookie{
@@ -218,17 +218,19 @@ func (s *Server) setSessionCookie(w http.ResponseWriter) {
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		Expires:  issued.Add(sessionTTL),
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
@@ -265,6 +267,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
 		if !isSafeMethod(r.Method) && !sameOrigin(r) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -295,6 +298,26 @@ func (s *Server) handler() http.Handler {
 
 func isSafeMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions
+}
+
+// requestIsSecure reports whether the client connection is TLS-terminated
+// locally or via a reverse proxy (X-Forwarded-Proto). Used to set the Secure
+// flag on session cookies so they are not sent over plaintext HTTP when the
+// admin UI is served behind HTTPS.
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// setSecurityHeaders applies baseline defense-in-depth response headers for
+// every admin and public endpoint (health, login, RSS feed).
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 }
 
 // sameOrigin rejects cross-site state-changing requests by requiring Origin
@@ -379,7 +402,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		pass := r.Form.Get("password")
 		if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
-			s.setSessionCookie(w)
+			s.setSessionCookie(w, requestIsSecure(r))
 			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
@@ -395,7 +418,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, requestIsSecure(r))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
