@@ -313,6 +313,36 @@ func TestDashboardRendersRecentNotifications(t *testing.T) {
 	}
 }
 
+func TestLayoutIncludesSkipToContentLink(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, statsTpl, map[string]any{
+		"Title": "Tableau de bord", "Active": "stats",
+	})
+	body := rec.Body.String()
+	for _, required := range []string{
+		`href="#main-content"`,
+		`class="skip-link"`,
+		`id="main-content"`,
+		`tabindex="-1"`,
+		"Aller au contenu principal",
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing skip link markup %q: %s", required, body)
+		}
+	}
+}
+
+func TestLayoutSkipToContentLinkInEnglish(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, statsTpl, map[string]any{
+		"Title": "Dashboard", "Active": "stats", "Locale": "en",
+	})
+	body := rec.Body.String()
+	if !strings.Contains(body, "Skip to main content") {
+		t.Fatalf("English skip link missing: %s", body)
+	}
+}
+
 func TestFilterPricesUsesStorageFacets(t *testing.T) {
 	brand, category, iface, recording, media := "Seagate", "nas", "sata", "cmr", "rotational"
 	prices := []db.CurrentPrice{
