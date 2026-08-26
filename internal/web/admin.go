@@ -210,7 +210,7 @@ func (s *Server) validSession(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request) {
 	issued := time.Now()
 	value := fmt.Sprintf("%d:%s", issued.UnixNano(), s.signSession(issued))
 	http.SetCookie(w, &http.Cookie{
@@ -218,20 +218,42 @@ func (s *Server) setSessionCookie(w http.ResponseWriter) {
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  issued.Add(sessionTTL),
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+}
+
+// requestIsSecure reports whether the client reached us over HTTPS.
+// Behind a reverse proxy, honor X-Forwarded-Proto since r.TLS is nil.
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if idx := strings.IndexByte(proto, ','); idx >= 0 {
+		proto = proto[:idx]
+	}
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
+
+// setSecurityHeaders applies baseline response headers for all web routes.
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "same-origin")
 }
 
 func isHTMX(r *http.Request) bool {
@@ -265,6 +287,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
 		if !isSafeMethod(r.Method) && !sameOrigin(r) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -379,7 +402,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}
 		pass := r.Form.Get("password")
 		if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
-			s.setSessionCookie(w)
+			s.setSessionCookie(w, r)
 			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
@@ -395,7 +418,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 

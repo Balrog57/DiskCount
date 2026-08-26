@@ -870,3 +870,41 @@ func TestLogoutClearsSession(t *testing.T) {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
 	}
 }
+
+func TestSecurityHeadersApplied(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	srv.handler().ServeHTTP(rec, req)
+	for _, hdr := range []string{"X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy"} {
+		if rec.Header().Get(hdr) == "" {
+			t.Fatalf("missing %s header", hdr)
+		}
+	}
+}
+
+func TestSessionCookieSecureBehindProxy(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login POST: expected 303, got %d", rec.Code)
+	}
+	var session *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			session = c
+			break
+		}
+	}
+	if session == nil {
+		t.Fatal("session cookie not set")
+	}
+	if !session.Secure {
+		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
+	}
+}
