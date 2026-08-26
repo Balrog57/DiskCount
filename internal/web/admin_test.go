@@ -722,6 +722,38 @@ func TestLoginPageRendersInEnglish(t *testing.T) {
 	}
 }
 
+// TestLayoutIncludesSkipToContentLink ensures keyboard users can bypass
+// the sidebar and topbar on every page (WCAG 2.4.1 Bypass Blocks).
+func TestLayoutIncludesSkipToContentLink(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	mux := srv.handler()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="#main-content"`) {
+		t.Fatalf("skip link missing: %s", body)
+	}
+	if !strings.Contains(body, `id="main-content"`) {
+		t.Fatalf("main content landmark missing: %s", body)
+	}
+	if !strings.Contains(body, "Aller au contenu principal") {
+		t.Fatalf("French skip text missing: %s", body)
+	}
+
+	recEN := httptest.NewRecorder()
+	reqEN := httptest.NewRequest(http.MethodGet, "/login", nil)
+	reqEN.AddCookie(&http.Cookie{Name: langCookieName, Value: "en"})
+	mux.ServeHTTP(recEN, reqEN)
+	if !strings.Contains(recEN.Body.String(), "Skip to main content") {
+		t.Fatalf("English skip text missing: %s", recEN.Body.String())
+	}
+}
+
 // TestSetLangSwitchesLocaleAndPinsCookie exercises the /lang endpoint:
 // posting lang=en must set the cookie and redirect (303), and the next
 // request must see the cookie honoured.
