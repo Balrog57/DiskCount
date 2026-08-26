@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
-	"github.com/jackc/pgx/v5"
 )
 
 // ProductCatalog holds canonical technical specs keyed by EAN/SKU identity.
@@ -36,21 +35,44 @@ func (db *DB) GetCatalogEntry(ctx context.Context, canonicalKey string) (*Produc
 	if canonicalKey == "" {
 		return nil, nil
 	}
-	c := &ProductCatalog{}
-	err := db.Pool.QueryRow(ctx, `
-SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
-       form_factor, technology, interfaces, image_url, spec_source
-FROM product_catalog WHERE canonical_key=$1`, canonicalKey).Scan(
-		&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
-		&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
-		jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
+	m, err := db.CatalogEntriesMap(ctx, []string{canonicalKey})
 	if err != nil {
 		return nil, err
 	}
-	return c, nil
+	return m[canonicalKey], nil
+}
+
+// CatalogEntriesMap returns catalog rows for every canonical key in the
+// input slice. Missing keys are absent from the map.
+//
+// ⚡ Bolt optimization: replaces N per-deal GetCatalogEntry calls in the
+// scanner hot path (EnrichDealFromCatalog + UpsertCatalogEntry each did
+// one lookup) with a single ANY($1) round-trip. On a ~200-deal scan this
+// cuts ~400 sequential catalog SELECTs down to 1.
+func (db *DB) CatalogEntriesMap(ctx context.Context, keys []string) (map[string]*ProductCatalog, error) {
+	if len(keys) == 0 {
+		return map[string]*ProductCatalog{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, `
+SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
+       form_factor, technology, interfaces, image_url, spec_source
+FROM product_catalog WHERE canonical_key = ANY($1)`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*ProductCatalog, len(keys))
+	for rows.Next() {
+		c := &ProductCatalog{}
+		if err := rows.Scan(
+			&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
+			&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
+			jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource); err != nil {
+			return nil, err
+		}
+		out[c.CanonicalKey] = c
+	}
+	return out, rows.Err()
 }
 
 // EnrichDealFromCatalog fills missing technical fields from the canonical catalog.
@@ -61,6 +83,16 @@ func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 	}
 	cat, err := db.GetCatalogEntry(ctx, key)
 	if err != nil || cat == nil {
+		return
+	}
+	ApplyCatalogToDeal(cat, deal)
+}
+
+// ApplyCatalogToDeal merges a pre-fetched catalog row into a deal. Callers
+// that already batched catalog lookups via CatalogEntriesMap should use this
+// instead of EnrichDealFromCatalog to avoid redundant round-trips.
+func ApplyCatalogToDeal(cat *ProductCatalog, deal *domain.Deal) {
+	if cat == nil || deal == nil {
 		return
 	}
 	applyCatalogToDeal(cat, deal)
@@ -126,12 +158,32 @@ func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal) error {
 	if err != nil {
 		return err
 	}
+	return db.upsertCatalogEntry(ctx, deal, existing)
+}
+
+// UpsertCatalogEntryCached is like UpsertCatalogEntry but reuses a
+// pre-fetched catalog map from CatalogEntriesMap instead of issuing a
+// per-deal SELECT before the upsert.
+func (db *DB) UpsertCatalogEntryCached(ctx context.Context, deal domain.Deal, catalog map[string]*ProductCatalog) error {
+	key := deal.CanonicalProductKey()
+	if key == "" {
+		return nil
+	}
+	var existing *ProductCatalog
+	if catalog != nil {
+		existing = catalog[key]
+	}
+	return db.upsertCatalogEntry(ctx, deal, existing)
+}
+
+func (db *DB) upsertCatalogEntry(ctx context.Context, deal domain.Deal, existing *ProductCatalog) error {
+	key := deal.CanonicalProductKey()
 	entry := catalogFromDeal(deal)
 	if existing != nil && specPriority(entry.SpecSource) < specPriority(existing.SpecSource) {
 		entry = mergeCatalogPreferExisting(*existing, entry)
 	}
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err = db.Pool.Exec(ctx, `
+	_, err := db.Pool.Exec(ctx, `
 INSERT INTO product_catalog(
   canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
   form_factor, technology, interfaces, image_url, spec_source, updated_at

@@ -482,8 +482,38 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("last-notifications map", "err", err)
 		}
 	}
+	// ⚡ Bolt optimization: normalize once, collect unique canonical keys,
+	// then fetch every catalog row in one ANY($1) query. Enrich + upsert
+	// used to each call GetCatalogEntry per deal (~2×N SELECTs); this
+	// collapses them to a single round-trip before the processing loop.
+	type dealWork struct {
+		res normalize.Result
+	}
+	works := make([]dealWork, 0, len(deals))
+	catalogKeySet := make(map[string]struct{})
 	for _, raw := range deals {
 		res := normalize.Deal(raw)
+		works = append(works, dealWork{res: res})
+		if res.Reject == nil {
+			if key := res.Deal.CanonicalProductKey(); key != "" {
+				catalogKeySet[key] = struct{}{}
+			}
+		}
+	}
+	catalogKeys := make([]string, 0, len(catalogKeySet))
+	for key := range catalogKeySet {
+		catalogKeys = append(catalogKeys, key)
+	}
+	catalogEntries := map[string]*db.ProductCatalog{}
+	if s.db != nil && len(catalogKeys) > 0 {
+		if m, err := s.db.CatalogEntriesMap(ctx, catalogKeys); err == nil {
+			catalogEntries = m
+		} else {
+			slog.Warn("catalog map", "err", err)
+		}
+	}
+	for _, item := range works {
+		res := item.res
 		if res.Reject != nil {
 			r.Rejected++
 			r.RejectReasons[res.Reject.Reason]++
@@ -497,7 +527,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		}
 		deal := res.Deal
 		if !dryRun && s.db != nil {
-			s.db.EnrichDealFromCatalog(ctx, &deal)
+			db.ApplyCatalogToDeal(catalogEntries[deal.CanonicalProductKey()], &deal)
 		}
 		pid := deal.ProductID()
 		seenByMerchant[deal.Source] = append(seenByMerchant[deal.Source], pid)
@@ -517,7 +547,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
 			}
-			if err := s.db.UpsertCatalogEntry(ctx, deal); err != nil {
+			if err := s.db.UpsertCatalogEntryCached(ctx, deal, catalogEntries); err != nil {
 				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
 				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}
