@@ -466,6 +466,42 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("baseline map", "err", err)
 		}
 	}
+	// Pre-normalize every deal once so we can batch catalog lookups by
+	// canonical key before the per-deal write loop.
+	normed := make([]normalize.Result, len(deals))
+	for i, raw := range deals {
+		normed[i] = normalize.Deal(raw)
+	}
+	// ⚡ Bolt optimization: load all product_catalog rows for this scan in
+	// one query instead of one SELECT per deal for enrich + upsert prefetch.
+	// The map is updated in place by UpsertCatalogEntryCached so multi-
+	// merchant batches with the same EAN/SKU still merge correctly.
+	catalogEntries := map[string]*db.ProductCatalog{}
+	if s.db != nil {
+		catalogKeys := make([]string, 0, len(normed))
+		seenCatalogKeys := make(map[string]struct{})
+		for _, res := range normed {
+			if res.Reject != nil {
+				continue
+			}
+			key := res.Deal.CanonicalProductKey()
+			if key == "" {
+				continue
+			}
+			if _, ok := seenCatalogKeys[key]; ok {
+				continue
+			}
+			seenCatalogKeys[key] = struct{}{}
+			catalogKeys = append(catalogKeys, key)
+		}
+		if len(catalogKeys) > 0 {
+			if m, err := s.db.CatalogEntriesMap(ctx, catalogKeys); err == nil {
+				catalogEntries = m
+			} else {
+				slog.Warn("catalog map", "err", err)
+			}
+		}
+	}
 	// ⚡ Batch the last-notification lookup for the whole scan in one
 	// query instead of one indexed SELECT per (deal × matching alert).
 	// We only need the enabled alert IDs; product IDs are the same slice
@@ -482,8 +518,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("last-notifications map", "err", err)
 		}
 	}
-	for _, raw := range deals {
-		res := normalize.Deal(raw)
+	for _, res := range normed {
 		if res.Reject != nil {
 			r.Rejected++
 			r.RejectReasons[res.Reject.Reason]++
@@ -497,7 +532,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		}
 		deal := res.Deal
 		if !dryRun && s.db != nil {
-			s.db.EnrichDealFromCatalog(ctx, &deal)
+			db.EnrichDealFromCatalogCached(&deal, catalogEntries)
 		}
 		pid := deal.ProductID()
 		seenByMerchant[deal.Source] = append(seenByMerchant[deal.Source], pid)
@@ -517,7 +552,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
 			}
-			if err := s.db.UpsertCatalogEntry(ctx, deal); err != nil {
+			if err := s.db.UpsertCatalogEntryCached(ctx, deal, catalogEntries); err != nil {
 				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
 				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}

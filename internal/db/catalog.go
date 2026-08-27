@@ -53,6 +53,40 @@ FROM product_catalog WHERE canonical_key=$1`, canonicalKey).Scan(
 	return c, nil
 }
 
+// CatalogEntriesMap returns catalog rows for every canonical key in keys.
+// Keys with no row are absent from the map.
+//
+// ⚡ Bolt optimization: replaces N per-deal GetCatalogEntry calls in the
+// scanner hot path with one ANY($1) query. A typical source scan with ~200
+// accepted deals used to issue up to 400 sequential catalog SELECTs
+// (enrich + upsert prefetch); this collapses the reads to 1.
+func (db *DB) CatalogEntriesMap(ctx context.Context, keys []string) (map[string]*ProductCatalog, error) {
+	if len(keys) == 0 {
+		return map[string]*ProductCatalog{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, `
+SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
+       form_factor, technology, interfaces, image_url, spec_source
+FROM product_catalog WHERE canonical_key = ANY($1)`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*ProductCatalog, len(keys))
+	for rows.Next() {
+		c := &ProductCatalog{}
+		if err := rows.Scan(
+			&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
+			&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
+			jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource,
+		); err != nil {
+			return nil, err
+		}
+		out[c.CanonicalKey] = c
+	}
+	return out, rows.Err()
+}
+
 // EnrichDealFromCatalog fills missing technical fields from the canonical catalog.
 func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 	key := deal.CanonicalProductKey()
@@ -64,6 +98,19 @@ func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 		return
 	}
 	applyCatalogToDeal(cat, deal)
+}
+
+// EnrichDealFromCatalogCached is the batch-scan variant of EnrichDealFromCatalog.
+// It looks up the deal's canonical key in a pre-fetched map instead of hitting
+// the database.
+func EnrichDealFromCatalogCached(deal *domain.Deal, cache map[string]*ProductCatalog) {
+	key := deal.CanonicalProductKey()
+	if key == "" {
+		return
+	}
+	if cat := cache[key]; cat != nil {
+		applyCatalogToDeal(cat, deal)
+	}
 }
 
 func applyCatalogToDeal(cat *ProductCatalog, deal *domain.Deal) {
@@ -126,12 +173,31 @@ func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal) error {
 	if err != nil {
 		return err
 	}
+	return db.upsertCatalogEntry(ctx, key, deal, existing, nil)
+}
+
+// UpsertCatalogEntryCached merges specs using a pre-fetched catalog map and
+// updates the cache after each write so later deals in the same scan batch
+// see the merged state without another SELECT.
+func (db *DB) UpsertCatalogEntryCached(ctx context.Context, deal domain.Deal, cache map[string]*ProductCatalog) error {
+	key := deal.CanonicalProductKey()
+	if key == "" {
+		return nil
+	}
+	var existing *ProductCatalog
+	if cache != nil {
+		existing = cache[key]
+	}
+	return db.upsertCatalogEntry(ctx, key, deal, existing, cache)
+}
+
+func (db *DB) upsertCatalogEntry(ctx context.Context, key string, deal domain.Deal, existing *ProductCatalog, cache map[string]*ProductCatalog) error {
 	entry := catalogFromDeal(deal)
 	if existing != nil && specPriority(entry.SpecSource) < specPriority(existing.SpecSource) {
 		entry = mergeCatalogPreferExisting(*existing, entry)
 	}
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err = db.Pool.Exec(ctx, `
+	_, err := db.Pool.Exec(ctx, `
 INSERT INTO product_catalog(
   canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
   form_factor, technology, interfaces, image_url, spec_source, updated_at
@@ -154,6 +220,11 @@ ON CONFLICT (canonical_key) DO UPDATE SET
 		key, entry.EAN, entry.SKU, entry.Brand, entry.Model, entry.CapacityTB,
 		entry.MediaType, entry.DriveCategory, entry.RecordingMethod,
 		entry.FormFactor, entry.Technology, ja(ifaces), entry.ImageURL, entry.SpecSource)
+	if err == nil && cache != nil {
+		merged := entry
+		merged.CanonicalKey = key
+		cache[key] = &merged
+	}
 	return err
 }
 
