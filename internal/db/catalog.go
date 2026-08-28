@@ -32,18 +32,24 @@ func specPriority(src string) int {
 	}
 }
 
+const catalogSelectSQL = `
+SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
+       form_factor, technology, interfaces, image_url, spec_source
+FROM product_catalog`
+
+func scanCatalog(c *ProductCatalog, row pgx.Row) error {
+	return row.Scan(
+		&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
+		&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
+		jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource)
+}
+
 func (db *DB) GetCatalogEntry(ctx context.Context, canonicalKey string) (*ProductCatalog, error) {
 	if canonicalKey == "" {
 		return nil, nil
 	}
 	c := &ProductCatalog{}
-	err := db.Pool.QueryRow(ctx, `
-SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
-       form_factor, technology, interfaces, image_url, spec_source
-FROM product_catalog WHERE canonical_key=$1`, canonicalKey).Scan(
-		&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
-		&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
-		jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource)
+	err := scanCatalog(c, db.Pool.QueryRow(ctx, catalogSelectSQL+` WHERE canonical_key=$1`, canonicalKey))
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -51,6 +57,28 @@ FROM product_catalog WHERE canonical_key=$1`, canonicalKey).Scan(
 		return nil, err
 	}
 	return c, nil
+}
+
+// CatalogMap returns catalog entries for every canonical key in the input
+// slice in a single round-trip. Keys with no entry are absent from the map.
+func (db *DB) CatalogMap(ctx context.Context, canonicalKeys []string) (map[string]*ProductCatalog, error) {
+	if len(canonicalKeys) == 0 {
+		return map[string]*ProductCatalog{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, catalogSelectSQL+` WHERE canonical_key = ANY($1)`, canonicalKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*ProductCatalog, len(canonicalKeys))
+	for rows.Next() {
+		c := &ProductCatalog{}
+		if err := scanCatalog(c, rows); err != nil {
+			return nil, err
+		}
+		out[c.CanonicalKey] = c
+	}
+	return out, rows.Err()
 }
 
 // EnrichDealFromCatalog fills missing technical fields from the canonical catalog.
@@ -63,6 +91,11 @@ func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 	if err != nil || cat == nil {
 		return
 	}
+	ApplyCatalogToDeal(cat, deal)
+}
+
+// ApplyCatalogToDeal merges a pre-fetched catalog entry into a deal.
+func ApplyCatalogToDeal(cat *ProductCatalog, deal *domain.Deal) {
 	applyCatalogToDeal(cat, deal)
 }
 
