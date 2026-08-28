@@ -53,6 +53,40 @@ FROM product_catalog WHERE canonical_key=$1`, canonicalKey).Scan(
 	return c, nil
 }
 
+// GetCatalogEntriesMap returns catalog rows for every canonical key in the
+// input slice in a single round-trip. Keys with no row are absent from the
+// map.
+//
+// ⚡ Bolt optimization: replaces N per-deal GetCatalogEntry calls in the
+// scanner hot path with one WHERE canonical_key = ANY($1) query. A typical
+// scan with ~200 accepted deals used to issue ~400 catalog SELECTs (enrich +
+// upsert); this collapses the read side to 1.
+func (db *DB) GetCatalogEntriesMap(ctx context.Context, keys []string) (map[string]*ProductCatalog, error) {
+	if len(keys) == 0 {
+		return map[string]*ProductCatalog{}, nil
+	}
+	rows, err := db.Pool.Query(ctx, `
+SELECT canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
+       form_factor, technology, interfaces, image_url, spec_source
+FROM product_catalog WHERE canonical_key = ANY($1)`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]*ProductCatalog, len(keys))
+	for rows.Next() {
+		c := &ProductCatalog{}
+		if err := rows.Scan(
+			&c.CanonicalKey, &c.EAN, &c.SKU, &c.Brand, &c.Model, &c.CapacityTB,
+			&c.MediaType, &c.DriveCategory, &c.RecordingMethod, &c.FormFactor, &c.Technology,
+			jsonScan(&c.Interfaces), &c.ImageURL, &c.SpecSource); err != nil {
+			return nil, err
+		}
+		out[c.CanonicalKey] = c
+	}
+	return out, rows.Err()
+}
+
 // EnrichDealFromCatalog fills missing technical fields from the canonical catalog.
 func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 	key := deal.CanonicalProductKey()
@@ -64,6 +98,21 @@ func (db *DB) EnrichDealFromCatalog(ctx context.Context, deal *domain.Deal) {
 		return
 	}
 	applyCatalogToDeal(cat, deal)
+}
+
+// EnrichDealFromCatalogMap is the batched variant used by the scanner when
+// catalog rows were prefetched via GetCatalogEntriesMap.
+func EnrichDealFromCatalogMap(deal *domain.Deal, catalog map[string]*ProductCatalog) {
+	if len(catalog) == 0 {
+		return
+	}
+	key := deal.CanonicalProductKey()
+	if key == "" {
+		return
+	}
+	if cat := catalog[key]; cat != nil {
+		applyCatalogToDeal(cat, deal)
+	}
 }
 
 func applyCatalogToDeal(cat *ProductCatalog, deal *domain.Deal) {
@@ -126,12 +175,30 @@ func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal) error {
 	if err != nil {
 		return err
 	}
+	return db.upsertCatalogEntry(ctx, deal, key, existing)
+}
+
+// UpsertCatalogEntryWithMap merges specs using a prefetched catalog map instead
+// of a per-deal SELECT. Missing keys are treated as no existing row.
+func (db *DB) UpsertCatalogEntryWithMap(ctx context.Context, deal domain.Deal, catalog map[string]*ProductCatalog) error {
+	key := deal.CanonicalProductKey()
+	if key == "" {
+		return nil
+	}
+	var existing *ProductCatalog
+	if catalog != nil {
+		existing = catalog[key]
+	}
+	return db.upsertCatalogEntry(ctx, deal, key, existing)
+}
+
+func (db *DB) upsertCatalogEntry(ctx context.Context, deal domain.Deal, key string, existing *ProductCatalog) error {
 	entry := catalogFromDeal(deal)
 	if existing != nil && specPriority(entry.SpecSource) < specPriority(existing.SpecSource) {
 		entry = mergeCatalogPreferExisting(*existing, entry)
 	}
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err = db.Pool.Exec(ctx, `
+	_, err := db.Pool.Exec(ctx, `
 INSERT INTO product_catalog(
   canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
   form_factor, technology, interfaces, image_url, spec_source, updated_at
