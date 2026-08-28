@@ -482,8 +482,37 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("last-notifications map", "err", err)
 		}
 	}
-	for _, raw := range deals {
-		res := normalize.Deal(raw)
+	// Normalize once so we can batch catalog lookups by canonical key
+	// without calling normalize.Deal twice per raw deal.
+	normalized := make([]normalize.Result, len(deals))
+	for i, raw := range deals {
+		normalized[i] = normalize.Deal(raw)
+	}
+	catalogMap := map[string]*db.ProductCatalog{}
+	if s.db != nil {
+		catalogKeys := make([]string, 0, len(deals))
+		seenCatalogKey := make(map[string]struct{}, len(deals))
+		for _, res := range normalized {
+			if res.Reject != nil {
+				continue
+			}
+			if key := res.Deal.CanonicalProductKey(); key != "" {
+				if _, ok := seenCatalogKey[key]; ok {
+					continue
+				}
+				seenCatalogKey[key] = struct{}{}
+				catalogKeys = append(catalogKeys, key)
+			}
+		}
+		if len(catalogKeys) > 0 {
+			if m, err := s.db.CatalogMap(ctx, catalogKeys); err == nil {
+				catalogMap = m
+			} else {
+				slog.Warn("catalog map", "err", err)
+			}
+		}
+	}
+	for _, res := range normalized {
 		if res.Reject != nil {
 			r.Rejected++
 			r.RejectReasons[res.Reject.Reason]++
@@ -497,7 +526,9 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		}
 		deal := res.Deal
 		if !dryRun && s.db != nil {
-			s.db.EnrichDealFromCatalog(ctx, &deal)
+			if cat, ok := catalogMap[deal.CanonicalProductKey()]; ok {
+				db.ApplyCatalogToDeal(cat, &deal)
+			}
 		}
 		pid := deal.ProductID()
 		seenByMerchant[deal.Source] = append(seenByMerchant[deal.Source], pid)
