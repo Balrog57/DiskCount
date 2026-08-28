@@ -699,6 +699,37 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 	}
 }
 
+func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	const client = "192.168.50.10:54321"
+	for i := 0; i < loginRateMaxAttempts; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = client
+		setSameOrigin(req)
+		srv.handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d: expected 200, got %d", i+1, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = client
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("expected rate limit to block even a correct password after repeated failures")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rate-limited login should still render the form, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Mot de passe invalide") {
+		t.Fatalf("rate-limited login should show generic error, got: %s", rec.Body.String())
+	}
+}
+
 // TestLoginPageRendersInEnglish verifies the language switcher: setting the
 // lang cookie to "en" must surface the English strings in the login page.
 func TestLoginPageRendersInEnglish(t *testing.T) {

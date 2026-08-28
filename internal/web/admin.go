@@ -117,6 +117,7 @@ type Server struct {
 	startedAt         time.Time
 	discordConfigured atomic.Bool
 	discordTestSender func(string, string) error
+	loginLimiter      *loginLimiter
 }
 
 type configRow struct {
@@ -133,6 +134,7 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	sort.Strings(sources)
 	s := &Server{
 		db: dbase, scanner: scan, cfg: cfg, sourceNames: sources, startedAt: time.Now().UTC(),
+		loginLimiter: newLoginLimiter(),
 	}
 	s.discordTestSender = func(token, channelID string) error {
 		return notifier.NewDiscord(token, channelID).SendTest()
@@ -159,6 +161,9 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Count failed basic-auth attempts toward the same per-IP limit
+			// as /login so API clients cannot bypass form rate limiting.
+			s.loginLimiter.recordFailure(clientIP(r))
 		}
 
 		if isHTMX(r) || acceptsJSON(r) {
@@ -377,13 +382,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		ip := clientIP(r)
+		if s.loginLimiter.blocked(ip) {
+			// Reuse the generic login error so attackers cannot distinguish
+			// rate limiting from a wrong password.
+			data["Error"] = i18n.T("web.login.error", loc)
+			render(w, loginTpl, data)
+			return
+		}
 		pass := r.Form.Get("password")
 		if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
 			s.setSessionCookie(w)
 			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
-		loc := s.localeForRequest(w, r)
+		s.loginLimiter.recordFailure(ip)
 		data["Error"] = i18n.T("web.login.error", loc)
 	}
 
