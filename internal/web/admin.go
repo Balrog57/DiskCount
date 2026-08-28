@@ -157,18 +157,17 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 
 		if user, pass, ok := r.BasicAuth(); ok {
 			ip := clientIP(r)
-			if s.loginLimiter.blocked(ip) {
-				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
+			if !s.loginLimiter.blocked(ip) {
+				if subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1 &&
+					subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
+					s.loginLimiter.reset(ip)
+					next.ServeHTTP(w, r)
+					return
+				}
+				s.loginLimiter.recordFailure(ip)
 			}
-			if subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1 &&
-				subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
-				s.loginLimiter.reset(ip)
-				next.ServeHTTP(w, r)
-				return
-			}
-			s.loginLimiter.recordFailure(ip)
+			// Lockout uses the same 401/303 path as a bad password so
+			// callers cannot distinguish the two.
 		}
 
 		if isHTMX(r) || acceptsJSON(r) {

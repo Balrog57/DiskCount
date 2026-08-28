@@ -902,6 +902,57 @@ func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestBasicAuthLockoutMatchesFailedAuth(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	const client = "192.168.50.12:54321"
+	guarded := srv.withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	failJSON := func() int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+		req.Header.Set("Accept", "application/json")
+		req.RemoteAddr = client
+		req.SetBasicAuth("admin", "wrong")
+		guarded.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	wantFail := failJSON()
+	if wantFail != http.StatusUnauthorized {
+		t.Fatalf("failed basic auth: expected 401, got %d", wantFail)
+	}
+	for i := 1; i < loginRateMaxAttempts; i++ {
+		failJSON()
+	}
+	locked := httptest.NewRecorder()
+	lockReq := httptest.NewRequest(http.MethodGet, "/api/metrics", nil)
+	lockReq.Header.Set("Accept", "application/json")
+	lockReq.RemoteAddr = client
+	lockReq.SetBasicAuth("admin", "secret")
+	guarded.ServeHTTP(locked, lockReq)
+	if locked.Code != wantFail {
+		t.Fatalf("lockout status %d != failed-auth status %d", locked.Code, wantFail)
+	}
+
+	browserFail := httptest.NewRecorder()
+	browserReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	browserReq.RemoteAddr = "192.168.50.13:1"
+	browserReq.SetBasicAuth("admin", "wrong")
+	srv.handler().ServeHTTP(browserFail, browserReq)
+	browserLocked := httptest.NewRecorder()
+	for i := 0; i < loginRateMaxAttempts; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "192.168.50.13:1"
+		req.SetBasicAuth("admin", "wrong")
+		srv.handler().ServeHTTP(rec, req)
+		browserLocked = rec
+	}
+	if browserLocked.Code != browserFail.Code {
+		t.Fatalf("browser lockout status %d != failed-auth status %d", browserLocked.Code, browserFail.Code)
+	}
+}
+
 func TestLoginSuccessClearsRateLimit(t *testing.T) {
 	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	const client = "192.168.50.11:54321"

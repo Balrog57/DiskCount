@@ -36,11 +36,11 @@ func TestLoginLimiterPrunesExpiredHits(t *testing.T) {
 	}
 }
 
-func TestClientIPPrefersForwardedFor(t *testing.T) {
+func TestClientIPIgnoresForwardedFor(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
-	if got := clientIP(req); got != "203.0.113.9" {
-		t.Fatalf("clientIP = %q, want first X-Forwarded-For hop", got)
+	if got := clientIP(req); got != "127.0.0.1" {
+		t.Fatalf("clientIP = %q, want RemoteAddr host, not X-Forwarded-For", got)
 	}
 }
