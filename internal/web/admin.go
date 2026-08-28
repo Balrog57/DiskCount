@@ -1852,9 +1852,12 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 14p
 input,select{width:100%;min-height:40px;padding:8px 10px;border:2px solid var(--line);border-radius:0;background:var(--panel);color:var(--ink);font-family:inherit}input:focus,select:focus{outline:2px solid var(--brand);outline-offset:0}.filters,.form-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end}.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.inline{display:inline;margin:0}button,.button{display:inline-flex;align-items:center;justify-content:center;min-height:36px;border:2px solid var(--brand2);border-radius:0;padding:8px 12px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none;cursor:pointer;font-family:inherit;box-shadow:3px 3px 0 #000}button:hover,.button:hover{background:var(--brand2)}button.secondary{background:var(--soft);color:var(--brand);border-color:var(--line);box-shadow:2px 2px 0 var(--line)}button.danger{background:var(--bad);border-color:#7a100c}.notice,.warnbox{border-radius:0;padding:11px 13px;margin-bottom:14px;border:2px solid}.notice{background:var(--soft);border-color:var(--brand);color:var(--brand)}.warnbox{background:rgba(212,160,74,.12);border-color:var(--warn)}.source-list,.check-grid{display:flex;gap:8px;flex-wrap:wrap}.check-chip{display:flex;gap:7px;align-items:center;border:2px solid var(--line);border-radius:0;padding:7px 10px;background:var(--soft)}.check-chip input{width:auto;min-height:auto}.alert-form{display:grid;gap:16px}.alert-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.offer-link{color:var(--brand);font-weight:700;text-decoration:none;white-space:nowrap}.empty{padding:22px;text-align:center;color:var(--muted)}.config-section{margin-top:0}.config-section+.config-section{margin-top:18px}.config-section summary{cursor:pointer;font-weight:700;padding:10px 0;color:var(--brand)}
 @media (max-width:960px){.alert-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.alert-grid{grid-template-columns:1fr}}
+.skip-link{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden;z-index:100;padding:12px 16px;background:var(--brand);color:#fff;font-weight:700;text-decoration:none;border:2px solid var(--line)}
+.skip-link:focus{position:fixed;left:16px;top:16px;width:auto;height:auto;overflow:visible;outline:2px solid var(--brand);outline-offset:2px}
 </style>
 </head>
 <body>
+<a class="skip-link" href="#main-content">{{call .T "web.a11y.skip_to_content"}}</a>
 <div class="app">
 <aside class="sidebar">
 <div class="brand">DiskCount</div>
@@ -1884,7 +1887,7 @@ input,select{width:100%;min-height:40px;padding:8px 10px;border:2px solid var(--
 <form method="post" action="/logout" style="display:inline;margin:0"><button class="badge" type="submit" style="cursor:pointer">{{call .T "web.nav.logout"}}</button></form>
 </div>
 </header>
-<main>{{template "body" .}}</main>
+<main id="main-content" tabindex="-1">{{template "body" .}}</main>
 </div>
 </div>
 </body></html>`

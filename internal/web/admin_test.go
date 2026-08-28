@@ -95,6 +95,27 @@ func TestCSRFAcceptsMatchingReferer(t *testing.T) {
 	}
 }
 
+func TestLayoutIncludesSkipToContentLink(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, statsTpl, map[string]any{
+		"Title":  "Tableau de bord",
+		"Active": "stats",
+	})
+	body := rec.Body.String()
+	if rec.Code != 200 {
+		t.Fatalf("unexpected status %d: %s", rec.Code, body)
+	}
+	if !strings.Contains(body, `href="#main-content"`) {
+		t.Fatalf("skip link missing: %s", body)
+	}
+	if !strings.Contains(body, `id="main-content"`) {
+		t.Fatalf("main landmark id missing: %s", body)
+	}
+	if !strings.Contains(body, "Aller au contenu principal") {
+		t.Fatalf("default skip link label missing: %s", body)
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
