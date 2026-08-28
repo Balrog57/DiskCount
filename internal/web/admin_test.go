@@ -95,6 +95,27 @@ func TestCSRFAcceptsMatchingReferer(t *testing.T) {
 	}
 }
 
+func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, statsTpl, map[string]any{
+		"Title":     "Tableau de bord",
+		"StartedAt": time.Now(),
+	})
+	body := rec.Body.String()
+	for _, required := range []string{
+		`href="#main-content"`,
+		`class="skip-link"`,
+		`id="main-content"`,
+		`tabindex="-1"`,
+		`Aller au contenu principal`,
+		`button:focus-visible`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing layout accessibility markup %q", required)
+		}
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
