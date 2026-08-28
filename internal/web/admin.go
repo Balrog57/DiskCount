@@ -117,6 +117,7 @@ type Server struct {
 	startedAt         time.Time
 	discordConfigured atomic.Bool
 	discordTestSender func(string, string) error
+	loginLimiter      *loginLimiter
 }
 
 type configRow struct {
@@ -133,6 +134,7 @@ func New(dbase *db.DB, scan *scanner.Scanner, cfg *config.Config, sources []stri
 	sort.Strings(sources)
 	s := &Server{
 		db: dbase, scanner: scan, cfg: cfg, sourceNames: sources, startedAt: time.Now().UTC(),
+		loginLimiter: newLoginLimiter(),
 	}
 	s.discordTestSender = func(token, channelID string) error {
 		return notifier.NewDiscord(token, channelID).SendTest()
@@ -154,11 +156,19 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		}
 
 		if user, pass, ok := r.BasicAuth(); ok {
+			ip := clientIP(r)
+			if s.loginLimiter.blocked(ip) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="DiskCount Admin"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 			if subtle.ConstantTimeCompare([]byte(user), []byte("admin")) == 1 &&
 				subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
+				s.loginLimiter.reset(ip)
 				next.ServeHTTP(w, r)
 				return
 			}
+			s.loginLimiter.recordFailure(ip)
 		}
 
 		if isHTMX(r) || acceptsJSON(r) {
@@ -210,7 +220,7 @@ func (s *Server) validSession(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(want), []byte(got)) == 1
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request) {
 	issued := time.Now()
 	value := fmt.Sprintf("%d:%s", issued.UnixNano(), s.signSession(issued))
 	http.SetCookie(w, &http.Cookie{
@@ -218,20 +228,41 @@ func (s *Server) setSessionCookie(w http.ResponseWriter) {
 		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  issued.Add(sessionTTL),
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsSecure(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+}
+
+// requestIsSecure reports whether the client reached us over HTTPS.
+// Behind a reverse proxy, honor X-Forwarded-Proto since r.TLS is nil.
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if idx := strings.IndexByte(proto, ','); idx >= 0 {
+		proto = proto[:idx]
+	}
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
+
+func setSecurityHeaders(w http.ResponseWriter) {
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Referrer-Policy", "same-origin")
 }
 
 func isHTMX(r *http.Request) bool {
@@ -265,6 +296,7 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 // when no valid session cookie is present.
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setSecurityHeaders(w)
 		if !isSafeMethod(r.Method) && !sameOrigin(r) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
@@ -377,13 +409,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		ip := clientIP(r)
+		if s.loginLimiter.blocked(ip) {
+			data["Error"] = i18n.T("web.login.error", loc)
+			render(w, loginTpl, data)
+			return
+		}
 		pass := r.Form.Get("password")
 		if subtle.ConstantTimeCompare([]byte(pass), []byte(s.cfg.WebAdminPassword)) == 1 {
-			s.setSessionCookie(w)
+			s.loginLimiter.reset(ip)
+			s.setSessionCookie(w, r)
 			http.Redirect(w, r, sanitizeNext(r.Form.Get("next")), http.StatusSeeOther)
 			return
 		}
-		loc := s.localeForRequest(w, r)
+		s.loginLimiter.recordFailure(ip)
 		data["Error"] = i18n.T("web.login.error", loc)
 	}
 
@@ -395,7 +434,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.clearSessionCookie(w)
+	s.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 

@@ -870,3 +870,111 @@ func TestLogoutClearsSession(t *testing.T) {
 		t.Fatalf("expected cookie clearing, got %q", cleared)
 	}
 }
+
+func TestLoginRateLimitBlocksRepeatedFailures(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	const client = "192.168.50.10:54321"
+	for i := 0; i < loginRateMaxAttempts; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = client
+		setSameOrigin(req)
+		srv.handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("attempt %d: expected 200, got %d", i+1, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = client
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("expected rate limit to block even a correct password after repeated failures")
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rate-limited login should still render the form, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Mot de passe invalide") {
+		t.Fatalf("rate-limited login should show generic error, got: %s", rec.Body.String())
+	}
+}
+
+func TestLoginSuccessClearsRateLimit(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	const client = "192.168.50.11:54321"
+	for i := 0; i < loginRateMaxAttempts-1; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = client
+		setSameOrigin(req)
+		srv.handler().ServeHTTP(rec, req)
+	}
+	ok := httptest.NewRecorder()
+	okReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	okReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	okReq.RemoteAddr = client
+	setSameOrigin(okReq)
+	srv.handler().ServeHTTP(ok, okReq)
+	if ok.Code != http.StatusSeeOther {
+		t.Fatalf("correct password should still succeed before lockout, got %d", ok.Code)
+	}
+	fail := httptest.NewRecorder()
+	failReq := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=wrong"))
+	failReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	failReq.RemoteAddr = client
+	setSameOrigin(failReq)
+	srv.handler().ServeHTTP(fail, failReq)
+	if fail.Code != http.StatusOK {
+		t.Fatalf("expected failed login after reset, got %d", fail.Code)
+	}
+	if srv.loginLimiter.blocked(clientIP(failReq)) {
+		t.Fatal("successful login should have reset the failure window")
+	}
+}
+
+func TestSecurityHeadersApplied(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	srv.handler().ServeHTTP(rec, req)
+	want := map[string]string{
+		"X-Frame-Options":        "DENY",
+		"X-Content-Type-Options": "nosniff",
+		"Referrer-Policy":        "same-origin",
+	}
+	for hdr, val := range want {
+		if got := rec.Header().Get(hdr); got != val {
+			t.Fatalf("%s: got %q, want %q", hdr, got, val)
+		}
+	}
+}
+
+func TestSessionCookieSecureBehindProxy(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login POST: expected 303, got %d", rec.Code)
+	}
+	var session *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == sessionCookieName {
+			session = c
+			break
+		}
+	}
+	if session == nil {
+		t.Fatal("session cookie not set")
+	}
+	if !session.Secure {
+		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
+	}
+}
