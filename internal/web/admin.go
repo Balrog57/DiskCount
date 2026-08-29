@@ -34,6 +34,9 @@ const (
 	sessionTTL        = 12 * time.Hour
 	langCookieName    = "diskcount_lang"
 	themeCookieName   = "diskcount_theme"
+	// maxRequestBodyBytes caps POST/PUT bodies so a single request cannot
+	// exhaust memory parsing admin forms (ParseForm reads the entire body).
+	maxRequestBodyBytes = 1 << 20 // 1 MiB
 )
 
 // Theme preference values. "auto" means "follow the OS preference";
@@ -296,9 +299,12 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
-		if !isSafeMethod(r.Method) && !sameOrigin(r) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
+		if !isSafeMethod(r.Method) {
+			if !sameOrigin(r) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		}
 		switch r.URL.Path {
 		case "/health", "/healthz", "/readyz":
@@ -1949,10 +1955,10 @@ const loginTpl = `{{define "body"}}
 <form class="login-card" method="post" action="/login" autocomplete="on">
 <h1>{{call .T "web.login.title"}}</h1>
 <p class="hint">{{call .T "web.login.intro"}}</p>
-{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{if .Error}}<div id="login-error" class="error" role="alert">{{.Error}}</div>{{end}}
 <input type="hidden" name="next" value="{{.Next}}">
 <label for="password">{{call .T "web.login.password"}}</label>
-<input id="password" name="password" type="password" required autocomplete="current-password" autofocus>
+<input id="password" name="password" type="password" required autocomplete="current-password" autofocus{{if .Error}} aria-invalid="true" aria-describedby="login-error"{{end}}>
 <div class="actions">
 <button type="submit">{{call .T "web.login.submit"}}</button>
 <span class="hint" style="margin-left:auto">{{call .T "web.login.restricted"}}</span>

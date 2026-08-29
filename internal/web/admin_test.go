@@ -712,8 +712,19 @@ func TestLoginPostRejectsBadPassword(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login POST bad pass: expected 200, got %d", rec.Code)
 	}
-	if !strings.Contains(rec.Body.String(), "Mot de passe invalide") {
-		t.Fatalf("expected error message in body, got: %s", rec.Body.String())
+	body := rec.Body.String()
+	if !strings.Contains(body, "Mot de passe invalide") {
+		t.Fatalf("expected error message in body, got: %s", body)
+	}
+	for _, required := range []string{
+		`id="login-error"`,
+		`role="alert"`,
+		`aria-invalid="true"`,
+		`aria-describedby="login-error"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("failed login missing accessibility markup %q in: %s", required, body)
+		}
 	}
 	if rec.Header().Get("Set-Cookie") != "" {
 		t.Fatalf("failed login should not set a session cookie")
@@ -1005,6 +1016,19 @@ func TestLoginSuccessClearsRateLimit(t *testing.T) {
 	}
 	if srv.loginLimiter.blocked(clientIP(failReq)) {
 		t.Fatal("successful login should have reset the failure window")
+	}
+}
+
+func TestRequestBodyLimitRejectsOversizedPOST(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	body := strings.Repeat("a", maxRequestBodyBytes+1)
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusSeeOther || rec.Code < http.StatusBadRequest {
+		t.Fatalf("oversized POST should be rejected, got status %d", rec.Code)
 	}
 }
 
