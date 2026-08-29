@@ -489,6 +489,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		normalized[i] = normalize.Deal(raw)
 	}
 	catalogMap := map[string]*db.ProductCatalog{}
+	catalogPrefetchOK := false
 	if s.db != nil {
 		catalogKeys := make([]string, 0, len(deals))
 		seenCatalogKey := make(map[string]struct{}, len(deals))
@@ -507,6 +508,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		if len(catalogKeys) > 0 {
 			if m, err := s.db.CatalogMap(ctx, catalogKeys); err == nil {
 				catalogMap = m
+				catalogPrefetchOK = true
 			} else {
 				slog.Warn("catalog map", "err", err)
 			}
@@ -548,7 +550,13 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
 			}
-			if err := s.db.UpsertCatalogEntry(ctx, deal); err != nil {
+			var err error
+			if catalogPrefetchOK {
+				err = s.db.UpsertCatalogEntryFromMap(ctx, deal, catalogMap)
+			} else {
+				err = s.db.UpsertCatalogEntry(ctx, deal)
+			}
+			if err != nil {
 				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
 				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}

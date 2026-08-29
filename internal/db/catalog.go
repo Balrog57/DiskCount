@@ -151,20 +151,41 @@ func ifaceFromStrs(ss []string) []domain.DriveInterface {
 
 // UpsertCatalogEntry merges observed technical specs into the canonical catalog.
 func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal) error {
+	return db.upsertCatalogEntry(ctx, deal, nil)
+}
+
+// UpsertCatalogEntryFromMap is the scanner hot-path variant: existing rows
+// come from a CatalogMap snapshot (nil map entry = no row yet). After a
+// successful write the map is updated so a later deal with the same key
+// merges against this scan's result instead of a stale prefetch.
+func (db *DB) UpsertCatalogEntryFromMap(ctx context.Context, deal domain.Deal, catalog map[string]*ProductCatalog) error {
+	if catalog == nil {
+		return db.UpsertCatalogEntry(ctx, deal)
+	}
+	return db.upsertCatalogEntry(ctx, deal, catalog)
+}
+
+func (db *DB) upsertCatalogEntry(ctx context.Context, deal domain.Deal, catalog map[string]*ProductCatalog) error {
 	key := deal.CanonicalProductKey()
 	if key == "" {
 		return nil
 	}
-	existing, err := db.GetCatalogEntry(ctx, key)
-	if err != nil {
-		return err
+	var existing *ProductCatalog
+	if catalog != nil {
+		existing = catalog[key]
+	} else {
+		var err error
+		existing, err = db.GetCatalogEntry(ctx, key)
+		if err != nil {
+			return err
+		}
 	}
 	entry := catalogFromDeal(deal)
 	if existing != nil && specPriority(entry.SpecSource) < specPriority(existing.SpecSource) {
 		entry = mergeCatalogPreferExisting(*existing, entry)
 	}
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err = db.Pool.Exec(ctx, `
+	_, err := db.Pool.Exec(ctx, `
 INSERT INTO product_catalog(
   canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
   form_factor, technology, interfaces, image_url, spec_source, updated_at
@@ -187,7 +208,15 @@ ON CONFLICT (canonical_key) DO UPDATE SET
 		key, entry.EAN, entry.SKU, entry.Brand, entry.Model, entry.CapacityTB,
 		entry.MediaType, entry.DriveCategory, entry.RecordingMethod,
 		entry.FormFactor, entry.Technology, ja(ifaces), entry.ImageURL, entry.SpecSource)
-	return err
+	if err != nil {
+		return err
+	}
+	if catalog != nil {
+		written := entry
+		written.CanonicalKey = key
+		catalog[key] = &written
+	}
+	return nil
 }
 
 func catalogFromDeal(deal domain.Deal) ProductCatalog {

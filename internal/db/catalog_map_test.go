@@ -60,3 +60,42 @@ func TestApplyCatalogToDealFillsMissingSpecs(t *testing.T) {
 		t.Fatalf("capacity not applied: %v", deal.CapacityTB)
 	}
 }
+
+func TestUpsertCatalogEntryFromMapWriteBackKeepsHigherPriority(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	sku := "ST16000NM000J"
+	keepa := "keepa"
+	heuristic := "heuristic"
+	dealKeepa := domain.Deal{SKU: &sku, CapacityTB: 16, ClassificationSource: keepa}
+	dealHeuristic := domain.Deal{SKU: &sku, CapacityTB: 16, ClassificationSource: heuristic}
+	key := dealKeepa.CanonicalProductKey()
+	if key == "" {
+		t.Fatal("expected canonical key")
+	}
+
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM product_catalog WHERE canonical_key=$1`, key)
+	t.Cleanup(func() {
+		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM product_catalog WHERE canonical_key=$1`, key)
+	})
+
+	catalog := map[string]*ProductCatalog{}
+	if err := d.UpsertCatalogEntryFromMap(ctx, dealKeepa, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if catalog[key] == nil || catalog[key].SpecSource != keepa {
+		t.Fatalf("map should record keepa write, got %#v", catalog[key])
+	}
+	if err := d.UpsertCatalogEntryFromMap(ctx, dealHeuristic, catalog); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.GetCatalogEntry(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.SpecSource != keepa {
+		t.Fatalf("second heuristic upsert must not clobber keepa, got %#v", got)
+	}
+}
