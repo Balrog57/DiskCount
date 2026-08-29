@@ -1949,10 +1949,10 @@ const loginTpl = `{{define "body"}}
 <form class="login-card" method="post" action="/login" autocomplete="on">
 <h1>{{call .T "web.login.title"}}</h1>
 <p class="hint">{{call .T "web.login.intro"}}</p>
-{{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+{{if .Error}}<div id="login-error" class="error" role="alert">{{.Error}}</div>{{end}}
 <input type="hidden" name="next" value="{{.Next}}">
 <label for="password">{{call .T "web.login.password"}}</label>
-<input id="password" name="password" type="password" required autocomplete="current-password" autofocus>
+<input id="password" name="password" type="password" required autocomplete="current-password" autofocus{{if .Error}} aria-invalid="true" aria-describedby="login-error"{{end}}>
 <div class="actions">
 <button type="submit">{{call .T "web.login.submit"}}</button>
 <span class="hint" style="margin-left:auto">{{call .T "web.login.restricted"}}</span>
