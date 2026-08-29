@@ -489,6 +489,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		normalized[i] = normalize.Deal(raw)
 	}
 	catalogMap := map[string]*db.ProductCatalog{}
+	catalogKeysPrefetched := map[string]struct{}{}
 	if s.db != nil {
 		catalogKeys := make([]string, 0, len(deals))
 		seenCatalogKey := make(map[string]struct{}, len(deals))
@@ -505,6 +506,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			}
 		}
 		if len(catalogKeys) > 0 {
+			catalogKeysPrefetched = seenCatalogKey
 			if m, err := s.db.CatalogMap(ctx, catalogKeys); err == nil {
 				catalogMap = m
 			} else {
@@ -548,7 +550,11 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
 			}
-			if err := s.db.UpsertCatalogEntry(ctx, deal); err != nil {
+			// ⚡ Bolt optimization: reuse catalogMap from the batch prefetch
+			// above instead of a per-deal GetCatalogEntry inside UpsertCatalogEntry.
+			catalogKey := deal.CanonicalProductKey()
+			_, catalogPrefetched := catalogKeysPrefetched[catalogKey]
+			if err := s.db.UpsertCatalogEntry(ctx, deal, catalogMap[catalogKey], catalogPrefetched); err != nil {
 				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
 				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}

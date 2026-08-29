@@ -150,21 +150,30 @@ func ifaceFromStrs(ss []string) []domain.DriveInterface {
 }
 
 // UpsertCatalogEntry merges observed technical specs into the canonical catalog.
-func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal) error {
+// When prefetched is true, existing is the caller's batch-fetched snapshot for
+// this key (nil when the key has no row yet) and GetCatalogEntry is skipped.
+//
+// ⚡ Bolt optimization: the scanner already loads catalogMap once per scan;
+// passing prefetched=true reuses that snapshot and drops one SELECT per
+// accepted deal (~200 round-trips on a typical diskprices scan).
+func (db *DB) UpsertCatalogEntry(ctx context.Context, deal domain.Deal, existing *ProductCatalog, prefetched bool) error {
 	key := deal.CanonicalProductKey()
 	if key == "" {
 		return nil
 	}
-	existing, err := db.GetCatalogEntry(ctx, key)
-	if err != nil {
-		return err
+	if !prefetched {
+		var err error
+		existing, err = db.GetCatalogEntry(ctx, key)
+		if err != nil {
+			return err
+		}
 	}
 	entry := catalogFromDeal(deal)
 	if existing != nil && specPriority(entry.SpecSource) < specPriority(existing.SpecSource) {
 		entry = mergeCatalogPreferExisting(*existing, entry)
 	}
 	ifaces := ifaceStrs(deal.Interfaces)
-	_, err = db.Pool.Exec(ctx, `
+	_, err := db.Pool.Exec(ctx, `
 INSERT INTO product_catalog(
   canonical_key, ean, sku, brand, model, capacity_tb, media_type, drive_category, recording_method,
   form_factor, technology, interfaces, image_url, spec_source, updated_at

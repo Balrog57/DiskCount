@@ -486,7 +486,7 @@ func (db *DB) RecordObservation(ctx context.Context, deal domain.Deal) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	return db.UpsertCatalogEntry(ctx, deal)
+	return db.UpsertCatalogEntry(ctx, deal, nil, false)
 }
 
 // RecordObservationNoUpsert records a price observation without re-upserting

@@ -60,3 +60,37 @@ func TestApplyCatalogToDealFillsMissingSpecs(t *testing.T) {
 		t.Fatalf("capacity not applied: %v", deal.CapacityTB)
 	}
 }
+
+func TestUpsertCatalogEntryPrefetchedSkipsLookup(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	const key = "mpn:st16000nm000j"
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM product_catalog WHERE canonical_key=$1`, key)
+	t.Cleanup(func() {
+		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM product_catalog WHERE canonical_key=$1`, key)
+	})
+
+	brand := "Seagate"
+	model := "ST16000NM000J"
+	existing := &ProductCatalog{CanonicalKey: key, Brand: &brand, Model: &model, SpecSource: "keepa"}
+	deal := domain.Deal{
+		Brand:                &brand,
+		Model:                &model,
+		SKU:                  &model,
+		CapacityTB:           16,
+		ClassificationSource: "heuristic",
+	}
+
+	if err := d.UpsertCatalogEntry(ctx, deal, existing, true); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.GetCatalogEntry(ctx, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.SpecSource != "keepa" {
+		t.Fatalf("prefetched merge should keep higher-priority spec_source, got %#v", got)
+	}
+}
