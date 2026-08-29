@@ -34,6 +34,9 @@ const (
 	sessionTTL        = 12 * time.Hour
 	langCookieName    = "diskcount_lang"
 	themeCookieName   = "diskcount_theme"
+	// maxRequestBodyBytes caps POST/PUT bodies so a single request cannot
+	// exhaust memory parsing admin forms (ParseForm reads the entire body).
+	maxRequestBodyBytes = 1 << 20 // 1 MiB
 )
 
 // Theme preference values. "auto" means "follow the OS preference";
@@ -296,9 +299,12 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setSecurityHeaders(w)
-		if !isSafeMethod(r.Method) && !sameOrigin(r) {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
+		if !isSafeMethod(r.Method) {
+			if !sameOrigin(r) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		}
 		switch r.URL.Path {
 		case "/health", "/healthz", "/readyz":

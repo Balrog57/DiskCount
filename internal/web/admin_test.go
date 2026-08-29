@@ -1008,6 +1008,19 @@ func TestLoginSuccessClearsRateLimit(t *testing.T) {
 	}
 }
 
+func TestRequestBodyLimitRejectsOversizedPOST(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	body := strings.Repeat("a", maxRequestBodyBytes+1)
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setSameOrigin(req)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code == http.StatusSeeOther || rec.Code < http.StatusBadRequest {
+		t.Fatalf("oversized POST should be rejected, got status %d", rec.Code)
+	}
+}
+
 func TestSecurityHeadersApplied(t *testing.T) {
 	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
 	rec := httptest.NewRecorder()
