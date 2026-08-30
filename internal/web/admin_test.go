@@ -21,6 +21,25 @@ func setSameOrigin(req *http.Request) {
 	req.Header.Set("Origin", "http://example.com")
 }
 
+func TestHealthNilDBDoesNotLeakErrors(t *testing.T) {
+	srv := New(nil, nil, &config.Config{}, nil)
+	for _, path := range []string{"/health", "/healthz", "/readyz"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		srv.handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("%s: expected 503, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "postgres") || strings.Contains(body, "connection refused") {
+			t.Fatalf("%s leaks internal db error: %s", path, body)
+		}
+		if !strings.Contains(body, `"db":"disabled"`) {
+			t.Fatalf("%s db status not generic: %s", path, body)
+		}
+	}
+}
+
 func TestSanitizeNextBlocksOpenRedirects(t *testing.T) {
 	cases := []struct {
 		in, want string
