@@ -2077,7 +2077,7 @@ const productsTpl = `{{define "body"}}
 <div class="product-meta"><span>Actualisé {{ago .ObservedAt}}</span>{{if $spark.Coords}}<svg class="sparkline trend" viewBox="0 0 80 24" preserveAspectRatio="none" aria-label="Tendance 7 jours ({{$spark.Trend}})"><polyline fill="none" stroke-width="1.5" {{if eq $spark.Trend "down"}}stroke="#4ec78a"{{else if eq $spark.Trend "up"}}stroke="#e87972"{{else}}stroke="#91a4bf"{{end}} points="{{$spark.Coords}}"/></svg>{{end}}</div>
 </div></article>{{else}}<div class="panel empty">Aucun produit ne correspond aux filtres.</div>{{end}}</div>
 {{if .UngroupedSelected}}<h2>Offres non référencées</h2><div class="product-grid">{{range .Ungrouped}}<article class="product-card"><div class="product-copy"><a class="product-title" href="/product?id={{.ProductID}}">{{.Title}}</a><div class="hint">{{.Source}} · {{cap .CapacityTB}}</div><div class="product-price">{{price .PriceEUR}} € <small>{{price .PricePerTB}} €/To</small></div><div class="product-meta"><span>Actualisé {{ago .ObservedAt}}</span><a href="{{.URL}}" target="_blank" rel="noopener noreferrer">Voir l'offre ↗</a></div></div></article>{{end}}</div>{{end}}
-{{if gt .Pages 1}}<nav class="range-links" aria-label="Pagination">{{range .PageLinks}}<a href="{{.URL}}" {{if eq $.Page .Number}}class="active"{{end}}>{{.Number}}</a>{{end}}</nav>{{end}}</section>
+{{if gt .Pages 1}}<nav class="range-links" aria-label="{{call .T "web.a11y.pagination"}}">{{range .PageLinks}}<a href="{{.URL}}" {{if eq $.Page .Number}}class="active" aria-current="page"{{end}}>{{.Number}}</a>{{end}}</nav>{{end}}</section>
 </div><a class="mobile-filter-button" href="#filters">⌁ &nbsp; Filtres</a>
 {{end}}`
 
