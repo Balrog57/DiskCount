@@ -1468,13 +1468,19 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "disabled"
 		healthy = false
 	} else if _, err := s.db.Stats(r.Context()); err != nil {
-		dbStatus = "error: " + err.Error()
+		// Public probe: log internally but return a generic status so we
+		// do not leak connection strings or schema details to callers.
+		slog.Warn("health check db", "err", err)
+		dbStatus = "error"
 		healthy = false
 	}
-	report := s.scanner.LastReport()
 	lastScan := "never"
-	if report != nil && !report.FinishedAt.IsZero() {
-		lastScan = report.FinishedAt.Format(time.RFC3339)
+	breakers := map[string]string{}
+	if s.scanner != nil {
+		if report := s.scanner.LastReport(); report != nil && !report.FinishedAt.IsZero() {
+			lastScan = report.FinishedAt.Format(time.RFC3339)
+		}
+		breakers = s.scanner.BreakerSnapshot()
 	}
 	out := map[string]any{
 		"status":    "ok",
@@ -1482,7 +1488,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		"discord":   s.discordConfigured.Load(),
 		"sources":   len(s.liveSourceNames()),
 		"last_scan": lastScan,
-		"breakers":  s.scanner.BreakerSnapshot(),
+		"breakers":  breakers,
 	}
 	if !healthy {
 		out["status"] = "degraded"
