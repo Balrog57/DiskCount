@@ -15,7 +15,9 @@ var (
 	nonDigitDotRE = regexp.MustCompile(`[^0-9.]`)
 )
 
-func asciiFold(s string) string {
+// AsciiFold lowercases ASCII letters and drops non-ASCII bytes. When the input
+// is already lowercase ASCII it returns the original string with zero alloc.
+func AsciiFold(s string) string {
 	if s == "" {
 		return ""
 	}
@@ -95,7 +97,7 @@ func ParsePriceEUR(text string) (float64, error) {
 	if text == "" {
 		return 0, nil
 	}
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 	if containsAny(folded, "/mois", "mensuel", "par mois", "month", "monthly") {
 		return 0, nil
 	}
@@ -130,7 +132,7 @@ func ParseCapacityTB(text string) (float64, error) {
 		return 0, nil
 	}
 	valStr := match[valIdx]
-	unitStr := asciiFold(match[unitIdx])
+	unitStr := AsciiFold(match[unitIdx])
 	value, err := parseDecimal(valStr)
 	if err != nil || value == 0 {
 		return 0, err
@@ -171,7 +173,7 @@ var (
 )
 
 func NormalizeCondition(text string) *domain.Condition {
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 	for _, w := range conditionUsedWords {
 		if strings.Contains(folded, w) {
 			c := domain.ConditionUsed
@@ -188,7 +190,7 @@ func NormalizeCondition(text string) *domain.Condition {
 }
 
 func NormalizeMediaType(text string) *domain.MediaType {
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 	for _, w := range ssdWords {
 		if strings.Contains(folded, w) {
 			m := domain.MediaTypeSolidState
@@ -205,7 +207,7 @@ func NormalizeMediaType(text string) *domain.MediaType {
 }
 
 func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.DriveCategory {
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 
 	compact := folded
 	if strings.ContainsAny(compact, "\".-") {
@@ -307,7 +309,7 @@ func NormalizeDriveCategory(text string, mediaType *domain.MediaType) *domain.Dr
 }
 
 func NormalizeInterfaces(text string) []domain.DriveInterface {
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 	var ifaces []domain.DriveInterface
 
 	if containsAny(folded, "nvme", "pcie", "pci-e") {
@@ -384,7 +386,7 @@ func NormalizeRecordingMethod(text string, mediaType *domain.MediaType) *domain.
 	if mediaType != nil && *mediaType == domain.MediaTypeSolidState {
 		return nil
 	}
-	folded := asciiFold(text)
+	folded := AsciiFold(text)
 	compact := folded
 	if strings.ContainsAny(compact, "-_") {
 		var b strings.Builder
