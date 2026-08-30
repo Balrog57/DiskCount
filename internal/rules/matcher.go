@@ -6,6 +6,7 @@ import (
 
 	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
+	"github.com/Balrog57/DiskCount/internal/parsing"
 )
 
 type Preset struct {
@@ -73,7 +74,9 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if !recordingMethodMatch(alert, deal) {
 		return false
 	}
-	if !keywordMatch(alert, deal) {
+	// ⚡ Bolt optimization: most alerts don't filter by keywords — skip the
+	// haystack fold entirely instead of calling keywordMatch on every deal.
+	if (len(alert.Keywords) > 0 || len(alert.ExcludeKeywords) > 0) && !keywordMatch(alert, deal) {
 		return false
 	}
 	return true
@@ -110,14 +113,18 @@ func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
 // (and raw title). All include-keywords must be present; any exclude-keyword
 // present rejects the deal.
 func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
-	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
+	// ⚡ Bolt optimization: parsing.AsciiFold uses a zero-alloc fast path for
+	// already-lowercase ASCII titles. strings.ToLower always allocates and
+	// handles full Unicode, which is unnecessary for product titles on the
+	// scanner's deal×alert hot path (~200 deals × N alerts per scan).
+	hay := parsing.AsciiFold(deal.Title + " " + deal.RawTitle)
 	for _, kw := range alert.Keywords {
-		if !strings.Contains(hay, strings.ToLower(kw)) {
+		if !strings.Contains(hay, parsing.AsciiFold(kw)) {
 			return false
 		}
 	}
 	for _, kw := range alert.ExcludeKeywords {
-		if strings.Contains(hay, strings.ToLower(kw)) {
+		if strings.Contains(hay, parsing.AsciiFold(kw)) {
 			return false
 		}
 	}
@@ -126,9 +133,9 @@ func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
 
 // contIns is a case-insensitive variant of cont for brand comparison.
 func contIns(s []string, v string) bool {
-	lv := strings.ToLower(v)
+	lv := parsing.AsciiFold(v)
 	for _, x := range s {
-		if strings.ToLower(x) == lv {
+		if parsing.AsciiFold(x) == lv {
 			return true
 		}
 	}

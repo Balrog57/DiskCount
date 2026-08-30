@@ -152,3 +152,23 @@ func TestAlertMatchesCapacityPresetMedia(t *testing.T) {
 		t.Fatal("SSD ~1 To preset must match a 1 To SSD")
 	}
 }
+
+func BenchmarkAlertMatchesNoKeywords(b *testing.B) {
+	deal := baseDeal()
+	seagate := "Seagate"
+	deal.Brand = &seagate
+	alert := &db.Alert{Brands: []string{"Seagate"}, MaxPricePerTB: pf(20)}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		AlertMatches(alert, deal)
+	}
+}
+
+func BenchmarkAlertMatchesWithKeywords(b *testing.B) {
+	deal := baseDeal()
+	alert := &db.Alert{Keywords: []string{"exos", "cmr"}, ExcludeKeywords: []string{"smr"}}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		AlertMatches(alert, deal)
+	}
+}
