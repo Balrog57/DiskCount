@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1029,6 +1030,28 @@ func TestRequestBodyLimitRejectsOversizedPOST(t *testing.T) {
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code == http.StatusSeeOther || rec.Code < http.StatusBadRequest {
 		t.Fatalf("oversized POST should be rejected, got status %d", rec.Code)
+	}
+}
+
+func TestHealthDoesNotLeakDBErrorDetails(t *testing.T) {
+	scan := scanner.New(&config.Config{}, nil, nil, nil)
+	srv := New(nil, scan, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health with nil db: expected 503, got %d", rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode health JSON: %v", err)
+	}
+	db, _ := out["db"].(string)
+	if db != "disabled" {
+		t.Fatalf("db status = %q, want disabled", db)
+	}
+	if strings.Contains(rec.Body.String(), "postgres") || strings.Contains(rec.Body.String(), "connection") {
+		t.Fatalf("health response leaked driver details: %s", rec.Body.String())
 	}
 }
 
