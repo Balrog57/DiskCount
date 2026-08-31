@@ -913,23 +913,13 @@ func (db *DB) CatalogGroups(ctx context.Context, q CatalogQuery) ([]ProductGroup
 		args = append(args, "%"+s+"%")
 		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(c.brand, p.brand,'') ILIKE $%d OR COALESCE(c.model, p.model,'') ILIKE $%d OR COALESCE(c.sku, p.sku,'') ILIKE $%d OR COALESCE(c.ean, p.ean,'') ILIKE $%d)", len(args), len(args), len(args), len(args), len(args))
 	}
-	countSQL := `
-WITH latest AS (
- SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
- FROM price_observations o JOIN products p ON p.id=o.product_id
- WHERE o.price_per_tb > 0 AND o.quality_score >= 70
- ORDER BY o.product_id,o.observed_at DESC
-)
-SELECT COUNT(DISTINCT p.canonical_key)
-FROM latest l JOIN products p ON p.id=l.product_id
-LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
-WHERE p.quality_score >= 50` + where
-	var total int
-	if err := db.Pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
 	args = append(args, q.Limit, q.Offset)
 	limitPH, offsetPH := len(args)-1, len(args)
+	// ⚡ Bolt optimization: the previous implementation ran the expensive
+	// `latest` CTE twice — once for COUNT(DISTINCT canonical_key) and once
+	// for the paginated group list. The grouped CTE already has one row per
+	// family, so COUNT(*) OVER() on that set yields the same total while
+	// letting Postgres compute `latest` only once per page load.
 	listSQL := fmt.Sprintf(`
 WITH latest AS (
  SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
@@ -958,9 +948,11 @@ WITH latest AS (
  LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
  WHERE p.quality_score >= 50%s
  GROUP BY p.canonical_key
+), counted AS (
+ SELECT g.*, COUNT(*) OVER()::int AS total_count FROM grouped g
 )
-SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id
-FROM grouped g
+SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id,total_count
+FROM counted g
 ORDER BY %s
 LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
 	rows, err := db.Pool.Query(ctx, listSQL, args...)
@@ -969,16 +961,46 @@ LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
 	}
 	defer rows.Close()
 	var out []ProductGroup
+	var total int
 	for rows.Next() {
 		var g ProductGroup
 		var offerCount int64
-		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID); err != nil {
+		var rowTotal int
+		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID, &rowTotal); err != nil {
 			return nil, 0, err
+		}
+		if total == 0 {
+			total = rowTotal
 		}
 		g.OfferCount = int(offerCount)
 		out = append(out, g)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	// When OFFSET points past the last page the LIMIT/OFFSET slice is empty
+	// but pagination still needs the real total. Fall back to a lightweight
+	// COUNT on the already-filtered grouped set (no second `latest` scan).
+	if len(out) == 0 && q.Offset > 0 {
+		countSQL := `
+WITH latest AS (
+ SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
+ FROM price_observations o JOIN products p ON p.id=o.product_id
+ WHERE o.price_per_tb > 0 AND o.quality_score >= 70
+ ORDER BY o.product_id,o.observed_at DESC
+), grouped AS (
+ SELECT p.canonical_key
+ FROM latest l JOIN products p ON p.id=l.product_id
+ LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
+ WHERE p.quality_score >= 50` + where + `
+ GROUP BY p.canonical_key
+)
+SELECT COUNT(*)::int FROM grouped`
+		if err := db.Pool.QueryRow(ctx, countSQL, args[:len(args)-2]...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 func (db *DB) UngroupedPrices(ctx context.Context, q CatalogQuery) ([]CurrentPrice, error) {
