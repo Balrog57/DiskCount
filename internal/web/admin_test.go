@@ -116,6 +116,57 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 	}
 }
 
+func TestSecondaryNavLinksUseAriaCurrent(t *testing.T) {
+	t.Run("market period", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		render(rec, marketTpl, map[string]any{"Title": "Indice", "Active": "market", "Days": 30})
+		body := rec.Body.String()
+		if !strings.Contains(body, `href="/market?days=30" class="active" aria-current="page"`) {
+			t.Fatalf("active market period missing aria-current: %s", body)
+		}
+	})
+	t.Run("europe country", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		fr := countryInfo{"fr", "France", "🇫🇷"}
+		render(rec, europeTpl, map[string]any{
+			"Title": "Europe", "Active": "europe", "SelectedCountry": "fr",
+			"Regions": []regionSummary{{Country: fr, Offers: 1, BestPricePerTB: 14}},
+		})
+		body := rec.Body.String()
+		if !strings.Contains(body, `href="/europe?country=fr"`) || !strings.Contains(body, `class="eu-region active" aria-current="page"`) {
+			t.Fatalf("active europe region missing aria-current: %s", body)
+		}
+	})
+	t.Run("catalog pagination", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		render(rec, productsTpl, map[string]any{
+			"Title": "Produits", "Active": "products", "Total": 40, "Page": 2, "Pages": 2, "Sort": "eur_tb",
+			"PageLinks": []catalogPageLink{{Number: 1, URL: "/products?page=1"}, {Number: 2, URL: "/products?page=2"}},
+		})
+		body := rec.Body.String()
+		if !strings.Contains(body, `href="/products?page=2" class="active" aria-current="page"`) {
+			t.Fatalf("active pagination link missing aria-current: %s", body)
+		}
+	})
+	t.Run("price history period", func(t *testing.T) {
+		now := time.Now()
+		media, condition := "solid_state", "new"
+		rec := httptest.NewRecorder()
+		render(rec, productDetailTpl, map[string]any{
+			"Title": "Produit", "Active": "products", "Days": 90,
+			"Product": &db.Product{ID: "fixture", Title: "SSD Fixture", Source: "merchant", URL: "https://example.test", MediaType: &media, Condition: &condition, CapacityTB: 4, LastSeenAt: now},
+			"Offers": []db.ProductOffer{},
+		})
+		body := rec.Body.String()
+		if !strings.Contains(body, `&days=90" class="active" aria-current="page"`) {
+			t.Fatalf("active history period missing aria-current: %s", body)
+		}
+		if !strings.Contains(body, `aria-label="Période d'historique"`) {
+			t.Fatalf("history period nav missing aria-label: %s", body)
+		}
+	})
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
