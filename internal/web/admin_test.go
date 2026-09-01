@@ -246,6 +246,18 @@ func TestPriceDropsTemplateRendersDropReferenceView(t *testing.T) {
 			t.Fatalf("missing drop view value %q: %s", required, body)
 		}
 	}
+	for _, required := range []string{
+		`class="sr-only"`,
+		`target="_blank"`,
+		`rel="noopener noreferrer"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing external link accessibility markup %q", required)
+		}
+	}
+	if !strings.Contains(body, "nouvel onglet") && !strings.Contains(body, "new tab") {
+		t.Fatalf("external link missing new-tab screen reader text: %s", body)
+	}
 }
 
 func TestMarketTemplateRendersDailyBands(t *testing.T) {
