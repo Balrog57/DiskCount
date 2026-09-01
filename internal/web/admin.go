@@ -1468,7 +1468,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "disabled"
 		healthy = false
 	} else if _, err := s.db.Stats(r.Context()); err != nil {
-		dbStatus = "error: " + err.Error()
+		// Public health probes must not echo driver errors (hostnames,
+		// credentials hints, schema details) to unauthenticated callers.
+		slog.Error("health check: database stats", "error", err)
+		dbStatus = "error"
 		healthy = false
 	}
 	report := s.scanner.LastReport()

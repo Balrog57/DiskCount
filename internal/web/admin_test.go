@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1072,5 +1073,29 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 	}
 	if !session.Secure {
 		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
+	}
+}
+
+func TestHealthDBStatusIsGeneric(t *testing.T) {
+	cfg := &config.Config{}
+	scan := scanner.New(cfg, nil, nil, nil)
+	srv := New(nil, scan, cfg, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when db disabled, got %d", rec.Code)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid JSON: %v body=%q", err, rec.Body.String())
+	}
+	db, _ := out["db"].(string)
+	if db != "disabled" {
+		t.Fatalf("db status = %q, want disabled", db)
+	}
+	// Guard against regressions that echo raw driver errors publicly.
+	if strings.Contains(db, ":") || len(db) > 10 {
+		t.Fatalf("db status looks like a leaked error: %q", db)
 	}
 }
