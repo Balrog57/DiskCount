@@ -913,21 +913,10 @@ func (db *DB) CatalogGroups(ctx context.Context, q CatalogQuery) ([]ProductGroup
 		args = append(args, "%"+s+"%")
 		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(c.brand, p.brand,'') ILIKE $%d OR COALESCE(c.model, p.model,'') ILIKE $%d OR COALESCE(c.sku, p.sku,'') ILIKE $%d OR COALESCE(c.ean, p.ean,'') ILIKE $%d)", len(args), len(args), len(args), len(args), len(args))
 	}
-	countSQL := `
-WITH latest AS (
- SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
- FROM price_observations o JOIN products p ON p.id=o.product_id
- WHERE o.price_per_tb > 0 AND o.quality_score >= 70
- ORDER BY o.product_id,o.observed_at DESC
-)
-SELECT COUNT(DISTINCT p.canonical_key)
-FROM latest l JOIN products p ON p.id=l.product_id
-LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
-WHERE p.quality_score >= 50` + where
-	var total int
-	if err := db.Pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
+	// ⚡ Bolt optimization: the count query used to repeat the expensive
+	// `latest` CTE (DISTINCT ON over all observations). COUNT(*) OVER()
+	// on the grouped rows returns the unpaginated total in the same
+	// round-trip as the page, roughly halving products-page DB work.
 	args = append(args, q.Limit, q.Offset)
 	limitPH, offsetPH := len(args)-1, len(args)
 	listSQL := fmt.Sprintf(`
@@ -959,7 +948,8 @@ WITH latest AS (
  WHERE p.quality_score >= 50%s
  GROUP BY p.canonical_key
 )
-SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id
+SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id,
+       COUNT(*) OVER() AS total_count
 FROM grouped g
 ORDER BY %s
 LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
@@ -969,11 +959,16 @@ LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
 	}
 	defer rows.Close()
 	var out []ProductGroup
+	total := 0
 	for rows.Next() {
 		var g ProductGroup
 		var offerCount int64
-		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID); err != nil {
+		var rowTotal int64
+		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID, &rowTotal); err != nil {
 			return nil, 0, err
+		}
+		if total == 0 {
+			total = int(rowTotal)
 		}
 		g.OfferCount = int(offerCount)
 		out = append(out, g)
