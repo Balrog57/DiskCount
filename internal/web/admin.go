@@ -1468,7 +1468,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "disabled"
 		healthy = false
 	} else if _, err := s.db.Stats(r.Context()); err != nil {
-		dbStatus = "error: " + err.Error()
+		// Health probes are unauthenticated; never echo driver errors (hostnames,
+		// credentials, schema details) in the JSON response.
+		slog.Warn("health db check failed", "err", err)
+		dbStatus = "error"
 		healthy = false
 	}
 	report := s.scanner.LastReport()
