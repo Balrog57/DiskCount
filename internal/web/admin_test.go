@@ -14,6 +14,7 @@ import (
 	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 	"github.com/Balrog57/DiskCount/internal/sources"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func setSameOrigin(req *http.Request) {
@@ -1072,5 +1073,35 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 	}
 	if !session.Secure {
 		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
+	}
+}
+
+func TestHealthDoesNotLeakDBErrors(t *testing.T) {
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, "postgres://sentinel_user:super_secret_pw@127.0.0.1:59999/diskcount")
+	if err != nil {
+		t.Fatalf("create pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	scan := scanner.New(&config.Config{}, nil, nil, nil)
+	srv := New(&db.DB{Pool: pool}, scan, &config.Config{WebAdminPassword: "secret"}, nil)
+
+	for _, path := range []string{"/health", "/healthz", "/readyz"} {
+		t.Run(path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			srv.handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("expected 503, got %d", rec.Code)
+			}
+			body := rec.Body.String()
+			if strings.Contains(body, "super_secret_pw") {
+				t.Fatalf("health response leaked DB credentials: %s", body)
+			}
+			if !strings.Contains(body, `"db":"error"`) {
+				t.Fatalf("expected generic db error status, got: %s", body)
+			}
+		})
 	}
 }
