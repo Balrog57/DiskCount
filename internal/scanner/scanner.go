@@ -277,6 +277,20 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		s.mu.Unlock()
 	}()
 
+	// ⚡ Bolt optimization: load enabled alerts once per scan instead of once
+	// per source. A full scan touches ~25 sources; this removes ~24 redundant
+	// ListAlerts round-trips (~5–50 ms each depending on alert count).
+	var alerts []db.Alert
+	if s.db != nil {
+		var err error
+		alerts, err = s.db.ListAlerts(ctx, true)
+		if err != nil {
+			slog.Warn("list alerts", "err", err)
+			r.Errors = append(r.Errors, "list alerts: "+err.Error())
+		}
+	}
+	kwCaches := rules.PrepareAlertKeywordCaches(alerts)
+
 	for _, src := range s.sourceList() {
 		// Apply a small randomised jitter between sources to avoid the
 		// pattern of every source firing at the same instant, which is
@@ -315,7 +329,7 @@ func (s *Scanner) RunOnce(ctx context.Context, dryRun bool) *ScanReport {
 		s.recordScanResult(src.Name(), len(deals), r)
 
 		if len(deals) > 0 {
-			seenByMerchant := s.proc(ctx, deals, now, dryRun, r)
+			seenByMerchant := s.proc(ctx, deals, now, dryRun, r, alerts, kwCaches)
 			if !dryRun && s.db != nil {
 				for merchant, ids := range seenByMerchant {
 					if len(ids) == 0 {
@@ -412,17 +426,8 @@ func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (Sou
 	return metrics, deals, nil
 }
 
-func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) map[string][]string {
+func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport, alerts []db.Alert, kwCaches []rules.AlertKeywordCache) map[string][]string {
 	seenByMerchant := make(map[string][]string)
-	var alerts []db.Alert
-	if s.db != nil {
-		var err error
-		alerts, err = s.db.ListAlerts(ctx, true)
-		if err != nil {
-			slog.Warn("list alerts", "err", err)
-			r.Errors = append(r.Errors, "list alerts: "+err.Error())
-		}
-	}
 	// Snapshot every product's last_seen_at *before* we record new
 	// observations. This is the baseline the back-in-stock heuristic
 	// compares against: if a deal matches and the product has not been
@@ -538,7 +543,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		// Point lookup into the pre-fetched baseline map; nil out when
 		// the product has no history so ShouldNotify behaves as before.
 		var base *float64
-		if v, ok := baselines[deal.ProductID()]; ok {
+		if v, ok := baselines[pid]; ok {
 			base = &v
 		}
 		if !dryRun && s.db != nil {
@@ -577,17 +582,20 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		// batch so all candidates see the same baseline.
 		var absence time.Duration
 		if backInStockThreshold > 0 {
-			if last, ok := lastSeenSnapshot[deal.ProductID()]; ok && !last.IsZero() {
+			if last, ok := lastSeenSnapshot[pid]; ok && !last.IsZero() {
 				absence = now.Sub(last)
 			}
 		}
+		// ⚡ Bolt optimization: lowercase the title haystack once per deal
+		// instead of once per alert in keywordMatch (~deals×alerts allocations).
+		titleHay := rules.DealTitleHay(deal)
 		for i := range alerts {
 			a := &alerts[i]
-			if !rules.AlertMatches(a, deal) {
+			if !rules.AlertMatchesPrepared(a, deal, titleHay, &kwCaches[i]) {
 				continue
 			}
 			r.Matched++
-			last := lastNotifs[fmt.Sprintf("%d:%s", a.ID, deal.ProductID())]
+			last := lastNotifs[fmt.Sprintf("%d:%s", a.ID, pid)]
 			dec := rules.ShouldNotify(a, deal, base, last, now, s.cfg.NotificationPriceDropPct)
 			if !dec.ShouldNotify {
 				continue

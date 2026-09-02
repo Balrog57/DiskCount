@@ -36,7 +36,48 @@ var CapacityPresets = map[string]Preset{
 
 func pf(v float64) *float64 { return &v }
 
+// AlertKeywordCache holds pre-lowercased keyword slices for one alert.
+// The scanner builds one cache per alert once per scan so keyword matching
+// avoids O(deals × alerts × keywords) strings.ToLower calls.
+type AlertKeywordCache struct {
+	KeywordsLower, ExcludeKeywordsLower []string
+}
+
+// PrepareAlertKeywordCaches lowercases every alert's keyword slices once per scan.
+func PrepareAlertKeywordCaches(alerts []db.Alert) []AlertKeywordCache {
+	if len(alerts) == 0 {
+		return nil
+	}
+	out := make([]AlertKeywordCache, len(alerts))
+	for i := range alerts {
+		out[i] = AlertKeywordCache{
+			KeywordsLower:        lowerStrings(alerts[i].Keywords),
+			ExcludeKeywordsLower: lowerStrings(alerts[i].ExcludeKeywords),
+		}
+	}
+	return out
+}
+
+// DealTitleHay returns the lowercased title haystack used for keyword matching.
+func DealTitleHay(deal domain.Deal) string {
+	return strings.ToLower(deal.Title + " " + deal.RawTitle)
+}
+
 func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
+	return alertMatches(alert, deal, DealTitleHay(deal), nil, nil)
+}
+
+// AlertMatchesPrepared is like AlertMatches but reuses a pre-lowercased title
+// haystack and keyword cache built once per scan in the scanner hot path.
+func AlertMatchesPrepared(alert *db.Alert, deal domain.Deal, titleHay string, kwCache *AlertKeywordCache) bool {
+	var kl, el []string
+	if kwCache != nil {
+		kl, el = kwCache.KeywordsLower, kwCache.ExcludeKeywordsLower
+	}
+	return alertMatches(alert, deal, titleHay, kl, el)
+}
+
+func alertMatches(alert *db.Alert, deal domain.Deal, titleHay string, keywordsLower, excludeLower []string) bool {
 	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) {
 		return false
 	}
@@ -73,8 +114,10 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if !recordingMethodMatch(alert, deal) {
 		return false
 	}
-	if !keywordMatch(alert, deal) {
-		return false
+	if len(alert.Keywords) > 0 || len(alert.ExcludeKeywords) > 0 {
+		if !keywordMatchWithHay(alert, titleHay, keywordsLower, excludeLower) {
+			return false
+		}
 	}
 	return true
 }
@@ -106,18 +149,34 @@ func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
 	return cont(alert.RecordingMethods, string(*deal.RecordingMethod))
 }
 
-// keywordMatch checks inclusion and exclusion keywords against the deal title
-// (and raw title). All include-keywords must be present; any exclude-keyword
-// present rejects the deal.
-func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
-	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
-	for _, kw := range alert.Keywords {
-		if !strings.Contains(hay, strings.ToLower(kw)) {
+func lowerStrings(ss []string) []string {
+	if len(ss) == 0 {
+		return nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = strings.ToLower(s)
+	}
+	return out
+}
+
+// keywordMatchWithHay checks inclusion and exclusion keywords against a
+// pre-lowercased title haystack. When keywordsLower/excludeLower are nil the
+// slices are lowercased on the fly so tests can keep using AlertMatches.
+func keywordMatchWithHay(alert *db.Alert, hay string, keywordsLower, excludeLower []string) bool {
+	if keywordsLower == nil {
+		keywordsLower = lowerStrings(alert.Keywords)
+	}
+	if excludeLower == nil {
+		excludeLower = lowerStrings(alert.ExcludeKeywords)
+	}
+	for _, kw := range keywordsLower {
+		if !strings.Contains(hay, kw) {
 			return false
 		}
 	}
-	for _, kw := range alert.ExcludeKeywords {
-		if strings.Contains(hay, strings.ToLower(kw)) {
+	for _, kw := range excludeLower {
+		if strings.Contains(hay, kw) {
 			return false
 		}
 	}
