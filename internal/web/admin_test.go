@@ -201,11 +201,13 @@ func TestAlertDraftFromForm(t *testing.T) {
 
 func TestProductsTemplateRendersFilters(t *testing.T) {
 	rec := httptest.NewRecorder()
+	imageURL := "https://example.test/ironwolf.jpg"
 	render(rec, productsTpl, map[string]any{
 		"Title": "Produits", "Active": "products", "Sources": []string{"diskprices"},
 		"Brands": []string{"Seagate"}, "Categories": []string{"nas"}, "Interfaces": []string{"sata"}, "Recordings": []string{"cmr"},
-		"Groups": []db.ProductGroup{{CanonicalKey: "fixture-key", Brand: "Seagate", Model: "IronWolf", CapacityTB: 16, BestPriceEUR: 300, BestPricePerTB: 18.75, BestProductID: "fixture", OfferCount: 1}},
-		"Total":  1, "Page": 1, "Pages": 1, "Sort": "eur_tb",
+		"Groups": []db.ProductGroup{{CanonicalKey: "fixture-key", Brand: "Seagate", Model: "IronWolf", ImageURL: &imageURL, CapacityTB: 16, BestPriceEUR: 300, BestPricePerTB: 18.75, BestProductID: "fixture", OfferCount: 1}},
+		"Total":  31, "Page": 2, "Pages": 3, "Sort": "eur_tb",
+		"PageLinks": []catalogPageLink{{Number: 1, URL: "/products?page=1"}, {Number: 2, URL: "/products?page=2"}, {Number: 3, URL: "/products?page=3"}},
 		"Sparklines": map[string][]db.SparklinePoint{"fixture": {{PricePerTB: 20}, {PricePerTB: 18.75}}},
 	})
 	body := rec.Body.String()
@@ -223,6 +225,17 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	for _, required := range []string{"product-card", "filter-drawer", "Actualisé", "Créer une alerte"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing catalogue UI %q", required)
+		}
+	}
+	for _, required := range []string{
+		`alt="Seagate IronWolf · 16.0 To"`,
+		`aria-label="Ouvrir les filtres produits"`,
+		`aria-label="Fermer les filtres"`,
+		`aria-label="Pagination du catalogue"`,
+		`aria-current="page"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing catalogue accessibility markup %q in: %s", required, body)
 		}
 	}
 }
