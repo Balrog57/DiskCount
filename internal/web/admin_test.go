@@ -1074,3 +1074,23 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
 	}
 }
+
+func TestHealthEndpointNilSafe(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"db":"disabled"`) {
+		t.Fatalf("expected disabled db status, got %s", body)
+	}
+	if !strings.Contains(body, `"last_scan":"never"`) {
+		t.Fatalf("expected never last_scan without scanner, got %s", body)
+	}
+	if !strings.Contains(body, `"breakers":{}`) {
+		t.Fatalf("expected empty breakers without scanner, got %s", body)
+	}
+}
