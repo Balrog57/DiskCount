@@ -1020,41 +1020,67 @@ LIMIT $%d`, where, len(args))
 	return out, rows.Err()
 }
 
+// CatalogFacets returns distinct filter dropdown values for the products page.
+//
+// ⚡ Bolt optimization: aggregate DISTINCT facet values in PostgreSQL over a
+// single qualified-products CTE instead of scanning every product row into Go
+// and unmarshaling interfaces JSON per row. With ~3k catalog products the old
+// path transferred ~3k rows and ~3k jsonb decodes; this returns only the
+// unique facet strings (~50–200 rows) in one round-trip.
 func (db *DB) CatalogFacets(ctx context.Context) (brands, categories, interfaces, recordings, sources []string, err error) {
 	rows, err := db.Pool.Query(ctx, `
-SELECT DISTINCT p.brand, p.drive_category, p.recording_method, p.source, p.interfaces
-FROM products p
-WHERE p.quality_score >= 50 AND p.canonical_key IS NOT NULL`)
+WITH qualified AS (
+	SELECT brand, drive_category, recording_method, source, interfaces
+	FROM products
+	WHERE quality_score >= 50 AND canonical_key IS NOT NULL
+)
+SELECT facet_kind, facet_value FROM (
+	SELECT DISTINCT 'brand' AS facet_kind,
+		CASE WHEN regexp_replace(lower(trim(brand)), '[^[:alnum:]]+', '', 'g') IN ('wd','westerndigital')
+			THEN 'Western Digital' ELSE trim(brand) END AS facet_value
+	FROM qualified
+	WHERE brand IS NOT NULL AND trim(brand) <> ''
+	UNION
+	SELECT DISTINCT 'category', drive_category
+	FROM qualified
+	WHERE drive_category IS NOT NULL AND trim(drive_category) <> ''
+	UNION
+	SELECT DISTINCT 'recording', recording_method
+	FROM qualified
+	WHERE recording_method IS NOT NULL AND trim(recording_method) <> ''
+	UNION
+	SELECT DISTINCT 'source', source
+	FROM qualified
+	WHERE trim(source) <> ''
+	UNION
+	SELECT DISTINCT 'interface', elem
+	FROM qualified, jsonb_array_elements_text(interfaces) AS elem
+	WHERE elem <> ''
+) facets
+ORDER BY facet_kind, facet_value`)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 	defer rows.Close()
-	bset, cset, iset, rset, sset := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for rows.Next() {
-		var brand, cat, rec, src *string
-		var ifaces []string
-		if err := rows.Scan(&brand, &cat, &rec, &src, jsonScan(&ifaces)); err != nil {
+		var kind, value string
+		if err := rows.Scan(&kind, &value); err != nil {
 			return nil, nil, nil, nil, nil, err
 		}
-		if brand != nil && *brand != "" {
-			bset[canonicalBrandFacet(*brand)] = true
-		}
-		if cat != nil && *cat != "" {
-			cset[*cat] = true
-		}
-		if rec != nil && *rec != "" {
-			rset[*rec] = true
-		}
-		if src != nil && *src != "" {
-			sset[*src] = true
-		}
-		for _, iface := range ifaces {
-			if iface != "" {
-				iset[iface] = true
-			}
+		switch kind {
+		case "brand":
+			brands = append(brands, value)
+		case "category":
+			categories = append(categories, value)
+		case "interface":
+			interfaces = append(interfaces, value)
+		case "recording":
+			recordings = append(recordings, value)
+		case "source":
+			sources = append(sources, value)
 		}
 	}
-	return sortedKeys(bset), sortedKeys(cset), sortedKeys(iset), sortedKeys(rset), sortedKeys(sset), rows.Err()
+	return brands, categories, interfaces, recordings, sources, rows.Err()
 }
 
 func sortedKeys(m map[string]bool) []string {
