@@ -108,6 +108,7 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 		`id="main-content"`,
 		`tabindex="-1"`,
 		`Aller au contenu principal`,
+		`aria-label="Navigation principale"`,
 		`button:focus-visible`,
 	} {
 		if !strings.Contains(body, required) {

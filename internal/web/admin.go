@@ -1906,7 +1906,7 @@ input,select{width:100%;min-height:40px;padding:8px 10px;border:2px solid var(--
 <div class="app">
 <aside class="sidebar">
 <div class="brand">DiskCount</div>
-<nav class="nav">
+<nav class="nav" aria-label="{{call .T "web.a11y.main_nav"}}">
 <a href="/" class="{{if eq .Active "stats"}}active{{end}}" {{if eq .Active "stats"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.dashboard"}}</a>
 <a href="/products" class="{{if eq .Active "products"}}active{{end}}" {{if eq .Active "products"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.products"}}</a>
 <a href="/sites" class="{{if eq .Active "sites"}}active{{end}}" {{if eq .Active "sites"}}aria-current="page"{{end}}><span class="dot" aria-hidden="true"></span>{{call .T "web.nav.sites"}}</a>
