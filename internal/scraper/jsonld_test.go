@@ -1,6 +1,9 @@
 package scraper
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseJSONLDSingleProduct(t *testing.T) {
 	html := `<html><head>
@@ -167,5 +170,24 @@ func TestParseJSONLDArrayTypeField(t *testing.T) {
 	}
 	if pd.Name != "Test" {
 		t.Fatalf("name: got %q", pd.Name)
+	}
+}
+
+func TestParseJSONLDSingleQuotedType(t *testing.T) {
+	html := `<script id='data' type='application/ld+json'>{"@type":"Product","name":"Quoted"}</script>`
+	pd, ok := ParseJSONLD(html)
+	if !ok || pd.Name != "Quoted" {
+		t.Fatalf("name: got %q found=%v", pd.Name, ok)
+	}
+}
+
+func BenchmarkParseJSONLD(b *testing.B) {
+	// Synthetic ~400 KB listing page: large DOM noise + one ld+json block.
+	padding := strings.Repeat("<div class='noise'><span>product card filler</span></div>\n", 8000)
+	html := "<html><body>" + padding + `<script type="application/ld+json">{"@type":"Product","name":"Bench SSD","brand":"Crucial","sku":"CT500","offers":{"price":"49.99","priceCurrency":"EUR"}}</script>` + "</body></html>"
+	b.ReportAllocs()
+	b.SetBytes(int64(len(html)))
+	for i := 0; i < b.N; i++ {
+		ParseJSONLD(html)
 	}
 }
