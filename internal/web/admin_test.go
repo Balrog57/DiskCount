@@ -220,7 +220,7 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	if !strings.Contains(body, "Tendance 7 jours") || strings.Contains(body, "template:") {
 		t.Fatalf("sparkline did not render: %s", body)
 	}
-	for _, required := range []string{"product-card", "filter-drawer", "Actualisé", "Créer une alerte"} {
+	for _, required := range []string{"product-card", "filter-drawer", "Actualisé", "Créer une alerte", `class="mobile-filter-button"`, `aria-hidden="true">⌁</span>`, "Filtres</a>"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing catalogue UI %q", required)
 		}
