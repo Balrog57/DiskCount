@@ -1021,37 +1021,51 @@ LIMIT $%d`, where, len(args))
 }
 
 func (db *DB) CatalogFacets(ctx context.Context) (brands, categories, interfaces, recordings, sources []string, err error) {
+	// Performance: aggregate facet values in SQL instead of scanning every
+	// product row into Go. DISTINCT per facet column returns O(unique values)
+	// rows instead of O(products), and jsonb_array_elements_text expands
+	// interfaces once in the database rather than JSON-decoding every row.
+	// Expected impact: ~10–50× fewer rows transferred on a 5k-product catalog.
 	rows, err := db.Pool.Query(ctx, `
-SELECT DISTINCT p.brand, p.drive_category, p.recording_method, p.source, p.interfaces
-FROM products p
-WHERE p.quality_score >= 50 AND p.canonical_key IS NOT NULL`)
+SELECT kind, value FROM (
+  SELECT DISTINCT 'brand' AS kind, brand AS value FROM products
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL AND brand IS NOT NULL AND brand <> ''
+  UNION
+  SELECT DISTINCT 'category', drive_category FROM products
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL AND drive_category IS NOT NULL AND drive_category <> ''
+  UNION
+  SELECT DISTINCT 'recording', recording_method FROM products
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL AND recording_method IS NOT NULL AND recording_method <> ''
+  UNION
+  SELECT DISTINCT 'source', source FROM products
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL AND source IS NOT NULL AND source <> ''
+  UNION
+  SELECT DISTINCT 'interface', iface FROM products
+  CROSS JOIN LATERAL jsonb_array_elements_text(interfaces) AS iface
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL AND iface IS NOT NULL AND iface <> ''
+) facets
+ORDER BY kind, value`)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 	defer rows.Close()
 	bset, cset, iset, rset, sset := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for rows.Next() {
-		var brand, cat, rec, src *string
-		var ifaces []string
-		if err := rows.Scan(&brand, &cat, &rec, &src, jsonScan(&ifaces)); err != nil {
+		var kind, value string
+		if err := rows.Scan(&kind, &value); err != nil {
 			return nil, nil, nil, nil, nil, err
 		}
-		if brand != nil && *brand != "" {
-			bset[canonicalBrandFacet(*brand)] = true
-		}
-		if cat != nil && *cat != "" {
-			cset[*cat] = true
-		}
-		if rec != nil && *rec != "" {
-			rset[*rec] = true
-		}
-		if src != nil && *src != "" {
-			sset[*src] = true
-		}
-		for _, iface := range ifaces {
-			if iface != "" {
-				iset[iface] = true
-			}
+		switch kind {
+		case "brand":
+			bset[canonicalBrandFacet(value)] = true
+		case "category":
+			cset[value] = true
+		case "interface":
+			iset[value] = true
+		case "recording":
+			rset[value] = true
+		case "source":
+			sset[value] = true
 		}
 	}
 	return sortedKeys(bset), sortedKeys(cset), sortedKeys(iset), sortedKeys(rset), sortedKeys(sset), rows.Err()
