@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1029,6 +1031,38 @@ func TestRequestBodyLimitRejectsOversizedPOST(t *testing.T) {
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code == http.StatusSeeOther || rec.Code < http.StatusBadRequest {
 		t.Fatalf("oversized POST should be rejected, got status %d", rec.Code)
+	}
+}
+
+func TestHealthDoesNotLeakDBError(t *testing.T) {
+	url := os.Getenv("DISKCOUNT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set DISKCOUNT_TEST_DATABASE_URL to run health error sanitization test")
+	}
+	ctx := context.Background()
+	d, err := db.New(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	srv := New(d, scanner.New(config.LoadBootstrap(), d, nil, nil), &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	srv.handler().ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	for _, leak := range []string{"postgres://", "password", "connection refused", "dial tcp"} {
+		if strings.Contains(strings.ToLower(body), leak) {
+			t.Fatalf("health response leaked db error details (%q): %s", leak, body)
+		}
+	}
+	var out map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("invalid health JSON: %v", err)
+	}
+	if out["db"] != "error" {
+		t.Fatalf("expected generic db status, got %q", out["db"])
 	}
 }
 
