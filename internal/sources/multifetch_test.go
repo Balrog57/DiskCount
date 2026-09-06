@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Balrog57/DiskCount/internal/domain"
@@ -74,5 +75,22 @@ func TestFetchMultiURLErrorSummary(t *testing.T) {
 	}
 	if r := (multiURLFetchResult{}); r.errorSummary() != "" {
 		t.Fatalf("empty errorSummary should be \"\", got %q", r.errorSummary())
+	}
+}
+
+func TestIsBlockedTextScansOnlyPageHead(t *testing.T) {
+	padding := strings.Repeat("x", blockedScanBytes+1000)
+	if isBlockedText(padding+"CAPTCHA") {
+		t.Fatal("marker after scan window should not match")
+	}
+	head := "<title>Access Denied</title>" + strings.Repeat(" ", blockedScanBytes)
+	if !isBlockedText(head) {
+		t.Fatal("expected blocked marker in page head to match")
+	}
+}
+
+func TestIsBlockedTextCaseInsensitive(t *testing.T) {
+	if !isBlockedText("<html><body>CAPTCHA required</body></html>") {
+		t.Fatal("expected case-insensitive captcha match")
 	}
 }
