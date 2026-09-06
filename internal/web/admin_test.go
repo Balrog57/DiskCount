@@ -144,6 +144,14 @@ func TestConfigTemplateMasksSecret(t *testing.T) {
 	if !strings.Contains(body, "********") {
 		t.Fatalf("masked secret placeholder missing: %s", body)
 	}
+	for _, required := range []string{
+		`id="hint-WEB_ADMIN_PASSWORD"`,
+		`aria-describedby="hint-WEB_ADMIN_PASSWORD hint-WEB_ADMIN_PASSWORD-replace"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("config form missing accessibility markup %q", required)
+		}
+	}
 }
 
 func TestDiscordTemplateMasksConfiguredToken(t *testing.T) {
