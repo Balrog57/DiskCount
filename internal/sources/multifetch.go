@@ -131,10 +131,26 @@ func isBlockedError(err error) bool {
 	return errors.Is(err, ErrBlocked) || isBlockedText(err.Error())
 }
 
+// blockedScanBytes mirrors scraper.HTTPFetcher.isBlocked: CAPTCHA/WAF markers
+// appear in the page head, not in product listings buried in multi-MB HTML.
+const blockedScanBytes = 2048
+
+// blockedMarkers are matched case-insensitively. Hoisted to avoid a per-call
+// slice allocation on the scan hot path (one fetchMultiURL call per URL).
+var blockedMarkers = []string{"captcha", "access denied", "waf", "blocked"}
+
 func isBlockedText(text string) bool {
-	text = strings.ToLower(text)
-	for _, marker := range []string{"captcha", "access denied", "waf", "blocked"} {
-		if strings.Contains(text, marker) {
+	// ⚡ Bolt optimization: only lowercase/scan the first 2KB instead of the
+	// full response (up to 5 MB). On a typical retailer listing this avoids
+	// ~5 MB of allocation + byte scan per URL while preserving detection —
+	// challenge pages surface "captcha"/"access denied" in <title> or the
+	// first script block, never after thousands of product cards.
+	if len(text) > blockedScanBytes {
+		text = text[:blockedScanBytes]
+	}
+	lower := strings.ToLower(text)
+	for _, marker := range blockedMarkers {
+		if strings.Contains(lower, marker) {
 			return true
 		}
 	}

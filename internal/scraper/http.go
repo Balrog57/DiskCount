@@ -366,10 +366,14 @@ func (f *HTTPFetcher) isBlocked(body string) (bool, string) {
 	if len(f.BlockedWords) == 0 {
 		return false, ""
 	}
-	lower := strings.ToLower(body)
-	if len(lower) > 2048 {
-		lower = lower[:2048]
+	// ⚡ Bolt optimization: truncate before ToLower so we never allocate a
+	// lowercase copy of a multi-MB body. The comment on BlockedKeywords
+	// already documents a 2 KB window; lowercasing the full body first
+	// defeated that intent on large retailer listing pages.
+	if len(body) > 2048 {
+		body = body[:2048]
 	}
+	lower := strings.ToLower(body)
 	for _, word := range f.BlockedWords {
 		if strings.Contains(lower, strings.ToLower(word)) {
 			return true, word
