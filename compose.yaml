@@ -32,8 +32,9 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgres://diskcount:changeme@db:5432/diskcount}
       WEB_ADMIN_ADDR: 0.0.0.0:47832
       BYPARR_URL: http://byparr:8191
+    # Bind admin UI to host localhost only — avoids exposing the panel on LAN/WAN.
     ports:
-      - "47832:47832"
+      - "127.0.0.1:47832:47832"
 
 volumes:
   pgdata:
