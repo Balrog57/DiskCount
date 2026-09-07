@@ -1074,3 +1074,22 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
 	}
 }
+
+func TestHealthReturnsMinimalPublicPayload(t *testing.T) {
+	srv := New(nil, nil, &config.Config{WebAdminPassword: "secret"}, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 with nil db, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, leaked := range []string{"discord", "breakers", "last_scan", "sources"} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("health response leaks internal field %q: %s", leaked, body)
+		}
+	}
+	if strings.Contains(body, "error:") {
+		t.Fatalf("health response should not echo internal errors: %s", body)
+	}
+}

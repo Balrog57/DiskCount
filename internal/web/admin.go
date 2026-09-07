@@ -1462,27 +1462,21 @@ func (s *Server) apiMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	// Public liveness probe: keep the payload minimal and never echo internal
+	// error strings (DB/pgx messages can include hostnames or credentials).
 	healthy := true
 	dbStatus := "ok"
 	if s.db == nil {
-		dbStatus = "disabled"
+		dbStatus = "unavailable"
 		healthy = false
 	} else if _, err := s.db.Stats(r.Context()); err != nil {
-		dbStatus = "error: " + err.Error()
+		slog.Error("health check db failed", "err", err)
+		dbStatus = "error"
 		healthy = false
 	}
-	report := s.scanner.LastReport()
-	lastScan := "never"
-	if report != nil && !report.FinishedAt.IsZero() {
-		lastScan = report.FinishedAt.Format(time.RFC3339)
-	}
 	out := map[string]any{
-		"status":    "ok",
-		"db":        dbStatus,
-		"discord":   s.discordConfigured.Load(),
-		"sources":   len(s.liveSourceNames()),
-		"last_scan": lastScan,
-		"breakers":  s.scanner.BreakerSnapshot(),
+		"status": "ok",
+		"db":     dbStatus,
 	}
 	if !healthy {
 		out["status"] = "degraded"
