@@ -200,11 +200,12 @@ func TestAlertDraftFromForm(t *testing.T) {
 }
 
 func TestProductsTemplateRendersFilters(t *testing.T) {
+	imageURL := "https://example.test/ironwolf.jpg"
 	rec := httptest.NewRecorder()
 	render(rec, productsTpl, map[string]any{
 		"Title": "Produits", "Active": "products", "Sources": []string{"diskprices"},
 		"Brands": []string{"Seagate"}, "Categories": []string{"nas"}, "Interfaces": []string{"sata"}, "Recordings": []string{"cmr"},
-		"Groups": []db.ProductGroup{{CanonicalKey: "fixture-key", Brand: "Seagate", Model: "IronWolf", CapacityTB: 16, BestPriceEUR: 300, BestPricePerTB: 18.75, BestProductID: "fixture", OfferCount: 1}},
+		"Groups": []db.ProductGroup{{CanonicalKey: "fixture-key", Brand: "Seagate", Model: "IronWolf", ImageURL: &imageURL, CapacityTB: 16, BestPriceEUR: 300, BestPricePerTB: 18.75, BestProductID: "fixture", OfferCount: 1}},
 		"Total":  1, "Page": 1, "Pages": 1, "Sort": "eur_tb",
 		"Sparklines": map[string][]db.SparklinePoint{"fixture": {{PricePerTB: 20}, {PricePerTB: 18.75}}},
 	})
@@ -224,6 +225,9 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing catalogue UI %q", required)
 		}
+	}
+	if !strings.Contains(body, `alt="Seagate IronWolf · 16.0 To"`) {
+		t.Fatalf("product image missing descriptive alt text: %s", body)
 	}
 }
 
@@ -301,10 +305,11 @@ func TestRelativeTimeAt(t *testing.T) {
 func TestProductDetailTemplateRendersComparison(t *testing.T) {
 	now := time.Now()
 	media, condition := "solid_state", "new"
+	brand, model, imageURL := "Samsung", "870 EVO", "https://example.test/870evo.jpg"
 	rec := httptest.NewRecorder()
 	render(rec, productDetailTpl, map[string]any{
 		"Title": "Produit", "Active": "products", "Days": 30,
-		"Product": &db.Product{ID: "fixture", Title: "SSD Fixture", Source: "merchant", URL: "https://example.test", MediaType: &media, Condition: &condition, CapacityTB: 4, LastSeenAt: now},
+		"Product": &db.Product{ID: "fixture", Title: "SSD Fixture", Source: "merchant", URL: "https://example.test", Brand: &brand, Model: &model, ImageURL: &imageURL, MediaType: &media, Condition: &condition, CapacityTB: 4, LastSeenAt: now},
 		"Current": &db.PriceHistoryPoint{ObservedAt: now, PriceEUR: 200, PricePerTB: 50, Source: "merchant"},
 		"Offers":  []db.ProductOffer{},
 	})
@@ -313,6 +318,9 @@ func TestProductDetailTemplateRendersComparison(t *testing.T) {
 		if !strings.Contains(body, required) {
 			t.Fatalf("missing product detail UI %q", required)
 		}
+	}
+	if !strings.Contains(body, `alt="Samsung 870 EVO · 4.0 To"`) {
+		t.Fatalf("product detail image missing descriptive alt text: %s", body)
 	}
 }
 
