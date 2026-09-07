@@ -36,7 +36,26 @@ var CapacityPresets = map[string]Preset{
 
 func pf(v float64) *float64 { return &v }
 
+// DealSearchHay returns the lowercased title haystack used for keyword
+// matching. The scanner computes this once per deal and passes it into
+// AlertMatchesWithHay so we do not reallocate and fold the same title for
+// every alert on the hot scan path.
+func DealSearchHay(deal domain.Deal) string {
+	return strings.ToLower(deal.Title + " " + deal.RawTitle)
+}
+
 func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
+	return alertMatches(alert, deal, "")
+}
+
+// AlertMatchesWithHay is the scanner hot-path entry point. searchHay may be
+// empty; keyword matching falls back to DealSearchHay when an alert actually
+// has include/exclude filters.
+func AlertMatchesWithHay(alert *db.Alert, deal domain.Deal, searchHay string) bool {
+	return alertMatches(alert, deal, searchHay)
+}
+
+func alertMatches(alert *db.Alert, deal domain.Deal, searchHay string) bool {
 	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) {
 		return false
 	}
@@ -73,7 +92,7 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if !recordingMethodMatch(alert, deal) {
 		return false
 	}
-	if !keywordMatch(alert, deal) {
+	if !keywordMatch(alert, deal, searchHay) {
 		return false
 	}
 	return true
@@ -109,15 +128,21 @@ func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
 // keywordMatch checks inclusion and exclusion keywords against the deal title
 // (and raw title). All include-keywords must be present; any exclude-keyword
 // present rejects the deal.
-func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
-	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
+func keywordMatch(alert *db.Alert, deal domain.Deal, searchHay string) bool {
+	// Most alerts do not filter on keywords; skip the title fold entirely.
+	if len(alert.Keywords) == 0 && len(alert.ExcludeKeywords) == 0 {
+		return true
+	}
+	if searchHay == "" {
+		searchHay = DealSearchHay(deal)
+	}
 	for _, kw := range alert.Keywords {
-		if !strings.Contains(hay, strings.ToLower(kw)) {
+		if !strings.Contains(searchHay, strings.ToLower(kw)) {
 			return false
 		}
 	}
 	for _, kw := range alert.ExcludeKeywords {
-		if strings.Contains(hay, strings.ToLower(kw)) {
+		if strings.Contains(searchHay, strings.ToLower(kw)) {
 			return false
 		}
 	}

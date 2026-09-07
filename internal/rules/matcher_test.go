@@ -152,3 +152,28 @@ func TestAlertMatchesCapacityPresetMedia(t *testing.T) {
 		t.Fatal("SSD ~1 To preset must match a 1 To SSD")
 	}
 }
+
+func BenchmarkAlertMatchesSharedHay(b *testing.B) {
+	deal := baseDeal()
+	deal.Title = "Seagate Exos X20 18TB CMR NAS Enterprise HDD SATA 7200RPM"
+	deal.RawTitle = deal.Title
+	alerts := make([]db.Alert, 10)
+	for i := range alerts {
+		alerts[i].Keywords = []string{"Exos", "CMR"}
+	}
+	b.Run("per_alert_hay", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			for j := range alerts {
+				AlertMatches(&alerts[j], deal)
+			}
+		}
+	})
+	hay := DealSearchHay(deal)
+	b.Run("shared_hay", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			for j := range alerts {
+				AlertMatchesWithHay(&alerts[j], deal, hay)
+			}
+		}
+	})
+}
