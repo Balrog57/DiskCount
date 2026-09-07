@@ -581,9 +581,18 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				absence = now.Sub(last)
 			}
 		}
+		// ⚡ Bolt optimization: fold the deal title once per alert loop, not
+		// once per alert. keywordMatch only needs the haystack when an alert
+		// has include/exclude keywords; we lazy-init on first such alert.
+		searchHay := ""
 		for i := range alerts {
 			a := &alerts[i]
-			if !rules.AlertMatches(a, deal) {
+			if len(a.Keywords) > 0 || len(a.ExcludeKeywords) > 0 {
+				if searchHay == "" {
+					searchHay = rules.DealSearchHay(deal)
+				}
+			}
+			if !rules.AlertMatchesWithHay(a, deal, searchHay) {
 				continue
 			}
 			r.Matched++
