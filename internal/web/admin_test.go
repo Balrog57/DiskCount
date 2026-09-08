@@ -116,6 +116,21 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 	}
 }
 
+func TestSuccessNoticesUseStatusRole(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, configTpl, map[string]any{
+		"Title":      "Configuration",
+		"Active":     "config",
+		"Saved":      true,
+		"Sections":   nil,
+		"RestartMsg": "restart",
+	})
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="notice" role="status"`) {
+		t.Fatalf("saved config notice should use role=status: %s", body)
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string

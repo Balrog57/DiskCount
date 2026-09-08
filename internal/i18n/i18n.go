@@ -223,6 +223,7 @@ var catalogs = map[Locale]map[string]string{
 		"web.alerts.inactive":        "inactive",
 		"web.alerts.discord_yes":     "coche",
 		"web.alerts.discord_no":      "non",
+		"web.alerts.saved":           "Alertes mises a jour.",
 
 		// Web — config
 		"web.config.title":              "Configuration",
@@ -528,6 +529,7 @@ var catalogs = map[Locale]map[string]string{
 		"web.alerts.inactive":        "inactive",
 		"web.alerts.discord_yes":     "yes",
 		"web.alerts.discord_no":      "no",
+		"web.alerts.saved":           "Alerts updated.",
 
 		"web.config.title":              "Configuration",
 		"web.config.saved":              "Configuration saved.",
