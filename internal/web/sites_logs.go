@@ -296,7 +296,7 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 }
 
 const sitesTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">{{call .T "web.common.config_saved"}}</div>{{end}}
+{{if .Saved}}<div class="notice" role="status">{{call .T "web.common.config_saved"}}</div>{{end}}
 <section class="panel"><div class="panel-head"><div><h2>{{call .T "web.sites.merchants_toggle_title"}}</h2><div class="hint">{{call .T "web.sites.merchants_toggle_hint"}}</div></div>
 <span class="badge {{if .ByparrOK}}good{{else}}warn{{end}}">{{if .ByparrOK}}{{call .T "web.sites.byparr_ok"}}{{else}}{{call .T "web.sites.byparr_off"}}{{end}}</span></div>
 <form method="post" action="/sites/sources" class="panel-body"><div class="check-grid">{{range .MerchantToggles}}<label class="check-chip"><input type="checkbox" name="merchant" value="{{.Name}}" {{if .Enabled}}checked{{end}}> {{.Label}}</label>{{end}}</div>
