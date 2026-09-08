@@ -140,9 +140,35 @@ func partNumberFromText(text string) *string {
 // partNumberRE mirrors domain part numbers for title extraction in scrapers.
 var partNumberRE = regexp.MustCompile(`(?i)\b(?:ST\d{3,}[A-Z0-9-]{2,}|WD[A-Z0-9][A-Z0-9-]{3,}|WDS[A-Z0-9-]{4,}|CT\d{3,}[A-Z0-9-]{3,}|MZ[A-Z0-9-]{4,}|SK[A-Z0-9-]{4,}|HUS\d{3,}[A-Z0-9-]*|MG\d{3,}[A-Z0-9-]*|SSDSC[A-Z0-9-]{3,}|D3-S\d{4,}[A-Z0-9-]*|900[A-Z0-9-]{4,})\b`)
 
+// dealsFullyEnriched reports whether every deal already has the identity
+// fields page-level JSON-LD would add. French retailer parsers set these per
+// card via enrichCardDeal, so a second full-page parse would be redundant.
+func dealsFullyEnriched(deals []domain.Deal) bool {
+	for i := range deals {
+		d := &deals[i]
+		if d.EAN == nil || d.SKU == nil || d.Brand == nil || d.ImageURL == nil {
+			return false
+		}
+	}
+	return true
+}
+
 // applyListingJSONLD fills missing EAN/SKU/brand on listing cards from page-level JSON-LD.
 func applyListingJSONLD(html string, deals []domain.Deal) []domain.Deal {
 	if len(deals) == 0 {
+		return deals
+	}
+	// ⚡ Bolt optimization: fetchMultiURL calls this after every scraped URL.
+	// Table-based sources (pricepertb, diskprices-style feeds) never embed
+	// JSON-LD, yet we spun up goquery on up to 5 MiB of HTML per URL just to
+	// discover there was nothing to extract. A substring probe is orders of
+	// magnitude cheaper than ParseJSONLD's full DOM walk.
+	if !strings.Contains(html, "application/ld+json") {
+		return deals
+	}
+	// When per-card enrichment already filled every identity field, skip the
+	// redundant page-level parse (common on FR retailer listing pages).
+	if dealsFullyEnriched(deals) {
 		return deals
 	}
 	pd, ok := scraper.ParseJSONLD(html)
