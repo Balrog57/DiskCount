@@ -116,6 +116,44 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 	}
 }
 
+func TestRangeNavigationMarksCurrentSelection(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, productsTpl, map[string]any{
+		"Title": "Produits", "Active": "products", "Sources": []string{},
+		"Brands": []string{}, "Categories": []string{}, "Interfaces": []string{}, "Recordings": []string{},
+		"Groups": []db.ProductGroup{}, "Total": 30, "Page": 2, "Pages": 3, "Sort": "eur_tb",
+		"PageLinks": []catalogPageLink{
+			{Number: 1, URL: "/products?page=1"},
+			{Number: 2, URL: "/products?page=2"},
+			{Number: 3, URL: "/products?page=3"},
+		},
+	})
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/products?page=2" class="active" aria-current="page"`) {
+		t.Fatalf("pagination should mark current page: %s", body)
+	}
+	if strings.Contains(body, `href="/products?page=1" class="active"`) {
+		t.Fatalf("non-current pagination link should not be active: %s", body)
+	}
+
+	rec = httptest.NewRecorder()
+	render(rec, marketTpl, map[string]any{"Title": "Market", "Active": "market", "Days": 30, "Market": []db.MarketIndexPoint{}})
+	if !strings.Contains(rec.Body.String(), `days=30" class="active" aria-current="page"`) {
+		t.Fatalf("market periods should mark current selection")
+	}
+
+	fr := countryInfo{"fr", "France", "🇫🇷"}
+	rec = httptest.NewRecorder()
+	render(rec, europeTpl, map[string]any{
+		"Title": "Europe", "Active": "europe", "SelectedCountry": "fr",
+		"Regions": []regionSummary{{Country: fr, Offers: 1, BestPricePerTB: 14}},
+		"Offers":  []regionalOffer{},
+	})
+	if !strings.Contains(rec.Body.String(), `country=fr" aria-current="page"`) {
+		t.Fatalf("europe regions should mark current country")
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
