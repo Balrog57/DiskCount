@@ -136,6 +136,18 @@ func TestAlertMatchesRecordingMethod(t *testing.T) {
 	})
 }
 
+func TestAlertMatchesWithHayReusesHaystack(t *testing.T) {
+	deal := baseDeal()
+	a := &db.Alert{Keywords: []string{"Exos"}}
+	hay := KeywordHaystack(deal)
+	if !AlertMatchesWithHay(a, deal, hay) {
+		t.Fatal("expected keyword match with precomputed haystack")
+	}
+	if AlertMatchesWithHay(a, deal, "wrong haystack") {
+		t.Fatal("precomputed haystack should be used as-is")
+	}
+}
+
 func TestAlertMatchesCapacityPresetMedia(t *testing.T) {
 	hdd := baseDeal()
 	hdd.CapacityTB = 1.0

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Balrog57/DiskCount/internal/config"
+	"github.com/Balrog57/DiskCount/internal/db"
 	"github.com/Balrog57/DiskCount/internal/domain"
 	"github.com/Balrog57/DiskCount/internal/sources"
 )
@@ -181,6 +182,39 @@ func TestRecordScanResultZeroStreak(t *testing.T) {
 	scan.zeroStreakMu.RUnlock()
 	if streak != 0 {
 		t.Fatalf("streak should be 0 after a deal, got %d", streak)
+	}
+}
+
+func BenchmarkAlertSourceIndex(b *testing.B) {
+	alerts := make([]db.Alert, 10)
+	for i := range alerts {
+		alerts[i] = db.Alert{ID: int64(i + 1), Sources: []string{"source-" + string(rune('a'+i))}}
+	}
+	alerts[0].Sources = nil // one unrestricted alert
+	idx := buildAlertSourceIndex(alerts)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = idx.ForSource("source-a")
+	}
+}
+
+func TestAlertSourceIndexForSource(t *testing.T) {
+	alerts := []db.Alert{
+		{ID: 1, Name: "all"},
+		{ID: 2, Name: "ldlc-only", Sources: []string{"ldlc"}},
+		{ID: 3, Name: "fnac-only", Sources: []string{"fnac"}},
+	}
+	idx := buildAlertSourceIndex(alerts)
+	ldlc := idx.ForSource("ldlc")
+	if len(ldlc) != 2 {
+		t.Fatalf("expected unrestricted + ldlc alert, got %d", len(ldlc))
+	}
+	fnac := idx.ForSource("fnac")
+	if len(fnac) != 2 || fnac[1].ID != 3 {
+		t.Fatalf("unexpected fnac candidates: %#v", fnac)
+	}
+	if len(idx.ForSource("diskprices")) != 1 {
+		t.Fatalf("diskprices should only see unrestricted alert")
 	}
 }
 

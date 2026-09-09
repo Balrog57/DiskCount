@@ -412,6 +412,39 @@ func (s *Scanner) fetchWithBreaker(ctx context.Context, src sources.Source) (Sou
 	return metrics, deals, nil
 }
 
+// alertSourceIndex groups enabled alerts by merchant so the scanner can
+// skip source-scoped alerts that cannot match a given deal.
+type alertSourceIndex struct {
+	unrestricted []*db.Alert
+	bySource     map[string][]*db.Alert
+}
+
+func buildAlertSourceIndex(alerts []db.Alert) alertSourceIndex {
+	idx := alertSourceIndex{bySource: make(map[string][]*db.Alert)}
+	for i := range alerts {
+		a := &alerts[i]
+		if len(a.Sources) == 0 {
+			idx.unrestricted = append(idx.unrestricted, a)
+			continue
+		}
+		for _, src := range a.Sources {
+			idx.bySource[src] = append(idx.bySource[src], a)
+		}
+	}
+	return idx
+}
+
+func (idx alertSourceIndex) ForSource(source string) []*db.Alert {
+	specific := idx.bySource[source]
+	if len(idx.unrestricted) == 0 && len(specific) == 0 {
+		return nil
+	}
+	out := make([]*db.Alert, 0, len(idx.unrestricted)+len(specific))
+	out = append(out, idx.unrestricted...)
+	out = append(out, specific...)
+	return out
+}
+
 func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, dryRun bool, r *ScanReport) map[string][]string {
 	seenByMerchant := make(map[string][]string)
 	var alerts []db.Alert
@@ -482,6 +515,11 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("last-notifications map", "err", err)
 		}
 	}
+	// ⚡ Bolt optimization: index alerts by source so each deal only runs
+	// AlertMatches against unrestricted alerts plus those scoped to its
+	// merchant. With 10 source-specific alerts and ~200 deals per source
+	// this cuts ~1800 redundant predicate checks per source per scan.
+	alertIdx := buildAlertSourceIndex(alerts)
 	// Normalize once so we can batch catalog lookups by canonical key
 	// without calling normalize.Deal twice per raw deal.
 	normalized := make([]normalize.Result, len(deals))
@@ -581,9 +619,16 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				absence = now.Sub(last)
 			}
 		}
-		for i := range alerts {
-			a := &alerts[i]
-			if !rules.AlertMatches(a, deal) {
+		candidateAlerts := alertIdx.ForSource(deal.Source)
+		var keywordHay string
+		for _, a := range candidateAlerts {
+			if len(a.Keywords) > 0 || len(a.ExcludeKeywords) > 0 {
+				keywordHay = rules.KeywordHaystack(deal)
+				break
+			}
+		}
+		for _, a := range candidateAlerts {
+			if !rules.AlertMatchesWithHay(a, deal, keywordHay) {
 				continue
 			}
 			r.Matched++
