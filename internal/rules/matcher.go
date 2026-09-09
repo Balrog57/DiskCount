@@ -37,6 +37,20 @@ var CapacityPresets = map[string]Preset{
 func pf(v float64) *float64 { return &v }
 
 func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
+	return AlertMatchesWithHay(alert, deal, "")
+}
+
+// KeywordHaystack returns the lowercased title haystack used for keyword
+// matching. Callers that evaluate several alerts against the same deal
+// should compute this once and pass it to AlertMatchesWithHay.
+func KeywordHaystack(deal domain.Deal) string {
+	return strings.ToLower(deal.Title + " " + deal.RawTitle)
+}
+
+// AlertMatchesWithHay is like AlertMatches but reuses a precomputed keyword
+// haystack so the scanner does not re-lowercase the same title for every
+// alert on a deal.
+func AlertMatchesWithHay(alert *db.Alert, deal domain.Deal, hay string) bool {
 	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) {
 		return false
 	}
@@ -73,10 +87,17 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if !recordingMethodMatch(alert, deal) {
 		return false
 	}
-	if !keywordMatch(alert, deal) {
+	if !keywordMatchWithHay(alert, keywordHaystack(alert, deal, hay)) {
 		return false
 	}
 	return true
+}
+
+func keywordHaystack(alert *db.Alert, deal domain.Deal, hay string) string {
+	if hay != "" || (len(alert.Keywords) == 0 && len(alert.ExcludeKeywords) == 0) {
+		return hay
+	}
+	return KeywordHaystack(deal)
 }
 
 // brandMatch returns false when the alert restricts brands and the deal's brand
@@ -110,7 +131,10 @@ func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
 // (and raw title). All include-keywords must be present; any exclude-keyword
 // present rejects the deal.
 func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
-	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
+	return keywordMatchWithHay(alert, KeywordHaystack(deal))
+}
+
+func keywordMatchWithHay(alert *db.Alert, hay string) bool {
 	for _, kw := range alert.Keywords {
 		if !strings.Contains(hay, strings.ToLower(kw)) {
 			return false
