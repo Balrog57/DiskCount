@@ -14,6 +14,7 @@ import (
 	"github.com/Balrog57/DiskCount/internal/rules"
 	"github.com/Balrog57/DiskCount/internal/scanner"
 	"github.com/Balrog57/DiskCount/internal/sources"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func setSameOrigin(req *http.Request) {
@@ -1072,5 +1073,46 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 	}
 	if !session.Secure {
 		t.Fatal("session cookie should be Secure when X-Forwarded-Proto=https")
+	}
+}
+
+func TestHealthNilScannerDoesNotPanic(t *testing.T) {
+	srv := New(nil, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when db is nil, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"breakers":{}`) && !strings.Contains(body, `"breakers": {}`) {
+		t.Fatalf("expected empty breakers map, got %s", body)
+	}
+}
+
+func TestHealthDoesNotLeakDBErrorDetails(t *testing.T) {
+	ctx := context.Background()
+	cfg, err := pgxpool.ParseConfig("postgres://127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatalf("pgxpool.ParseConfig: %v", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatalf("pgxpool.NewWithConfig: %v", err)
+	}
+	defer pool.Close()
+	srv := New(&db.DB{Pool: pool}, nil, nil, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	srv.handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when db is unreachable, got %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "connect") || strings.Contains(body, "connection refused") || strings.Contains(body, "password") {
+		t.Fatalf("health response leaked db error details: %s", body)
+	}
+	if !strings.Contains(body, `"db":"error"`) && !strings.Contains(body, `"db": "error"`) {
+		t.Fatalf("expected generic db error status, got %s", body)
 	}
 }
