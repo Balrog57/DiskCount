@@ -116,6 +116,58 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 	}
 }
 
+func TestSuccessNoticesUseRoleStatus(t *testing.T) {
+	type sectionView struct {
+		Key  string
+		Rows []configRow
+	}
+	cases := []struct {
+		name string
+		body string
+		data map[string]any
+	}{
+		{
+			name: "config saved",
+			body: configTpl,
+			data: map[string]any{
+				"Title":      "Configuration",
+				"Active":     "config",
+				"Saved":      true,
+				"Sections":   []sectionView{},
+				"RestartMsg": "restart",
+			},
+		},
+		{
+			name: "alerts saved",
+			body: alertsTpl,
+			data: map[string]any{
+				"Title":           "Alertes",
+				"Active":          "alerts",
+				"Saved":           true,
+				"CapacityPresets": rules.CapacityPresets,
+				"Alerts":          []db.Alert{},
+			},
+		},
+		{
+			name: "discord saved",
+			body: discordTpl,
+			data: map[string]any{
+				"Title":  "Discord",
+				"Active": "discord",
+				"Saved":  true,
+			},
+		},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		render(rec, tc.body, tc.data)
+		body := rec.Body.String()
+		if !strings.Contains(body, `role="status"`) {
+			t.Fatalf("%s: success notice missing role=status: %s", tc.name, body)
+		}
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
