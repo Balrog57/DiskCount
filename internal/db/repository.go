@@ -1021,40 +1021,46 @@ LIMIT $%d`, where, len(args))
 }
 
 func (db *DB) CatalogFacets(ctx context.Context) (brands, categories, interfaces, recordings, sources []string, err error) {
-	rows, err := db.Pool.Query(ctx, `
-SELECT DISTINCT p.brand, p.drive_category, p.recording_method, p.source, p.interfaces
-FROM products p
-WHERE p.quality_score >= 50 AND p.canonical_key IS NOT NULL`)
+	// ⚡ Bolt optimization: facet dropdowns only need unique strings, not one
+	// row per product. DISTINCT on the full product tuple still returned O(products)
+	// rows and forced Go to JSON-decode every interfaces column before deduping.
+	// Pre-aggregate each facet in SQL (jsonb_array_elements_text for interfaces)
+	// so transferred rows drop to O(facet values) — typically tens vs thousands.
+	var brandRows, catRows, ifaceRows, recRows, srcRows []string
+	err = db.Pool.QueryRow(ctx, `
+WITH qualified AS (
+  SELECT brand, drive_category, recording_method, source, interfaces
+  FROM products
+  WHERE quality_score >= 50 AND canonical_key IS NOT NULL
+)
+SELECT
+  COALESCE((SELECT array_agg(DISTINCT b ORDER BY b) FROM (
+    SELECT brand AS b FROM qualified WHERE brand IS NOT NULL AND btrim(brand) <> ''
+  ) sub), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT c ORDER BY c) FROM (
+    SELECT drive_category AS c FROM qualified WHERE drive_category IS NOT NULL AND btrim(drive_category) <> ''
+  ) sub), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT i ORDER BY i) FROM (
+    SELECT jsonb_array_elements_text(interfaces) AS i
+    FROM qualified WHERE interfaces IS NOT NULL AND interfaces <> '[]'::jsonb
+  ) sub), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT r ORDER BY r) FROM (
+    SELECT recording_method AS r FROM qualified WHERE recording_method IS NOT NULL AND btrim(recording_method) <> ''
+  ) sub), '{}'),
+  COALESCE((SELECT array_agg(DISTINCT s ORDER BY s) FROM (
+    SELECT source AS s FROM qualified WHERE source IS NOT NULL AND btrim(source) <> ''
+  ) sub), '{}')
+`).Scan(&brandRows, &catRows, &ifaceRows, &recRows, &srcRows)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	defer rows.Close()
-	bset, cset, iset, rset, sset := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
-	for rows.Next() {
-		var brand, cat, rec, src *string
-		var ifaces []string
-		if err := rows.Scan(&brand, &cat, &rec, &src, jsonScan(&ifaces)); err != nil {
-			return nil, nil, nil, nil, nil, err
-		}
-		if brand != nil && *brand != "" {
-			bset[canonicalBrandFacet(*brand)] = true
-		}
-		if cat != nil && *cat != "" {
-			cset[*cat] = true
-		}
-		if rec != nil && *rec != "" {
-			rset[*rec] = true
-		}
-		if src != nil && *src != "" {
-			sset[*src] = true
-		}
-		for _, iface := range ifaces {
-			if iface != "" {
-				iset[iface] = true
-			}
-		}
+	// WD / Western Digital still collapse in Go so the filter dropdown matches
+	// canonical_key normalization without duplicating that logic in SQL.
+	bset := make(map[string]bool, len(brandRows))
+	for _, b := range brandRows {
+		bset[canonicalBrandFacet(b)] = true
 	}
-	return sortedKeys(bset), sortedKeys(cset), sortedKeys(iset), sortedKeys(rset), sortedKeys(sset), rows.Err()
+	return sortedKeys(bset), catRows, ifaceRows, recRows, srcRows, nil
 }
 
 func sortedKeys(m map[string]bool) []string {
