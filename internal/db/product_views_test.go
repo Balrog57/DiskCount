@@ -182,3 +182,40 @@ func TestUpsertPersistsSKUAndImageAndCatalogGroups(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestCatalogFacetsAggregatesDistinctValues(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	ids := []string{"facet-a", "facet-b", "facet-c"}
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM price_observations WHERE product_id=ANY($1)`, ids)
+	_, _ = d.Pool.Exec(ctx, `DELETE FROM products WHERE id=ANY($1)`, ids)
+	t.Cleanup(func() {
+		_, _ = d.Pool.Exec(context.Background(), `DELETE FROM products WHERE id=ANY($1)`, ids)
+	})
+	_, err := d.Pool.Exec(ctx, `INSERT INTO products(id,source,title,url,capacity_tb,quality_score,canonical_key,brand,drive_category,recording_method,interfaces) VALUES
+		('facet-a','shop-a','Drive A','https://example.test/a',8,90,'mpn:facet-a','WD','nas','cmr','["sata","nvme"]'),
+		('facet-b','shop-b','Drive B','https://example.test/b',8,90,'mpn:facet-b','Western Digital','nas','cmr','["sata"]'),
+		('facet-c','shop-c','Drive C','https://example.test/c',4,90,'mpn:facet-c','Seagate','desktop','smr','["sata"]')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brands, categories, interfaces, recordings, sources, err := d.CatalogFacets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(brands) != 2 || brands[0] != "Seagate" || brands[1] != "Western Digital" {
+		t.Fatalf("brands: %#v", brands)
+	}
+	if len(categories) != 2 || categories[0] != "desktop" || categories[1] != "nas" {
+		t.Fatalf("categories: %#v", categories)
+	}
+	if len(interfaces) != 2 || interfaces[0] != "nvme" || interfaces[1] != "sata" {
+		t.Fatalf("interfaces: %#v", interfaces)
+	}
+	if len(recordings) != 2 || recordings[0] != "cmr" || recordings[1] != "smr" {
+		t.Fatalf("recordings: %#v", recordings)
+	}
+	if len(sources) != 3 {
+		t.Fatalf("sources: %#v", sources)
+	}
+}
