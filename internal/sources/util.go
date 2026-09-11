@@ -140,9 +140,25 @@ func partNumberFromText(text string) *string {
 // partNumberRE mirrors domain part numbers for title extraction in scrapers.
 var partNumberRE = regexp.MustCompile(`(?i)\b(?:ST\d{3,}[A-Z0-9-]{2,}|WD[A-Z0-9][A-Z0-9-]{3,}|WDS[A-Z0-9-]{4,}|CT\d{3,}[A-Z0-9-]{3,}|MZ[A-Z0-9-]{4,}|SK[A-Z0-9-]{4,}|HUS\d{3,}[A-Z0-9-]*|MG\d{3,}[A-Z0-9-]*|SSDSC[A-Z0-9-]{3,}|D3-S\d{4,}[A-Z0-9-]*|900[A-Z0-9-]{4,})\b`)
 
+// listingDealsNeedJSONLD reports whether any deal might still benefit from
+// page-level JSON-LD enrichment. applyListingJSONLD only fills nil
+// EAN/SKU/Brand/ImageURL fields, so when every deal already has them we
+// can skip scraper.ParseJSONLD entirely. That call parses the full HTML
+// document with goquery on every fetchMultiURL success — redundant for
+// French card scrapers that already ran enrichCardDeal per card.
+func listingDealsNeedJSONLD(deals []domain.Deal) bool {
+	for i := range deals {
+		d := &deals[i]
+		if d.EAN == nil || d.SKU == nil || d.Brand == nil || d.ImageURL == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // applyListingJSONLD fills missing EAN/SKU/brand on listing cards from page-level JSON-LD.
 func applyListingJSONLD(html string, deals []domain.Deal) []domain.Deal {
-	if len(deals) == 0 {
+	if len(deals) == 0 || !listingDealsNeedJSONLD(deals) {
 		return deals
 	}
 	pd, ok := scraper.ParseJSONLD(html)
