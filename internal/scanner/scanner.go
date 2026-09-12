@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -482,6 +483,15 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			slog.Warn("last-notifications map", "err", err)
 		}
 	}
+	// ⚡ Bolt optimization: only build a shared keyword haystack when at
+	// least one alert filters on include/exclude keywords.
+	needKeywordHay := false
+	for i := range alerts {
+		if len(alerts[i].Keywords) > 0 || len(alerts[i].ExcludeKeywords) > 0 {
+			needKeywordHay = true
+			break
+		}
+	}
 	// Normalize once so we can batch catalog lookups by canonical key
 	// without calling normalize.Deal twice per raw deal.
 	normalized := make([]normalize.Result, len(deals))
@@ -527,18 +537,22 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			continue
 		}
 		deal := res.Deal
+		// ⚡ Bolt optimization: ProductID() hashes the URL when no external ID
+		// is present; cache it and the canonical key once per deal instead of
+		// recomputing on every alert check and map lookup.
+		pid := deal.ProductID()
+		canonicalKey := deal.CanonicalProductKey()
 		if !dryRun && s.db != nil {
-			if cat, ok := catalogMap[deal.CanonicalProductKey()]; ok {
+			if cat, ok := catalogMap[canonicalKey]; ok {
 				db.ApplyCatalogToDeal(cat, &deal)
 			}
 		}
-		pid := deal.ProductID()
 		seenByMerchant[deal.Source] = append(seenByMerchant[deal.Source], pid)
 		r.Accepted++
 		// Point lookup into the pre-fetched baseline map; nil out when
 		// the product has no history so ShouldNotify behaves as before.
 		var base *float64
-		if v, ok := baselines[deal.ProductID()]; ok {
+		if v, ok := baselines[pid]; ok {
 			base = &v
 		}
 		if !dryRun && s.db != nil {
@@ -546,7 +560,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				// A failing product upsert should not lose the price
 				// observation silently, but neither should it abort the
 				// whole scan. Log + count, then continue.
-				slog.Warn("upsert product", "src", deal.Source, "pid", deal.ProductID(), "err", err)
+				slog.Warn("upsert product", "src", deal.Source, "pid", pid, "err", err)
 				r.Errors = append(r.Errors, "upsert product: "+err.Error())
 				continue
 			}
@@ -557,7 +571,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 				err = s.db.UpsertCatalogEntry(ctx, deal)
 			}
 			if err != nil {
-				slog.Warn("upsert catalog", "src", deal.Source, "key", deal.CanonicalProductKey(), "err", err)
+				slog.Warn("upsert catalog", "src", deal.Source, "key", canonicalKey, "err", err)
 				r.Errors = append(r.Errors, "upsert catalog: "+err.Error())
 			}
 		}
@@ -577,17 +591,21 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 		// batch so all candidates see the same baseline.
 		var absence time.Duration
 		if backInStockThreshold > 0 {
-			if last, ok := lastSeenSnapshot[deal.ProductID()]; ok && !last.IsZero() {
+			if last, ok := lastSeenSnapshot[pid]; ok && !last.IsZero() {
 				absence = now.Sub(last)
 			}
 		}
+		var titleHay string
+		if needKeywordHay {
+			titleHay = strings.ToLower(deal.Title + " " + deal.RawTitle)
+		}
 		for i := range alerts {
 			a := &alerts[i]
-			if !rules.AlertMatches(a, deal) {
+			if !rules.AlertMatchesWithHay(a, deal, titleHay) {
 				continue
 			}
 			r.Matched++
-			last := lastNotifs[fmt.Sprintf("%d:%s", a.ID, deal.ProductID())]
+			last := lastNotifs[fmt.Sprintf("%d:%s", a.ID, pid)]
 			dec := rules.ShouldNotify(a, deal, base, last, now, s.cfg.NotificationPriceDropPct)
 			if !dec.ShouldNotify {
 				continue
@@ -606,7 +624,7 @@ func (s *Scanner) proc(ctx context.Context, deals []domain.Deal, now time.Time, 
 			// loop; record just the notification row, skipping the redundant
 			// product upsert + wrapping transaction.
 			if err := s.db.RecordNotificationNoUpsert(ctx, a, deal, dec.Reason, dec.DiscountPct); err != nil {
-				slog.Warn("record notification", "alert", a.ID, "pid", deal.ProductID(), "err", err)
+				slog.Warn("record notification", "alert", a.ID, "pid", pid, "err", err)
 				r.Errors = append(r.Errors, "record notification: "+err.Error())
 				continue
 			}
