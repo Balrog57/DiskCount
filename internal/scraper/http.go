@@ -108,13 +108,8 @@ type HTTPFetcher struct {
 func NewHTTPFetcher(userAgent string, timeoutSeconds float64) *HTTPFetcher {
 	return &HTTPFetcher{
 		Client: &http.Client{
-			Timeout: time.Duration(timeoutSeconds * float64(time.Second)),
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("too many redirects")
-				}
-				return nil
-			},
+			Timeout:       time.Duration(timeoutSeconds * float64(time.Second)),
+			CheckRedirect: redirectPolicy(5),
 		},
 		Headers: map[string]string{
 			"User-Agent":      userAgent,
@@ -162,13 +157,8 @@ func NewHTTPFetcherWithOptions(opts Options) *HTTPFetcher {
 	}
 
 	client := &http.Client{
-		Timeout: opts.PerRequestTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= opts.MaxRedirects {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+		Timeout:       opts.PerRequestTimeout,
+		CheckRedirect: redirectPolicy(opts.MaxRedirects),
 	}
 
 	return &HTTPFetcher{
