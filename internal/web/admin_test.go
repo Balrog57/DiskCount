@@ -227,6 +227,29 @@ func TestProductsTemplateRendersFilters(t *testing.T) {
 	}
 }
 
+func TestProductsPaginationAnnouncesCurrentPage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	render(rec, productsTpl, map[string]any{
+		"Title": "Produits", "Active": "products", "Sources": []string{"diskprices"},
+		"Brands": []string{}, "Categories": []string{}, "Interfaces": []string{}, "Recordings": []string{},
+		"Groups": []db.ProductGroup{}, "Total": 60, "Page": 2, "Pages": 3, "Sort": "eur_tb",
+		"PageLinks": []catalogPageLink{
+			{Number: 1, URL: "/products?page=1"},
+			{Number: 2, URL: "/products?page=2"},
+			{Number: 3, URL: "/products?page=3"},
+		},
+	})
+	body := rec.Body.String()
+	for _, required := range []string{
+		`aria-label="Pagination"`,
+		`href="/products?page=2" class="active" aria-current="page"`,
+	} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("missing pagination accessibility markup %q in %s", required, body)
+		}
+	}
+}
+
 func TestPriceDropsTemplateRendersDropReferenceView(t *testing.T) {
 	rec := httptest.NewRecorder()
 	now := time.Now()
