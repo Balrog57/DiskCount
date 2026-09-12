@@ -37,6 +37,17 @@ var CapacityPresets = map[string]Preset{
 func pf(v float64) *float64 { return &v }
 
 func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
+	return alertMatches(alert, deal, "")
+}
+
+// AlertMatchesWithHay is like AlertMatches but reuses a pre-lowercased title
+// haystack built once per deal in the scanner hot path. Pass empty hayLower
+// when the caller has not precomputed one (tests, single checks).
+func AlertMatchesWithHay(alert *db.Alert, deal domain.Deal, hayLower string) bool {
+	return alertMatches(alert, deal, hayLower)
+}
+
+func alertMatches(alert *db.Alert, deal domain.Deal, hayLower string) bool {
 	if len(alert.Sources) > 0 && !cont(alert.Sources, deal.Source) {
 		return false
 	}
@@ -73,7 +84,7 @@ func AlertMatches(alert *db.Alert, deal domain.Deal) bool {
 	if !recordingMethodMatch(alert, deal) {
 		return false
 	}
-	if !keywordMatch(alert, deal) {
+	if !keywordMatch(alert, deal, hayLower) {
 		return false
 	}
 	return true
@@ -108,16 +119,22 @@ func recordingMethodMatch(alert *db.Alert, deal domain.Deal) bool {
 
 // keywordMatch checks inclusion and exclusion keywords against the deal title
 // (and raw title). All include-keywords must be present; any exclude-keyword
-// present rejects the deal.
-func keywordMatch(alert *db.Alert, deal domain.Deal) bool {
-	hay := strings.ToLower(deal.Title + " " + deal.RawTitle)
+// present rejects the deal. hayLower may be precomputed by the scanner so the
+// same title is not lowercased once per alert.
+func keywordMatch(alert *db.Alert, deal domain.Deal, hayLower string) bool {
+	if len(alert.Keywords) == 0 && len(alert.ExcludeKeywords) == 0 {
+		return true
+	}
+	if hayLower == "" {
+		hayLower = strings.ToLower(deal.Title + " " + deal.RawTitle)
+	}
 	for _, kw := range alert.Keywords {
-		if !strings.Contains(hay, strings.ToLower(kw)) {
+		if !strings.Contains(hayLower, strings.ToLower(kw)) {
 			return false
 		}
 	}
 	for _, kw := range alert.ExcludeKeywords {
-		if strings.Contains(hay, strings.ToLower(kw)) {
+		if strings.Contains(hayLower, strings.ToLower(kw)) {
 			return false
 		}
 	}
