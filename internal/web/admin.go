@@ -2099,7 +2099,7 @@ const productDetailTpl = `{{define "body"}}
 {{end}}`
 
 const alertsTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">Alertes mises a jour.</div>{{end}}
+{{if .Saved}}<div class="notice" role="status">Alertes mises a jour.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <section class="panel"><div class="panel-head"><div><h2>Créer une alerte</h2><div class="hint">Tous les critères sont gérés ici. Discord reste optionnel pour la diffusion.</div></div></div><div class="panel-body">
 <form method="post" action="/alerts/add" class="alert-form">
@@ -2123,7 +2123,7 @@ const alertsTpl = `{{define "body"}}
 {{end}}`
 
 const configTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">{{call .T "web.common.config_saved"}}</div>{{end}}
+{{if .Saved}}<div class="notice" role="status">{{call .T "web.common.config_saved"}}</div>{{end}}
 {{if .Error}}<div class="warnbox">{{call .T "web.common.error_prefix"}} {{.Error}}</div>{{end}}
 <div class="warnbox">{{.RestartMsg}}</div>
 <div class="notice">{{call .T "web.config.merchants_hint"}} <a class="offer-link" href="/sites">{{call .T "web.nav.sites"}}</a></div>
@@ -2163,8 +2163,8 @@ const metricsTpl = `{{define "body"}}
 {{end}}`
 
 const discordTpl = `{{define "body"}}
-{{if .Saved}}<div class="notice">Configuration Discord sauvegardée et appliquée.</div>{{end}}
-{{if .Tested}}<div class="notice">Message de test Discord envoyé.</div>{{end}}
+{{if .Saved}}<div class="notice" role="status">Configuration Discord sauvegardée et appliquée.</div>{{end}}
+{{if .Tested}}<div class="notice" role="status">Message de test Discord envoyé.</div>{{end}}
 {{if .Error}}<div class="warnbox">Erreur: {{.Error}}</div>{{end}}
 <div class="notice">Intégration prête mais laissée en attente. Configurez le bot seulement après validation complète du suivi des produits et des alertes.</div>
 <section class="panel"><div class="panel-head"><div><h2>Bot Discord de diffusion</h2><div class="hint">Le bot publie uniquement les alertes créées dans DiskCount dont la case Discord est cochée.</div></div></div><div class="panel-body">
