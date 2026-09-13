@@ -913,21 +913,9 @@ func (db *DB) CatalogGroups(ctx context.Context, q CatalogQuery) ([]ProductGroup
 		args = append(args, "%"+s+"%")
 		where += fmt.Sprintf(" AND (p.title ILIKE $%d OR COALESCE(c.brand, p.brand,'') ILIKE $%d OR COALESCE(c.model, p.model,'') ILIKE $%d OR COALESCE(c.sku, p.sku,'') ILIKE $%d OR COALESCE(c.ean, p.ean,'') ILIKE $%d)", len(args), len(args), len(args), len(args), len(args))
 	}
-	countSQL := `
-WITH latest AS (
- SELECT DISTINCT ON (o.product_id) o.product_id,o.source,o.price_eur,o.price_per_tb,o.observed_at
- FROM price_observations o JOIN products p ON p.id=o.product_id
- WHERE o.price_per_tb > 0 AND o.quality_score >= 70
- ORDER BY o.product_id,o.observed_at DESC
-)
-SELECT COUNT(DISTINCT p.canonical_key)
-FROM latest l JOIN products p ON p.id=l.product_id
-LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
-WHERE p.quality_score >= 50` + where
-	var total int
-	if err := db.Pool.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
+	// ⚡ Bolt optimization: COUNT(*) OVER() in the grouped CTE returns the
+	// unpaginated total in the same round-trip as the page rows, avoiding a
+	// second scan of the expensive latest DISTINCT ON CTE (~50% less DB work).
 	args = append(args, q.Limit, q.Offset)
 	limitPH, offsetPH := len(args)-1, len(args)
 	listSQL := fmt.Sprintf(`
@@ -953,13 +941,14 @@ WITH latest AS (
   (ARRAY_AGG(COALESCE(c.interfaces, p.interfaces) ORDER BY l.price_per_tb))[1] AS interfaces,
   (ARRAY_AGG(COALESCE(c.capacity_tb, p.capacity_tb) ORDER BY l.price_per_tb))[1] AS capacity_tb,
   (ARRAY_AGG(p.availability ORDER BY (p.availability='available') DESC, l.price_per_tb))[1] AS availability,
-  (ARRAY_AGG(l.product_id ORDER BY l.price_per_tb))[1] AS best_product_id
+  (ARRAY_AGG(l.product_id ORDER BY l.price_per_tb))[1] AS best_product_id,
+  COUNT(*) OVER() AS total_count
  FROM latest l JOIN products p ON p.id=l.product_id
  LEFT JOIN product_catalog c ON c.canonical_key = p.canonical_key
  WHERE p.quality_score >= 50%s
  GROUP BY p.canonical_key
 )
-SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id
+SELECT canonical_key,brand,model,ean,sku,image_url,media_type,drive_category,recording_method,interfaces,capacity_tb,best_price_eur,best_price,offer_count,availability,observed_at,best_product_id,total_count
 FROM grouped g
 ORDER BY %s
 LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
@@ -969,11 +958,16 @@ LIMIT $%d OFFSET $%d`, where, catalogOrder(q.Sort), limitPH, offsetPH)
 	}
 	defer rows.Close()
 	var out []ProductGroup
+	var total int
 	for rows.Next() {
 		var g ProductGroup
 		var offerCount int64
-		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID); err != nil {
+		var totalCount int64
+		if err := rows.Scan(&g.CanonicalKey, &g.Brand, &g.Model, &g.EAN, &g.SKU, &g.ImageURL, &g.MediaType, &g.DriveCategory, &g.RecordingMethod, jsonScan(&g.Interfaces), &g.CapacityTB, &g.BestPriceEUR, &g.BestPricePerTB, &offerCount, &g.Availability, &g.ObservedAt, &g.BestProductID, &totalCount); err != nil {
 			return nil, 0, err
+		}
+		if total == 0 {
+			total = int(totalCount)
 		}
 		g.OfferCount = int(offerCount)
 		out = append(out, g)
