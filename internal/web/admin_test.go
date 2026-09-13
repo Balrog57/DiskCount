@@ -2,8 +2,10 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1029,6 +1031,60 @@ func TestRequestBodyLimitRejectsOversizedPOST(t *testing.T) {
 	srv.handler().ServeHTTP(rec, req)
 	if rec.Code == http.StatusSeeOther || rec.Code < http.StatusBadRequest {
 		t.Fatalf("oversized POST should be rejected, got status %d", rec.Code)
+	}
+}
+
+func TestHealthDoesNotLeakDBErrors(t *testing.T) {
+	cfg := &config.Config{}
+	scan := scanner.New(cfg, nil, nil, nil)
+	srv := New(nil, scan, cfg, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	srv.handler().ServeHTTP(rec, req)
+
+	raw := rec.Body.String()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	dbStatus, _ := out["db"].(string)
+	if dbStatus != "disabled" {
+		t.Fatalf("expected disabled db status for nil DB, got %q", dbStatus)
+	}
+	if strings.Contains(raw, "postgres://") || strings.Contains(raw, "password") {
+		t.Fatalf("health response leaks db internals: %s", raw)
+	}
+}
+
+func TestHealthDBFailureUsesGenericStatus(t *testing.T) {
+	url := os.Getenv("DISKCOUNT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set DISKCOUNT_TEST_DATABASE_URL to run integration health test")
+	}
+	d, err := db.New(context.Background(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	cfg := &config.Config{}
+	scan := scanner.New(cfg, nil, nil, nil)
+	srv := New(d, scan, cfg, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	srv.handler().ServeHTTP(rec, req)
+
+	raw := rec.Body.String()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatal(err)
+	}
+	dbStatus, _ := out["db"].(string)
+	if dbStatus != "unavailable" {
+		t.Fatalf("expected generic unavailable status, got %q", dbStatus)
+	}
+	if strings.Contains(raw, "closed pool") {
+		t.Fatalf("health response should not include driver error text: %s", raw)
 	}
 }
 

@@ -1468,7 +1468,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		dbStatus = "disabled"
 		healthy = false
 	} else if _, err := s.db.Stats(r.Context()); err != nil {
-		dbStatus = "error: " + err.Error()
+		// Log details server-side only; /health is public and must not
+		// expose driver messages that may reveal hostnames or credentials.
+		slog.Warn("health check db stats failed", "err", err)
+		dbStatus = "unavailable"
 		healthy = false
 	}
 	report := s.scanner.LastReport()
