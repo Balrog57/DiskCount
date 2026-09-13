@@ -116,6 +116,43 @@ func TestLayoutIncludesSkipLinkAndKeyboardFocusStyles(t *testing.T) {
 	}
 }
 
+func TestSuccessNoticesUseStatusRole(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		data map[string]any
+	}{
+		{
+			name: "config saved",
+			body: configTpl,
+			data: map[string]any{"Title": "Configuration", "Active": "config", "Saved": true, "RestartMsg": "restart"},
+		},
+		{
+			name: "alerts saved",
+			body: alertsTpl,
+			data: map[string]any{"Title": "Alertes", "Active": "alerts", "Saved": true, "CapacityPresets": rules.CapacityPresets},
+		},
+		{
+			name: "discord saved and tested",
+			body: discordTpl,
+			data: map[string]any{"Title": "Discord", "Active": "discord", "Saved": true, "Tested": true},
+		},
+		{
+			name: "sites saved",
+			body: sitesTpl,
+			data: map[string]any{"Title": "Sites", "Active": "sites", "Saved": true},
+		},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		render(rec, tc.body, tc.data)
+		body := rec.Body.String()
+		if !strings.Contains(body, `class="notice" role="status"`) {
+			t.Fatalf("%s: missing status live region in: %s", tc.name, body)
+		}
+	}
+}
+
 func TestConfigTemplateMasksSecret(t *testing.T) {
 	type sectionView struct {
 		Key  string
